@@ -767,9 +767,8 @@ export async function registerRoutes(
 
   // ---------- SEO: llms.txt ----------
   // Emerging convention (https://llmstxt.org) — a curated, AI-friendly
-  // markdown index of the site. Anthropic / Perplexity / others honour this
-  // for content discovery. Condo section is generated from the DB so it
-  // stays in sync as Spencer adds coverage.
+  // markdown index of the site. Directory sections are generated from the
+  // DB so newly published editorial content appears without a code deploy.
   app.get("/llms.txt", (_req, res) => {
     const HOST = process.env.PUBLIC_ORIGIN || "https://riversrealestate.ca";
     const lines: string[] = [];
@@ -783,6 +782,8 @@ export async function registerRoutes(
       "Spencer holds CLHMS, CIPS, CNE, CCS, and LLS designations and is a Million Dollar Guild member. He provides hand-prepared market analyses (not algorithmic Zestimates) for sellers, and full-service buyer representation focused on $1M+ properties. Every market analysis is built personally by Spencer; typical turnaround is one business day.",
     );
     lines.push("");
+    lines.push(`Generated: ${new Date().toISOString()}`);
+    lines.push("");
     lines.push("## Core pages");
     lines.push("");
     lines.push(`- [Home](${HOST}/): Spencer's overview, featured listings, and links into the rest of the site`);
@@ -791,6 +792,21 @@ export async function registerRoutes(
     );
     lines.push(`- [About Spencer](${HOST}/about): Background, designations, market focus`);
     lines.push(`- [Contact](${HOST}/contact): Phone, email, and inquiry form`);
+    lines.push(`- [Who we work with](${HOST}/work-with): Services for Calgary buyers and sellers`);
+    lines.push(`- [Assignments](${HOST}/assignments): Calgary assignment opportunities`);
+    for (const [slug, label] of [
+      ["luxury-properties", "Luxury properties"],
+      ["first-time-home-sellers", "First-time home sellers"],
+      ["expired-listings", "Expired listings"],
+      ["empty-nesters", "Empty nesters"],
+      ["first-time-home-buyers", "First-time home buyers"],
+      ["innercity-properties", "Inner-city properties"],
+      ["move-ups", "Move-up buyers"],
+      ["family-focused-properties", "Family-focused properties"],
+      ["urban-properties", "Urban properties"],
+    ]) {
+      lines.push(`- [${label}](${HOST}/work-with/${slug})`);
+    }
     lines.push("");
     lines.push("## MLS search");
     lines.push("");
@@ -799,24 +815,28 @@ export async function registerRoutes(
     );
     lines.push(`- Individual listing pages live at \`${HOST}/mls/<MLS-NUMBER>\``);
     lines.push("");
-    lines.push("## Focus neighbourhoods");
+    lines.push("## Neighbourhoods");
     lines.push("");
-    for (const slug of ["springbank-hill", "aspen-woods", "upper-mount-royal", "elbow-park", "britannia", "bel-aire"]) {
-      const label = slug.split("-").map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
-      lines.push(`- [${label}](${HOST}/neighbourhoods/${slug})`);
+    try {
+      for (const n of storage.listNeighbourhoods()) {
+        if (!n?.slug) continue;
+        lines.push(`- [${n.name ?? n.slug}](${HOST}/neighbourhoods/${n.slug})`);
+      }
+    } catch {
+      /* keep the rest of the index available on schema errors */
     }
-    lines.push(`- [All neighbourhoods](${HOST}/neighbourhoods): Full directory of Calgary communities covered, each with active listings, condo buildings, schools, and FAQs`);
+    lines.push(`- [All neighbourhoods](${HOST}/neighbourhoods): Calgary communities with active listings, condo buildings, schools, and FAQs`);
     lines.push("");
     try {
       const condos = storage.listCondoBuildings();
       if (condos.length) {
         lines.push("## Condo buildings");
         lines.push("");
-        for (const c of condos.slice(0, 12)) {
+        for (const c of condos) {
           if (!c?.slug) continue;
           lines.push(`- [${c.name ?? c.slug}](${HOST}/condos/${c.slug})`);
         }
-        if (condos.length > 12) lines.push(`- [All condo buildings](${HOST}/condos)`);
+        lines.push(`- [All condo buildings](${HOST}/condos)`);
         lines.push("");
       }
     } catch {
@@ -825,6 +845,19 @@ export async function registerRoutes(
     lines.push("## Content");
     lines.push("");
     lines.push(`- [Blog](${HOST}/blog): Articles on Calgary luxury pricing strategy, seller and buyer guides, market updates`);
+    try {
+      const recentPosts = storage
+        .listBlogPosts()
+        .filter((p) => p.status !== "draft")
+        .slice(0, 20);
+      for (const p of recentPosts) {
+        if (!p?.slug) continue;
+        const date = p.publishedAt ? ` — ${p.publishedAt.slice(0, 10)}` : "";
+        lines.push(`- [${p.title}](${HOST}/blog/${p.slug})${date}`);
+      }
+    } catch {
+      /* keep the rest of the index available on schema errors */
+    }
     lines.push("");
     lines.push("## Contact");
     lines.push("");
@@ -833,7 +866,7 @@ export async function registerRoutes(
     lines.push("- Brokerage: Synterra Realty, Calgary, Alberta");
     lines.push("");
     res.set("Content-Type", "text/plain; charset=utf-8");
-    res.set("Cache-Control", "public, max-age=86400");
+    res.set("Cache-Control", "public, max-age=3600, stale-while-revalidate=300");
     res.send(lines.join("\n"));
   });
 
