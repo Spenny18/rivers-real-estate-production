@@ -751,12 +751,26 @@ export async function registerRoutes(
   });
 
   // ---------- SEO: robots.txt ----------
+  // /api/ is disallowed wholesale, with one deliberate exception: the listing
+  // photo proxy (/api/mls/:id/photo/:idx). Those URLs are the real image
+  // assets behind every listing's <img>, og:image, and JSON-LD `image` —
+  // blocking them meant Google could see the URLs (they're in the rendered
+  // HTML) but never fetch them, which produced two problems:
+  //   1. "Indexed, though blocked by robots.txt" in Search Console — Google
+  //      indexed the photo URL itself, contentless, because it was referenced
+  //      but uncrawlable.
+  //   2. No listing photo available for image search, rich results, or social
+  //      link previews, since og:image pointed at a blocked URL.
+  // Allowing the photo path fixes both. Google's rule is longest-match-wins,
+  // so this Allow beats `Disallow: /api/` for photos only; every other API
+  // route stays blocked.
   app.get("/robots.txt", (_req, res) => {
     const origin = process.env.PUBLIC_ORIGIN || "https://riversrealestate.ca";
     res.set("Content-Type", "text/plain");
     res.send(
       `User-agent: *\n` +
         `Allow: /\n` +
+        `Allow: /api/mls/*/photo/\n` +
         `Disallow: /admin\n` +
         `Disallow: /api/\n` +
         `Disallow: /account\n` +
