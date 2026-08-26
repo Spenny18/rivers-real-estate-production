@@ -69,6 +69,12 @@ export default function MlsDetailPage() {
   const [, params] = useRoute<{ id: string }>("/mls/:id");
   const id = params?.id;
 
+  // Wouter preserves the window's scroll position during client-side route
+  // changes. Always start a newly selected property at the top of its page.
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [id]);
+
   const { data, isLoading } = useQuery<PublicMlsListingDetail>({
     queryKey: ["/api/public/mls", id],
     enabled: !!id,
