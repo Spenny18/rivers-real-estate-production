@@ -12,6 +12,11 @@ import { formatPrice, formatSqft } from "@/lib/format";
 import { apiUrl } from "@/lib/queryClient";
 import { mlsPropertyPath } from "@shared/mls-url";
 import { SeoHead } from "@/components/seo-head";
+import {
+  RIVERS_TILE_ATTRIBUTION,
+  RIVERS_TILE_SUBDOMAINS,
+  RIVERS_TILE_URL,
+} from "@/components/rivers-map";
 
 interface CondoDetail {
   slug: string;
@@ -436,8 +441,9 @@ export default function CondoDetailPage() {
               style={{ height: "100%", width: "100%" }}
             >
               <TileLayer
-                attribution="&copy; OpenStreetMap, &copy; CARTO"
-                url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+                attribution={RIVERS_TILE_ATTRIBUTION}
+                url={RIVERS_TILE_URL}
+                subdomains={RIVERS_TILE_SUBDOMAINS}
               />
               <Marker position={[data.lat, data.lng]} icon={propertyIcon} />
             </MapContainer>

@@ -417,8 +417,7 @@ function CopyBlock({ label, body }: { label: string; body: string }) {
 // default, forest-green when selected, crimson when there's been a price
 // reduction). Clicking a pill pops a hover card with photo + address +
 // quick stats so visitors can browse the neighbourhood without leaving the
-// page. Tiles are CARTO's neutral light basemap so the map reads B&W on
-// brand.
+// page. Basemap configuration is shared with the other public maps.
 // =============================================================================
 type PolygonGeometry =
   | { type: "Polygon"; coordinates: number[][][] }

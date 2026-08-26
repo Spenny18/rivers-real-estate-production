@@ -39,6 +39,11 @@ import type {
 } from "@/lib/mls-types";
 import { Link } from "wouter";
 import { mlsPropertyPath } from "@shared/mls-url";
+import {
+  RIVERS_TILE_ATTRIBUTION,
+  RIVERS_TILE_SUBDOMAINS,
+  RIVERS_TILE_URL,
+} from "@/components/rivers-map";
 
 const PAGE_SIZE = 50;
 
@@ -782,9 +787,9 @@ export default function MlsSearchPage() {
               zoomControl={true}
             >
               <TileLayer
-                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-                url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
-                subdomains={["a", "b", "c", "d"]}
+                attribution={RIVERS_TILE_ATTRIBUTION}
+                url={RIVERS_TILE_URL}
+                subdomains={RIVERS_TILE_SUBDOMAINS}
               />
               <ZoomTracker onZoom={setZoom} />
               <FitBoundsOnce points={mapPoints} />

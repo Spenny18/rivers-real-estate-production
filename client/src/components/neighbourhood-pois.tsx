@@ -21,6 +21,11 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { apiUrl } from "@/lib/queryClient";
 import { ClientOnly } from "@/components/client-only";
+import {
+  RIVERS_TILE_ATTRIBUTION,
+  RIVERS_TILE_SUBDOMAINS,
+  RIVERS_TILE_URL,
+} from "@/components/rivers-map";
 
 const propertyIcon = L.divIcon({
   className: "rivers-detail-marker",
@@ -266,8 +271,9 @@ function NeighbourhoodPoisInner({
             style={{ height: "100%", width: "100%" }}
           >
             <TileLayer
-              attribution='&copy; OpenStreetMap, &copy; CARTO'
-              url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+              attribution={RIVERS_TILE_ATTRIBUTION}
+              url={RIVERS_TILE_URL}
+              subdomains={RIVERS_TILE_SUBDOMAINS}
             />
             <Circle
               center={[lat, lng]}

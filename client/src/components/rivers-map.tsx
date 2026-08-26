@@ -5,13 +5,13 @@ import { useEffect } from "react";
 import { useMap } from "react-leaflet";
 import L from "leaflet";
 
-// CARTO's "light" basemap is a near-greyscale tile set — gives the map the
-// neutral B&W feel Spencer wants while still being legible.
+// OpenStreetMap's standard public tiles do not require an API key. Keep the
+// provider in one place so every public map uses the same supported source.
 export const RIVERS_TILE_URL =
-  "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
-export const RIVERS_TILE_SUBDOMAINS = ["a", "b", "c", "d"];
+  "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+export const RIVERS_TILE_SUBDOMAINS = ["a", "b", "c"];
 export const RIVERS_TILE_ATTRIBUTION =
-  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 
 // Brand palette — kept here so any new map references the same swatches.
 export const RIVERS_MAP_COLORS = {
