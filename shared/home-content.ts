@@ -351,8 +351,8 @@ export const BLOCK_TYPES: BlockTypeDef[] = [
     ],
     defaults: {
       eyebrow: "SPENCER RIVERS",
-      heading: "Calgary's most trusted luxury real estate expert.",
-      body: "Recognized for market expertise and client satisfaction. Calgary's most responsive real estate professional and the city's market volatility navigation expert — working full-time, year-round, in Calgary's six prestige communities.",
+      heading: "Calgary luxury real estate guidance, grounded in local experience.",
+      body: "Since 2015, Spencer has helped buyers and sellers navigate Calgary's luxury market with responsive communication, careful analysis, and a primary focus on six prestige communities.",
       image: "/img/spencer-arriva.jpg",
       imageAlt: "Spencer Rivers taking a client call in a Calgary high-rise",
       imagePosition: "left",
@@ -434,8 +434,8 @@ export const BLOCK_TYPES: BlockTypeDef[] = [
     defaults: {
       items: [
         { value: "—", label: "Active Listings", source: "activeListings" },
-        { value: "12", label: "Years in Calgary", source: "manual" },
-        { value: "6", label: "Neighbourhoods Served", source: "manual" },
+        { value: "Since 2015", label: "Serving Calgary", source: "manual" },
+        { value: "6", label: "Core Luxury Markets", source: "manual" },
         { value: "98.4%", label: "Avg. Sale-to-List", source: "manual" },
       ],
       ...STYLE_DEFAULTS,
@@ -489,8 +489,8 @@ export const BLOCK_TYPES: BlockTypeDef[] = [
     ],
     defaults: {
       eyebrow: "CALGARY · LUXURY MARKETS",
-      heading: "Six neighbourhoods. One advisor who knows them block by block.",
-      body: "Each of Calgary's prestige communities has its own character, inventory rhythm, and pricing logic. Spencer works in all six — full-time, year-round.",
+      heading: "Six core luxury markets. One advisor who knows them block by block.",
+      body: "Each of Calgary's prestige communities has its own character, inventory rhythm, and pricing logic. Spencer's primary focus is these six markets, alongside select communities across Calgary and the surrounding area.",
       limit: 0,
       ...STYLE_DEFAULTS,
       bg: "muted",
@@ -643,7 +643,7 @@ export const BLOCK_TYPES: BlockTypeDef[] = [
       youtubeId: "TV0Rm0fZxI8",
       thumbnail: "",
       videoTitle: "Why Spencer Rivers is the best luxury realtor in Calgary",
-      body: "With nearly 8,500 REALTORS® in Calgary, choosing the right one for your luxury home sale or purchase matters. Spencer brings 12 years of focused experience in Calgary's prestige market — every street, every block, every comparable sale.",
+      body: "With nearly 8,500 REALTORS® in Calgary, choosing the right one for your luxury home sale or purchase matters. Spencer has worked in Calgary real estate since 2015, with a primary focus on the city's prestige market and the local details that shape value.",
       ...STYLE_DEFAULTS,
     },
   },
@@ -674,16 +674,17 @@ export const BLOCK_TYPES: BlockTypeDef[] = [
     defaults: {
       eyebrow: "BY THE NUMBERS",
       heading:
-        "Calgary's most responsive real estate professional. Calgary's market volatility navigation expert.",
+        "Calgary luxury real estate experience, local market knowledge, and direct advice.",
       items: [
-        { value: "$100M+", label: "In sales to date", sub: "No. 1 Luxury Realtor in Calgary" },
-        { value: "Top 1%", label: "Realtor in Canada", sub: "Recognized nationally" },
+        { value: "$100M+", label: "In personal sales", sub: "Top Luxury Realtor in Calgary" },
+        { value: "Ranked #3", label: "Top Realtor in Calgary", sub: "Best in Calgary" },
         {
-          value: "100%",
-          label: "List price to sales ratio",
-          sub: "Sellers earn their asking price",
+          value: "98.4%",
+          label: "Average sale-to-list ratio",
+          sub: "Personal listing results",
         },
-        { value: "900+", label: "Clients helped", sub: "And counting in 2025" },
+        { value: "100s", label: "Clients helped", sub: "Since 2015" },
+        { value: "Top Agent", label: "In Canada", sub: "Dream Homes of Canada" },
       ],
       ...STYLE_DEFAULTS,
       bg: "dark",
@@ -753,7 +754,7 @@ export const BLOCK_TYPES: BlockTypeDef[] = [
           problem:
             "Multiple offers and bidding wars make it impossible to get a fair deal.",
           solution:
-            "Spencer's experience with 900+ Calgary transactions means he knows how to position your offer to win without overpaying — including off-market access most buyers never see.",
+            "Experience built since 2015 helps Spencer position competitive offers carefully — with clear comparable data, practical terms, and advice designed to protect your budget.",
         },
         {
           title: "Current market advantages",
@@ -765,7 +766,7 @@ export const BLOCK_TYPES: BlockTypeDef[] = [
           title: "Property discovery & access",
           problem: "The best properties seem to sell before I even see them.",
           solution:
-            "Private buyer database and an established agent network — roughly half of Calgary's $2M+ sales now move off-market. You see them first.",
+            "A private buyer database and established agent network can provide visibility into relevant opportunities beyond public search portals.",
         },
         {
           title: "Neighbourhood expertise",
@@ -785,7 +786,7 @@ export const BLOCK_TYPES: BlockTypeDef[] = [
           title: "Stress & anxiety relief",
           problem: "Selling feels overwhelming — too many moving pieces.",
           solution:
-            "Every detail handled. 98% of Spencer's sellers report a stress-free experience. You get clarity, weekly updates, and one direct line.",
+            "A clear process, regular updates, and one direct line help make a complex sale more manageable from preparation through closing.",
         },
         {
           title: "Market volatility navigation",
@@ -804,15 +805,15 @@ export const BLOCK_TYPES: BlockTypeDef[] = [
           problem:
             "Generalists pricing a luxury home in a market they don't actually work in.",
           solution:
-            "Spencer works exclusively in Calgary's six prestige communities — full-time, year-round. Same streets, year after year.",
+            "Spencer's primary focus is Calgary's six prestige communities, supported by experience across the city and surrounding area.",
         },
       ],
       resultsEyebrow: "OUR PROVEN RESULTS FORMULA",
       resultsHeading: "What “no fluff, just results” actually looks like.",
       results: [
-        { value: "7 Days", label: "Avg. days on market", sub: "(vs 23 Calgary average)" },
-        { value: "103%", label: "Of list price achieved", sub: "On average" },
-        { value: "98%", label: "Stress-free experience", sub: "Of sellers report" },
+        { value: "50% Faster", label: "Than the industry average", sub: "Average time to sell" },
+        { value: "98.4%", label: "Sale-to-list ratio", sub: "On average" },
+        { value: "Hands-on", label: "Seller support", sub: "Clear updates from preparation to closing" },
         {
           value: "100%",
           label: "Detail management",
@@ -865,7 +866,7 @@ export const BLOCK_TYPES: BlockTypeDef[] = [
         {
           icon: "ShieldCheck",
           title: "Discretion as the default",
-          body: "Roughly half of Calgary's $2M+ sales now move off-market. I run a private buyer database and an established agent network for clients who want to keep a sale quiet.",
+          body: "I maintain a private buyer database and an established agent network for clients who want a more discreet sale process or broader visibility beyond public search portals.",
         },
         {
           icon: "Eye",
@@ -994,7 +995,8 @@ export const BLOCK_TYPES: BlockTypeDef[] = [
       eyebrow: "SPENCER RIVERS",
       heading: "Awards and accolades.",
       items: [
-        "Top 1% Realtor in Canada",
+        "Ranked #3 Top Realtor in Calgary — Best in Calgary",
+        "Top Agent in Canada — Dream Homes of Canada",
         "$100M+ in Career Sales",
         "Certified Luxury Home Specialist",
         "Synterra Realty",
@@ -1419,7 +1421,7 @@ export function blockTitle(block: PageBlock): string {
 export const DEFAULT_HOME_SEO: PageSeo = {
   title: "Spencer Rivers — Luxury Homes Calgary | Rivers Real Estate",
   description:
-    "Calgary's top luxury real estate agent. Spencer Rivers represents buyers and sellers in Springbank Hill, Aspen Woods, Upper Mount Royal, Elbow Park, Britannia, and Bel-Aire.",
+    "Spencer Rivers is a top Calgary luxury Realtor representing buyers and sellers in Springbank Hill, Aspen Woods, Upper Mount Royal, Elbow Park, Britannia, and Bel-Aire.",
   keywords: "",
   ogImage: "",
   canonical: "",

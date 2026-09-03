@@ -755,7 +755,13 @@ export async function registerRoutes(
     const origin = process.env.PUBLIC_ORIGIN || "https://riversrealestate.ca";
     res.set("Content-Type", "text/plain");
     res.send(
-      `User-agent: *\n` +
+      `User-agent: OAI-SearchBot\n` +
+        `Allow: /\n` +
+        `\n` +
+        `User-agent: GPTBot\n` +
+        `Allow: /\n` +
+        `\n` +
+        `User-agent: *\n` +
         `Allow: /\n` +
         `Disallow: /admin\n` +
         `Disallow: /api/\n` +
