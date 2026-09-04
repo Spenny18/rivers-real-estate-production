@@ -17,10 +17,15 @@
  * rather than mint its own — keep that in mind before changing anything.
  */
 
-const ORIGIN = (process.env.PUBLIC_ORIGIN || "https://riversrealestate.ca").replace(
-  /\/$/,
-  "",
-);
+import { publicOrigin } from "../origin";
+
+// Every @id below is built from this, and those ids are crawled and
+// referenced by luxuryhomescalgary.ca — so it reads the same shared origin as
+// the rest of the server rather than keeping a private copy that could drift
+// away from it. Same env var and same default as before; publicOrigin() only
+// additionally trims whitespace and repeated trailing slashes, which would
+// have produced malformed ids.
+const ORIGIN = publicOrigin();
 
 export type SchemaNode = Record<string, unknown> & { "@id"?: string };
 
