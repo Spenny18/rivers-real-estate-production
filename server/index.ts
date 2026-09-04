@@ -9,6 +9,7 @@ import { startSyncCron } from "./rets-sync";
 import { startLeadAlertCron } from "./lead-alert-cron";
 import { storage } from "./storage";
 
+import { warnIfPublicOriginUnset } from "./origin";
 const app = express();
 const httpServer = createServer(app);
 
@@ -160,6 +161,10 @@ app.use((req, res, next) => {
     },
     () => {
       log(`serving on port ${port}`);
+      // Says so once at boot rather than letting a fallback origin quietly
+      // become the deployed behaviour — it decides booking links, outbound
+      // email and the Google OAuth redirect URI.
+      warnIfPublicOriginUnset();
     },
   );
 })();

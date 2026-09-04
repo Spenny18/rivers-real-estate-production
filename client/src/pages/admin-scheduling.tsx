@@ -137,6 +137,8 @@ interface Stats {
     configured: boolean;
     accountEmail: string | null;
     freeBusyScope: boolean;
+    redirectUri: string;
+    originConfigured: boolean;
   };
   origin: string;
 }
@@ -526,6 +528,52 @@ export default function AdminSchedulingPage() {
                   Your connection predates free/busy access, so events booked outside this site aren't
                   blocking slots yet. Reconnect once to fix that.
                 </p>
+              )}
+
+              {/* The redirect URI, verbatim. Google matches it character for
+                  character against the OAuth client's registered list, and a
+                  mismatch is the "Access blocked / redirect_uri_mismatch"
+                  error — so it's shown for copy-paste rather than left to be
+                  reconstructed by hand. */}
+              {stats?.google.configured && !stats.google.connected && (
+                <div className="mt-4 border-l-2 border-border pl-3 max-w-xl">
+                  <div className="font-display text-[10px] tracking-[0.16em] text-muted-foreground mb-1.5">
+                    AUTHORIZED REDIRECT URI
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <code
+                      className="text-[11px] bg-secondary/50 px-2 py-1.5 rounded-sm truncate flex-1"
+                      data-testid="text-redirect-uri"
+                    >
+                      {stats.google.redirectUri}
+                    </code>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => copy(stats.google.redirectUri, "Redirect URI copied")}
+                      data-testid="button-copy-redirect-uri"
+                      className="rounded-sm shrink-0"
+                      title="Copy the redirect URI"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                  <p className="mt-2 text-[12px] text-muted-foreground leading-relaxed">
+                    Paste this into your OAuth client's <strong className="text-foreground">Authorized
+                    redirect URIs</strong> in Google Cloud Console, exactly as shown. If it doesn't
+                    match, Google answers <code>redirect_uri_mismatch</code>.
+                  </p>
+                  {!stats.google.originConfigured && (
+                    <p className="mt-2 text-[12px] text-amber-700 dark:text-amber-400 flex items-start gap-2 leading-relaxed">
+                      <TriangleAlert className="h-4 w-4 shrink-0 mt-0.5" />
+                      <span>
+                        <code className="text-foreground">PUBLIC_ORIGIN</code> isn't set, so this is a
+                        fallback rather than your real domain — and it's also what booking links and
+                        emails use. Set it first, then register the URI it becomes.
+                      </span>
+                    </p>
+                  )}
+                </div>
               )}
             </div>
             <div className="flex gap-2 shrink-0">

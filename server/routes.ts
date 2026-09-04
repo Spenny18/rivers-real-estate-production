@@ -29,6 +29,7 @@ import {
 import { normalizeBlocks, normalizeSeo } from "@shared/home-content";
 import { invalidateSsrCache } from "./ssr";
 
+import { publicOrigin } from "./origin";
 const execFileAsync = promisify(execFile);
 
 // Where admin-uploaded images live. In production on Fly this is the
@@ -615,7 +616,7 @@ export async function registerRoutes(
 
   // Sitemap index — entry point Google should pick up from robots.txt.
   app.get("/sitemap.xml", (_req, res) => {
-    const origin = process.env.PUBLIC_ORIGIN || "https://riversrealestate.ca";
+    const origin = publicOrigin();
     const children = [
       `${origin}/sitemap-pages.xml`,
       `${origin}/sitemap-blog.xml`,
@@ -639,7 +640,7 @@ export async function registerRoutes(
   // edit timestamps for them; omitting lastmod is preferred over fabricating
   // one).
   app.get("/sitemap-pages.xml", (_req, res) => {
-    const origin = process.env.PUBLIC_ORIGIN || "https://riversrealestate.ca";
+    const origin = publicOrigin();
     const urls: SitemapUrl[] = [
       { loc: `${origin}/`, priority: "1.0", changefreq: "weekly" },
       { loc: `${origin}/mls`, priority: "0.9", changefreq: "daily" },
@@ -673,7 +674,7 @@ export async function registerRoutes(
 
   // Blog posts — uses publishedAt as lastmod (real signal). Drafts excluded.
   app.get("/sitemap-blog.xml", (_req, res) => {
-    const origin = process.env.PUBLIC_ORIGIN || "https://riversrealestate.ca";
+    const origin = publicOrigin();
     const urls: SitemapUrl[] = [];
     try {
       for (const p of storage.listBlogPosts()) {
@@ -694,7 +695,7 @@ export async function registerRoutes(
 
   // Neighbourhoods — no per-entity timestamp in schema, so we omit lastmod.
   app.get("/sitemap-neighbourhoods.xml", (_req, res) => {
-    const origin = process.env.PUBLIC_ORIGIN || "https://riversrealestate.ca";
+    const origin = publicOrigin();
     const urls: SitemapUrl[] = [];
     try {
       for (const n of storage.listNeighbourhoods()) {
@@ -713,7 +714,7 @@ export async function registerRoutes(
 
   // Condo buildings — same reasoning as neighbourhoods.
   app.get("/sitemap-condos.xml", (_req, res) => {
-    const origin = process.env.PUBLIC_ORIGIN || "https://riversrealestate.ca";
+    const origin = publicOrigin();
     const urls: SitemapUrl[] = [];
     try {
       for (const c of storage.listCondoBuildings()) {
@@ -734,7 +735,7 @@ export async function registerRoutes(
   // recent meaningful timestamp (priceChangedAt > listDate > createdAt) so
   // Google's lastmod signal reflects real changes, not sync churn.
   app.get("/sitemap-mls.xml", (_req, res) => {
-    const origin = process.env.PUBLIC_ORIGIN || "https://riversrealestate.ca";
+    const origin = publicOrigin();
     if (!INCLUDE_MLS_SITEMAP) {
       res.status(404).set("Content-Type", "application/xml; charset=utf-8");
       res.send(renderUrlset([]));
@@ -761,7 +762,7 @@ export async function registerRoutes(
 
   // ---------- SEO: robots.txt ----------
   app.get("/robots.txt", (_req, res) => {
-    const origin = process.env.PUBLIC_ORIGIN || "https://riversrealestate.ca";
+    const origin = publicOrigin();
     res.set("Content-Type", "text/plain");
     res.send(
       `User-agent: OAI-SearchBot\n` +
@@ -785,7 +786,7 @@ export async function registerRoutes(
   // markdown index of the site. Directory sections are generated from the
   // DB so newly published editorial content appears without a code deploy.
   app.get("/llms.txt", (_req, res) => {
-    const HOST = process.env.PUBLIC_ORIGIN || "https://riversrealestate.ca";
+    const HOST = publicOrigin();
     const lines: string[] = [];
     lines.push("# Rivers Real Estate — Luxury Homes Calgary");
     lines.push("");
@@ -1564,7 +1565,7 @@ export async function registerRoutes(
       });
     }
 
-    const origin = process.env.PUBLIC_ORIGIN ?? "https://riversrealestate.ca";
+    const origin = publicOrigin();
     const firstName = name.split(/\s+/)[0];
 
     // 1. Email the visitor with their valuation report.

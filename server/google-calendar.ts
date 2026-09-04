@@ -14,13 +14,18 @@
 //      `https://www.googleapis.com/auth/calendar.freebusy`. In Test users
 //      add spencer@riversrealestate.ca (Test mode is fine for personal use).
 //   4. APIs & Services -> Credentials -> Create OAuth 2.0 Client ID, type
-//      "Web application". Add Authorized redirect URI:
-//        https://luxury-homes-calgary.fly.dev/api/admin/google/callback
-//      (or your custom domain when DNS is wired)
+//      "Web application". Under "Authorized redirect URIs" add the exact
+//      string shown on the Google Calendar card at /admin/scheduling — the
+//      console prints what this deploy will actually send, so it can be
+//      copied rather than reconstructed. Google matches it character for
+//      character; a wrong scheme, host or trailing slash is the
+//      `redirect_uri_mismatch` error. It is derived from PUBLIC_ORIGIN, so
+//      register a URI for every origin this app is reachable on.
 //   5. Copy Client ID + Client Secret -> set as Fly secrets.
 
 import { storage } from "./storage";
 import type { UserIntegration } from "@shared/schema";
+import { googleRedirectUri } from "./origin";
 
 // calendar.events lets us write showings and bookings; calendar.freebusy lets
 // the /book slot engine see the agent's real busy blocks so a slot is never
@@ -42,8 +47,10 @@ function clientSecret() {
   return process.env.GOOGLE_OAUTH_CLIENT_SECRET || "";
 }
 function redirectUri() {
-  const origin = process.env.PUBLIC_ORIGIN || "https://luxury-homes-calgary.fly.dev";
-  return `${origin}/api/admin/google/callback`;
+  // Shared with the admin console, which shows this exact string so it can be
+  // pasted into the OAuth client's Authorized redirect URIs. Google compares
+  // it character for character.
+  return googleRedirectUri();
 }
 
 export function googleConfigured(): boolean {

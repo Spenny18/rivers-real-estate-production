@@ -5,6 +5,7 @@ import path from "node:path";
 import { metaForPath, injectMetaIntoHtml } from "./seo-inject";
 import { createSsrPipeline, type RenderFn } from "./ssr";
 
+import { publicOrigin } from "./origin";
 export function serveStatic(app: Express) {
   const distPath = path.resolve(__dirname, "public");
   if (!fs.existsSync(distPath)) {
@@ -72,7 +73,7 @@ export function serveStatic(app: Express) {
       const fallbackHtml = injectMetaIntoHtml(indexTemplate, {
         title: "Page not found — Rivers Real Estate",
         description: "The page you're looking for doesn't exist.",
-        canonical: `${process.env.PUBLIC_ORIGIN || "https://riversrealestate.ca"}${rawPath}`,
+        canonical: `${publicOrigin()}${rawPath}`,
         noindex: true,
       });
       res.set("Content-Type", "text/html; charset=utf-8").send(fallbackHtml);
