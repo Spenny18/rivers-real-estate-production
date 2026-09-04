@@ -79,6 +79,7 @@ interface EventType {
   active: boolean;
   sortOrder: number;
   bookingCount: number;
+  totalBookingCount: number;
   publicUrl: string;
   hasOwnSchedule: boolean;
 }
@@ -292,13 +293,22 @@ export default function AdminSchedulingPage() {
 
   const deleteEventType = useMutation({
     mutationFn: async (id: number) => {
-      await apiRequest("DELETE", `/api/admin/booking/event-types/${id}`);
+      const res = await apiRequest("DELETE", `/api/admin/booking/event-types/${id}`);
+      return (await res.json()) as { removed: boolean; deactivated: boolean };
     },
-    onSuccess: () => {
+    onSuccess: (r) => {
       refreshAll();
       setEditing(null);
       setDraft(null);
-      toast({ title: "Meeting type deleted", description: "Existing bookings were kept." });
+      toast(
+        r.deactivated
+          ? {
+              title: "Meeting type retired",
+              description:
+                "It has bookings, so it was taken off the booking page rather than deleted — those invitees keep working reschedule links.",
+            }
+          : { title: "Meeting type deleted" },
+      );
     },
     onError: fail,
   });
@@ -1339,9 +1349,12 @@ export default function AdminSchedulingPage() {
               <Button
                 variant="ghost"
                 onClick={() => {
+                  const hasBookings = editing.totalBookingCount > 0;
                   if (
                     window.confirm(
-                      `Delete "${editing.name}"? Existing bookings are kept, but /book/${editing.slug} will stop working.`,
+                      hasBookings
+                        ? `"${editing.name}" has bookings, so it will be retired rather than deleted: /book/${editing.slug} stops taking new bookings, and everyone already booked keeps a working reschedule link. Continue?`
+                        : `Delete "${editing.name}"? /book/${editing.slug} will stop working.`,
                     )
                   ) {
                     deleteEventType.mutate(editing.id);
@@ -1350,7 +1363,8 @@ export default function AdminSchedulingPage() {
                 data-testid="button-delete-type"
                 className="rounded-sm text-muted-foreground hover:text-destructive text-[11px] font-display tracking-[0.14em]"
               >
-                <Trash2 className="h-3.5 w-3.5 mr-1.5" /> DELETE
+                <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                {editing.totalBookingCount > 0 ? "RETIRE" : "DELETE"}
               </Button>
             ) : (
               <span />

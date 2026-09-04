@@ -271,21 +271,32 @@ export function registerBookingRoutes(
     if (!check.ok) return res.status(409).json({ message: check.reason });
 
     const inviteeTz = isValidTimeZone(input.timezone) ? input.timezone! : et.timezone;
-    const booking = storage.createBooking({
-      uid: newBookingUid(),
-      eventTypeId: et.id,
-      name: input.name.trim(),
-      email: input.email.trim().toLowerCase(),
-      phone: input.phone?.trim() || null,
-      notes: input.notes?.trim() || null,
-      answer: input.answer?.trim() || null,
-      startsAt: new Date(startMs).toISOString(),
-      endsAt: new Date(startMs + et.durationMinutes * 60_000).toISOString(),
-      timezone: inviteeTz,
-      status: "confirmed",
-      listingId: input.listingId?.trim() || null,
-      source: "booking_page",
-    });
+    // Atomic: the validation above straddles an await on Google's free/busy
+    // call, so two submissions for the same slot can both reach here. The
+    // insert re-checks under a transaction and returns null if it lost.
+    const booking = storage.createBookingIfFree(
+      {
+        uid: newBookingUid(),
+        eventTypeId: et.id,
+        name: input.name.trim(),
+        email: input.email.trim().toLowerCase(),
+        phone: input.phone?.trim() || null,
+        notes: input.notes?.trim() || null,
+        answer: input.answer?.trim() || null,
+        startsAt: new Date(startMs).toISOString(),
+        endsAt: new Date(startMs + et.durationMinutes * 60_000).toISOString(),
+        timezone: inviteeTz,
+        status: "confirmed",
+        listingId: input.listingId?.trim() || null,
+        source: "booking_page",
+      },
+      { beforeMinutes: et.bufferBeforeMinutes, afterMinutes: et.bufferAfterMinutes },
+    );
+    if (!booking) {
+      return res
+        .status(409)
+        .json({ message: "That time was just taken. Please pick another slot." });
+    }
 
     // A booking is a lead. Record it in the CRM the same way an inquiry is,
     // so it shows up in /admin/leads and flows to Follow Up Boss.
@@ -418,8 +429,22 @@ export function registerBookingRoutes(
     if (!b) return res.status(404).json({ message: "Booking not found" });
     const et = storage.getBookingEventType(b.eventTypeId);
     if (!et) return res.status(404).json({ message: "Booking not found" });
-    if (b.status === "cancelled") {
-      return res.status(409).json({ message: "This booking was cancelled — please book a new time." });
+    // Only a live booking can move. Without this, anyone holding the uid of a
+    // finished, no-showed or cancelled booking could POST a future time and
+    // rewrite that historical row back to confirmed — the client hides the
+    // control once a meeting has ended, but the client isn't the gate.
+    if (b.status !== "confirmed") {
+      return res.status(409).json({
+        message:
+          b.status === "cancelled"
+            ? "This booking was cancelled — please book a new time."
+            : "This booking is already closed — please book a new time.",
+      });
+    }
+    if (Date.parse(b.endsAt) < Date.now()) {
+      return res
+        .status(409)
+        .json({ message: "This booking has already happened — please book a new time." });
     }
 
     const startMs = Date.parse(String(req.body?.startsAt ?? ""));
@@ -572,14 +597,22 @@ export function registerBookingRoutes(
   // ---- Event types --------------------------------------------------------
 
   app.get("/api/admin/booking/event-types", requireAuth, (_req, res) => {
-    const counts = new Map<number, number>();
-    for (const b of storage.listBookings({ status: "confirmed" })) {
-      counts.set(b.eventTypeId, (counts.get(b.eventTypeId) ?? 0) + 1);
+    const confirmed = new Map<number, number>();
+    const total = new Map<number, number>();
+    for (const b of storage.listBookings()) {
+      total.set(b.eventTypeId, (total.get(b.eventTypeId) ?? 0) + 1);
+      if (b.status === "confirmed") {
+        confirmed.set(b.eventTypeId, (confirmed.get(b.eventTypeId) ?? 0) + 1);
+      }
     }
     res.json(
       storage.listBookingEventTypes().map((et) => ({
         ...et,
-        bookingCount: counts.get(et.id) ?? 0,
+        bookingCount: confirmed.get(et.id) ?? 0,
+        // Any booking at all, cancelled included — this is what decides
+        // whether a delete retires the type instead of removing it, so it has
+        // to match the rule the server applies.
+        totalBookingCount: total.get(et.id) ?? 0,
         publicUrl: `${origin()}/book/${et.slug}`,
         // Null means "uses the default weekly schedule".
         hasOwnSchedule: storage.listBookingAvailability(et.id).length > 0,
@@ -681,7 +714,10 @@ export function registerBookingRoutes(
   app.delete("/api/admin/booking/event-types/:id", requireAuth, (req, res) => {
     const id = toInt(param(req, "id"), NaN);
     if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid id" });
-    res.json({ ok: storage.deleteBookingEventType(id) });
+    // Retired rather than removed when bookings reference it, so those
+    // invitees keep working manage links. The UI reports which happened.
+    const r = storage.deleteBookingEventType(id);
+    res.json({ ok: r.removed || r.deactivated, ...r });
   });
 
   // ---- Availability -------------------------------------------------------
@@ -779,8 +815,12 @@ export function registerBookingRoutes(
       return res.status(400).json({ message: "That start time isn't valid." });
     }
     // The agent books over their own rules on purpose — if Spencer says the
-    // Sunday 7am works, it works. Only a clash with another booking is
-    // rejected, since that one is a real double-book.
+    // Sunday 7am works, it works, buffers included. Only a bare overlap with
+    // another booking is rejected, since that one is a real double-book.
+    //
+    // No transaction needed the way the public path needs one: there is no
+    // await between this check and the insert below, and better-sqlite3 is
+    // synchronous, so nothing can interleave.
     const clash = storage
       .listBookingsInRange(
         new Date(startMs).toISOString(),

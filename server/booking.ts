@@ -68,8 +68,14 @@ export function tzOffsetMs(instant: Date, timeZone: string): number {
  *
  * The offset depends on the instant we're solving for, so we guess with the
  * offset at the naive timestamp and then correct once — enough to land on the
- * right side of any DST transition. Times inside a spring-forward gap (which
- * never occur locally) resolve to the instant just after the jump.
+ * right side of any DST transition.
+ *
+ * A wall time inside a spring-forward gap names no instant at all (in
+ * America/Edmonton, 2026-03-08 02:30 never happens). This returns a Date
+ * anyway — the nearest the correction converges on, which lands *before* the
+ * gap, not after it. Callers that must not silently shift a time by an hour
+ * should use `zonedTimeToUtcStrict` instead; this one is for range bounds
+ * like local midnight, where being an hour out is harmless.
  */
 export function zonedTimeToUtc(
   year: number,
@@ -82,6 +88,26 @@ export function zonedTimeToUtc(
   let ts = naive - tzOffsetMs(new Date(naive), timeZone);
   ts = naive - tzOffsetMs(new Date(ts), timeZone);
   return new Date(ts);
+}
+
+/**
+ * As `zonedTimeToUtc`, but null when the wall time doesn't exist in that zone
+ * — i.e. it falls in a spring-forward gap. Verified by projecting the result
+ * back: a real wall time round-trips to the same date and minute, a
+ * nonexistent one doesn't.
+ */
+export function zonedTimeToUtcStrict(
+  year: number,
+  month: number,
+  day: number,
+  minuteOfDay: number,
+  timeZone: string,
+): Date | null {
+  const d = zonedTimeToUtc(year, month, day, minuteOfDay, timeZone);
+  const back = zonedParts(d, timeZone);
+  const wanted = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  if (back.date !== wanted || back.minuteOfDay !== minuteOfDay) return null;
+  return d;
 }
 
 /** The local calendar date + minute-of-day an instant falls on in a zone. */
@@ -206,6 +232,13 @@ function overlaps(a: Interval, b: Interval): boolean {
  * Everything already on the calendar between two instants: confirmed
  * bookings, scheduled showings from the tours table, and — when Google is
  * connected — the agent's real free/busy blocks.
+ *
+ * An existing booking is widened by *its own* event type's buffers, so the
+ * padding a meeting asked for protects the time around that meeting. Widening
+ * only the candidate (which `computeSlots` also does, for busy blocks that
+ * have no owning event type) would point the padding the wrong way: a
+ * candidate's after-buffer would block time *before* someone else's booking
+ * while leaving the slot immediately after it open.
  */
 export async function collectBusy(
   userId: number,
@@ -215,8 +248,19 @@ export async function collectBusy(
 ): Promise<Interval[]> {
   const busy: Interval[] = [];
 
+  const buffersByType = new Map<number, { before: number; after: number }>();
+  for (const et of storage.listBookingEventTypes()) {
+    buffersByType.set(et.id, {
+      before: Math.max(0, et.bufferBeforeMinutes) * 60_000,
+      after: Math.max(0, et.bufferAfterMinutes) * 60_000,
+    });
+  }
   for (const b of storage.listBookingsInRange(fromIso, toIso, opts.excludeBookingId)) {
-    busy.push({ start: Date.parse(b.startsAt), end: Date.parse(b.endsAt) });
+    const pad = buffersByType.get(b.eventTypeId) ?? { before: 0, after: 0 };
+    busy.push({
+      start: Date.parse(b.startsAt) - pad.before,
+      end: Date.parse(b.endsAt) + pad.after,
+    });
   }
 
   // Showings booked through the older tours flow occupy the calendar too.
@@ -315,7 +359,12 @@ export function computeSlots(opts: {
     const slots: string[] = [];
     for (const w of windows) {
       for (let m = w.startMinute; m + et.durationMinutes <= w.endMinute; m += interval) {
-        const start = zonedTimeToUtc(parts.year, parts.month, parts.day, m, tz).getTime();
+        // Skip wall times that don't exist — on a spring-forward day a window
+        // covering the gap would otherwise offer slots an hour off its
+        // configured hours.
+        const startDate = zonedTimeToUtcStrict(parts.year, parts.month, parts.day, m, tz);
+        if (!startDate) continue;
+        const start = startDate.getTime();
         const end = start + duration;
         if (start < earliest || start > horizon) continue;
         const guarded: Interval = { start: start - bufferBefore, end: end + bufferAfter };

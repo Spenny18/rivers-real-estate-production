@@ -2643,12 +2643,31 @@ export class DatabaseStorage implements IStorage {
       .returning()
       .get();
   }
-  deleteBookingEventType(id: number): boolean {
-    // Availability rows scoped to this type go with it; bookings are kept so
-    // the history (and the invitee's manage link) survives.
+  /**
+   * Remove an event type, or retire it if bookings still reference it.
+   *
+   * Every public manage/cancel/reschedule/ICS endpoint reloads the booking's
+   * event type, so hard-deleting one that has bookings would 404 those
+   * invitees out of their own appointments and strip the agent's ability to
+   * clear the mirrored calendar events. When bookings exist we deactivate
+   * instead: the row survives for those endpoints, while /book/<slug> stops
+   * offering it because the public routes require `active`.
+   */
+  deleteBookingEventType(id: number): { removed: boolean; deactivated: boolean } {
+    const referenced = db.select().from(bookings).where(eq(bookings.eventTypeId, id)).get();
+    if (referenced) {
+      const updated = db
+        .update(bookingEventTypes)
+        .set({ active: false, updatedAt: new Date().toISOString() })
+        .where(eq(bookingEventTypes.id, id))
+        .returning()
+        .get();
+      return { removed: false, deactivated: !!updated };
+    }
+    // No bookings — safe to drop it, and its own availability rows with it.
     db.delete(bookingAvailability).where(eq(bookingAvailability.eventTypeId, id)).run();
     const r = db.delete(bookingEventTypes).where(eq(bookingEventTypes.id, id)).run();
-    return (r.changes ?? 0) > 0;
+    return { removed: (r.changes ?? 0) > 0, deactivated: false };
   }
 
   // ---- Scheduling: weekly availability -----------------------------------
@@ -2751,6 +2770,68 @@ export class DatabaseStorage implements IStorage {
       .values({ ...(data as any), createdAt: now, updatedAt: now })
       .returning()
       .get();
+  }
+  /**
+   * Insert a booking only if nothing already occupies its span, checked and
+   * written as one atomic step. Returns null when the slot was taken.
+   *
+   * Slot validation happens earlier in the request, but it straddles an
+   * `await` on Google's free/busy call: two submissions for the same time can
+   * both snapshot a free calendar, both pass validation, and both insert.
+   * better-sqlite3 is synchronous, so a transaction here closes that window —
+   * this re-check and the insert cannot interleave with another request.
+   *
+   * Both sides are widened by their event type's buffers, so the guard
+   * enforces the same spacing the slot engine offered rather than only
+   * catching exact double-books.
+   */
+  createBookingIfFree(
+    data: Omit<InsertBooking, "createdAt" | "updatedAt">,
+    pad: { beforeMinutes: number; afterMinutes: number },
+  ): Booking | null {
+    const before = Math.max(0, pad.beforeMinutes) * 60_000;
+    const after = Math.max(0, pad.afterMinutes) * 60_000;
+    const wantStart = Date.parse(String(data.startsAt)) - before;
+    const wantEnd = Date.parse(String(data.endsAt)) + after;
+
+    const buffersByType = new Map<number, { before: number; after: number }>();
+    for (const et of this.listBookingEventTypes()) {
+      buffersByType.set(et.id, {
+        before: Math.max(0, et.bufferBeforeMinutes) * 60_000,
+        after: Math.max(0, et.bufferAfterMinutes) * 60_000,
+      });
+    }
+
+    const now = new Date().toISOString();
+    const txn = sqlite.transaction(() => {
+      // A day either side comfortably covers any buffer we allow (240 min).
+      const windowFrom = new Date(wantStart - 86_400_000).toISOString();
+      const windowTo = new Date(wantEnd + 86_400_000).toISOString();
+      const clash = db
+        .select()
+        .from(bookings)
+        .where(
+          and(
+            eq(bookings.status, "confirmed"),
+            lte(bookings.startsAt, windowTo),
+            gte(bookings.endsAt, windowFrom),
+          )!,
+        )
+        .all()
+        .some((b) => {
+          const p = buffersByType.get(b.eventTypeId) ?? { before: 0, after: 0 };
+          const bStart = Date.parse(b.startsAt) - p.before;
+          const bEnd = Date.parse(b.endsAt) + p.after;
+          return wantStart < bEnd && bStart < wantEnd;
+        });
+      if (clash) return null;
+      return db
+        .insert(bookings)
+        .values({ ...(data as any), createdAt: now, updatedAt: now })
+        .returning()
+        .get();
+    });
+    return txn() as Booking | null;
   }
   updateBooking(id: number, patch: Partial<InsertBooking>): Booking | undefined {
     return db
