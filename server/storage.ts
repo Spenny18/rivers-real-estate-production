@@ -18,6 +18,10 @@ import {
   userIntegrations,
   pages,
   pageRevisions,
+  bookingEventTypes,
+  bookingAvailability,
+  bookingDateOverrides,
+  bookings,
 } from "@shared/schema";
 import type {
   User,
@@ -55,6 +59,13 @@ import type {
   PageRow,
   InsertPageRow,
   PageRevision,
+  BookingEventType,
+  InsertBookingEventType,
+  BookingAvailability,
+  BookingDateOverride,
+  InsertBookingDateOverride,
+  Booking,
+  InsertBooking,
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
@@ -453,6 +464,78 @@ sqlite.exec(`
     note TEXT,
     updated_at TEXT NOT NULL
   );
+
+  -- Scheduling: the Calendly-style booker behind /book and /admin/scheduling.
+  CREATE TABLE IF NOT EXISTS booking_event_types (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL DEFAULT 1,
+    slug TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    duration_minutes INTEGER NOT NULL DEFAULT 30,
+    location_type TEXT NOT NULL DEFAULT 'phone',
+    location_detail TEXT,
+    color TEXT NOT NULL DEFAULT '#23412d',
+    buffer_before_minutes INTEGER NOT NULL DEFAULT 0,
+    buffer_after_minutes INTEGER NOT NULL DEFAULT 15,
+    minimum_notice_minutes INTEGER NOT NULL DEFAULT 240,
+    advance_days INTEGER NOT NULL DEFAULT 60,
+    slot_interval_minutes INTEGER NOT NULL DEFAULT 30,
+    max_per_day INTEGER,
+    timezone TEXT NOT NULL DEFAULT 'America/Edmonton',
+    require_phone INTEGER NOT NULL DEFAULT 1,
+    custom_question TEXT,
+    confirmation_message TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS booking_availability (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type_id INTEGER,
+    day_of_week INTEGER NOT NULL,
+    start_minute INTEGER NOT NULL,
+    end_minute INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_booking_availability_type
+    ON booking_availability(event_type_id, day_of_week);
+  CREATE TABLE IF NOT EXISTS booking_date_overrides (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL UNIQUE,
+    unavailable INTEGER NOT NULL DEFAULT 1,
+    start_minute INTEGER,
+    end_minute INTEGER,
+    note TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS bookings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid TEXT NOT NULL UNIQUE,
+    event_type_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    phone TEXT,
+    notes TEXT,
+    answer TEXT,
+    starts_at TEXT NOT NULL,
+    ends_at TEXT NOT NULL,
+    timezone TEXT NOT NULL DEFAULT 'America/Edmonton',
+    status TEXT NOT NULL DEFAULT 'confirmed',
+    cancel_reason TEXT,
+    cancelled_at TEXT,
+    cancelled_by TEXT,
+    google_event_id TEXT,
+    lead_id INTEGER,
+    listing_id TEXT,
+    source TEXT NOT NULL DEFAULT 'booking_page',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_bookings_starts_at ON bookings(starts_at);
+  CREATE INDEX IF NOT EXISTS idx_bookings_status ON bookings(status, starts_at);
+  CREATE INDEX IF NOT EXISTS idx_bookings_event_type ON bookings(event_type_id, starts_at);
 `);
 
 // Migration: add account_user_id to saved_searches so portal users own
@@ -2525,6 +2608,262 @@ export class DatabaseStorage implements IStorage {
     const stale = ids.slice(keep);
     if (stale.length === 0) return;
     db.delete(pageRevisions).where(inArray(pageRevisions.id, stale)).run();
+  }
+
+  // ---- Scheduling: event types -------------------------------------------
+  listBookingEventTypes(): BookingEventType[] {
+    return db
+      .select()
+      .from(bookingEventTypes)
+      .orderBy(asc(bookingEventTypes.sortOrder), asc(bookingEventTypes.id))
+      .all();
+  }
+  getBookingEventType(id: number): BookingEventType | undefined {
+    return db.select().from(bookingEventTypes).where(eq(bookingEventTypes.id, id)).get();
+  }
+  getBookingEventTypeBySlug(slug: string): BookingEventType | undefined {
+    return db.select().from(bookingEventTypes).where(eq(bookingEventTypes.slug, slug)).get();
+  }
+  createBookingEventType(data: Partial<InsertBookingEventType>): BookingEventType {
+    const now = new Date().toISOString();
+    return db
+      .insert(bookingEventTypes)
+      .values({ ...(data as any), createdAt: now, updatedAt: now })
+      .returning()
+      .get();
+  }
+  updateBookingEventType(
+    id: number,
+    patch: Partial<InsertBookingEventType>,
+  ): BookingEventType | undefined {
+    return db
+      .update(bookingEventTypes)
+      .set({ ...(patch as any), updatedAt: new Date().toISOString() })
+      .where(eq(bookingEventTypes.id, id))
+      .returning()
+      .get();
+  }
+  /**
+   * Remove an event type, or retire it if bookings still reference it.
+   *
+   * Every public manage/cancel/reschedule/ICS endpoint reloads the booking's
+   * event type, so hard-deleting one that has bookings would 404 those
+   * invitees out of their own appointments and strip the agent's ability to
+   * clear the mirrored calendar events. When bookings exist we deactivate
+   * instead: the row survives for those endpoints, while /book/<slug> stops
+   * offering it because the public routes require `active`.
+   */
+  deleteBookingEventType(id: number): { removed: boolean; deactivated: boolean } {
+    const referenced = db.select().from(bookings).where(eq(bookings.eventTypeId, id)).get();
+    if (referenced) {
+      const updated = db
+        .update(bookingEventTypes)
+        .set({ active: false, updatedAt: new Date().toISOString() })
+        .where(eq(bookingEventTypes.id, id))
+        .returning()
+        .get();
+      return { removed: false, deactivated: !!updated };
+    }
+    // No bookings — safe to drop it, and its own availability rows with it.
+    db.delete(bookingAvailability).where(eq(bookingAvailability.eventTypeId, id)).run();
+    const r = db.delete(bookingEventTypes).where(eq(bookingEventTypes.id, id)).run();
+    return { removed: (r.changes ?? 0) > 0, deactivated: false };
+  }
+
+  // ---- Scheduling: weekly availability -----------------------------------
+  // `eventTypeId === null` addresses the default schedule every event type
+  // falls back to when it has no rows of its own.
+  listBookingAvailability(eventTypeId: number | null): BookingAvailability[] {
+    return db
+      .select()
+      .from(bookingAvailability)
+      .where(
+        eventTypeId === null
+          ? sql`${bookingAvailability.eventTypeId} IS NULL`
+          : eq(bookingAvailability.eventTypeId, eventTypeId),
+      )
+      .orderBy(asc(bookingAvailability.dayOfWeek), asc(bookingAvailability.startMinute))
+      .all();
+  }
+  replaceBookingAvailability(
+    eventTypeId: number | null,
+    windows: Array<{ dayOfWeek: number; startMinute: number; endMinute: number }>,
+  ): BookingAvailability[] {
+    const now = new Date().toISOString();
+    db.delete(bookingAvailability)
+      .where(
+        eventTypeId === null
+          ? sql`${bookingAvailability.eventTypeId} IS NULL`
+          : eq(bookingAvailability.eventTypeId, eventTypeId),
+      )
+      .run();
+    for (const w of windows) {
+      db.insert(bookingAvailability)
+        .values({
+          eventTypeId,
+          dayOfWeek: w.dayOfWeek,
+          startMinute: w.startMinute,
+          endMinute: w.endMinute,
+          createdAt: now,
+        })
+        .run();
+    }
+    return this.listBookingAvailability(eventTypeId);
+  }
+
+  // ---- Scheduling: one-off date overrides --------------------------------
+  listBookingDateOverrides(fromDate?: string): BookingDateOverride[] {
+    const q = db.select().from(bookingDateOverrides);
+    const rows = fromDate
+      ? q.where(gte(bookingDateOverrides.date, fromDate)).all()
+      : q.all();
+    return rows.sort((a, b) => a.date.localeCompare(b.date));
+  }
+  upsertBookingDateOverride(
+    data: Omit<InsertBookingDateOverride, "createdAt">,
+  ): BookingDateOverride {
+    const existing = db
+      .select()
+      .from(bookingDateOverrides)
+      .where(eq(bookingDateOverrides.date, data.date))
+      .get();
+    if (existing) {
+      return db
+        .update(bookingDateOverrides)
+        .set(data as any)
+        .where(eq(bookingDateOverrides.id, existing.id))
+        .returning()
+        .get();
+    }
+    return db
+      .insert(bookingDateOverrides)
+      .values({ ...(data as any), createdAt: new Date().toISOString() })
+      .returning()
+      .get();
+  }
+  deleteBookingDateOverride(id: number): boolean {
+    const r = db.delete(bookingDateOverrides).where(eq(bookingDateOverrides.id, id)).run();
+    return (r.changes ?? 0) > 0;
+  }
+
+  // ---- Scheduling: bookings ----------------------------------------------
+  listBookings(opts: { from?: string; to?: string; status?: string; eventTypeId?: number } = {}): Booking[] {
+    const clauses: any[] = [];
+    if (opts.from) clauses.push(gte(bookings.startsAt, opts.from));
+    if (opts.to) clauses.push(lte(bookings.startsAt, opts.to));
+    if (opts.status) clauses.push(eq(bookings.status, opts.status));
+    if (opts.eventTypeId) clauses.push(eq(bookings.eventTypeId, opts.eventTypeId));
+    const base = db.select().from(bookings);
+    const rows = clauses.length > 0 ? base.where(and(...clauses)!).all() : base.all();
+    return rows.sort((a, b) => a.startsAt.localeCompare(b.startsAt));
+  }
+  getBooking(id: number): Booking | undefined {
+    return db.select().from(bookings).where(eq(bookings.id, id)).get();
+  }
+  getBookingByUid(uid: string): Booking | undefined {
+    return db.select().from(bookings).where(eq(bookings.uid, uid)).get();
+  }
+  createBooking(data: Omit<InsertBooking, "createdAt" | "updatedAt">): Booking {
+    const now = new Date().toISOString();
+    return db
+      .insert(bookings)
+      .values({ ...(data as any), createdAt: now, updatedAt: now })
+      .returning()
+      .get();
+  }
+  /**
+   * Insert a booking only if nothing already occupies its span, checked and
+   * written as one atomic step. Returns null when the slot was taken.
+   *
+   * Slot validation happens earlier in the request, but it straddles an
+   * `await` on Google's free/busy call: two submissions for the same time can
+   * both snapshot a free calendar, both pass validation, and both insert.
+   * better-sqlite3 is synchronous, so a transaction here closes that window —
+   * this re-check and the insert cannot interleave with another request.
+   *
+   * Both sides are widened by their event type's buffers, so the guard
+   * enforces the same spacing the slot engine offered rather than only
+   * catching exact double-books.
+   */
+  createBookingIfFree(
+    data: Omit<InsertBooking, "createdAt" | "updatedAt">,
+    pad: { beforeMinutes: number; afterMinutes: number },
+  ): Booking | null {
+    const before = Math.max(0, pad.beforeMinutes) * 60_000;
+    const after = Math.max(0, pad.afterMinutes) * 60_000;
+    const wantStart = Date.parse(String(data.startsAt)) - before;
+    const wantEnd = Date.parse(String(data.endsAt)) + after;
+
+    const buffersByType = new Map<number, { before: number; after: number }>();
+    for (const et of this.listBookingEventTypes()) {
+      buffersByType.set(et.id, {
+        before: Math.max(0, et.bufferBeforeMinutes) * 60_000,
+        after: Math.max(0, et.bufferAfterMinutes) * 60_000,
+      });
+    }
+
+    const now = new Date().toISOString();
+    const txn = sqlite.transaction(() => {
+      // A day either side comfortably covers any buffer we allow (240 min).
+      const windowFrom = new Date(wantStart - 86_400_000).toISOString();
+      const windowTo = new Date(wantEnd + 86_400_000).toISOString();
+      const clash = db
+        .select()
+        .from(bookings)
+        .where(
+          and(
+            eq(bookings.status, "confirmed"),
+            lte(bookings.startsAt, windowTo),
+            gte(bookings.endsAt, windowFrom),
+          )!,
+        )
+        .all()
+        .some((b) => {
+          const p = buffersByType.get(b.eventTypeId) ?? { before: 0, after: 0 };
+          const bStart = Date.parse(b.startsAt) - p.before;
+          const bEnd = Date.parse(b.endsAt) + p.after;
+          return wantStart < bEnd && bStart < wantEnd;
+        });
+      if (clash) return null;
+      return db
+        .insert(bookings)
+        .values({ ...(data as any), createdAt: now, updatedAt: now })
+        .returning()
+        .get();
+    });
+    return txn() as Booking | null;
+  }
+  updateBooking(id: number, patch: Partial<InsertBooking>): Booking | undefined {
+    return db
+      .update(bookings)
+      .set({ ...(patch as any), updatedAt: new Date().toISOString() })
+      .where(eq(bookings.id, id))
+      .returning()
+      .get();
+  }
+  /**
+   * Confirmed bookings overlapping [fromIso, toIso). Used both to paint the
+   * booking page's busy times and to re-check for a double-book at the moment
+   * of writing. `excludeId` lets a reschedule ignore its own row.
+   */
+  listBookingsInRange(fromIso: string, toIso: string, excludeId?: number): Booking[] {
+    return db
+      .select()
+      .from(bookings)
+      .where(
+        and(
+          eq(bookings.status, "confirmed"),
+          lte(bookings.startsAt, toIso),
+          gte(bookings.endsAt, fromIso),
+        )!,
+      )
+      .all()
+      .filter((b) => (excludeId ? b.id !== excludeId : true));
+  }
+  countBookingsBetween(fromIso: string, toIso: string, eventTypeId?: number): number {
+    return this.listBookingsInRange(fromIso, toIso).filter((b) =>
+      eventTypeId ? b.eventTypeId === eventTypeId : true,
+    ).length;
   }
 }
 

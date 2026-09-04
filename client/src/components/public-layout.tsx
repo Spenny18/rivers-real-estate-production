@@ -2,7 +2,7 @@ import { ReactNode, useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
 import { Logo } from "@/components/logo";
 import { useTheme } from "@/components/theme-provider";
-import { Menu, X, Sun, Moon, Phone, User } from "lucide-react";
+import { Menu, X, Sun, Moon, Phone, User, CalendarClock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SPENCER_PHONE, SPENCER_PHONE_HREF } from "@/lib/format";
 import { useAccount } from "@/lib/account";
@@ -178,6 +178,21 @@ export function PublicHeader({ transparent = false }: { transparent?: boolean })
           <span className="lg:hidden xl:inline">{SPENCER_PHONE}</span>
         </a>
 
+        {/* Booking CTA. A bordered button rather than an eighth nav link —
+            the nav row is already at its width budget at lg. */}
+        <Link
+          href="/book"
+          data-testid="link-book-header"
+          className={`hidden md:inline-flex items-center gap-2 whitespace-nowrap font-display text-[11px] tracking-[0.18em] border px-3 py-1.5 rounded-sm transition-colors ${
+            isOverlay
+              ? "text-white border-white/50 hover:bg-white/10"
+              : "text-foreground border-border hover:bg-secondary/60"
+          }`}
+        >
+          <CalendarClock className="w-3.5 h-3.5" strokeWidth={1.6} />
+          <span className="lg:hidden xl:inline">BOOK</span>
+        </Link>
+
         <AccountHeaderLink invert={isOverlay} />
 
         <Button
@@ -230,9 +245,18 @@ export function PublicHeader({ transparent = false }: { transparent?: boolean })
                 onClick={() => setMobileOpen(false)}
               />
             ))}
+            <Link
+              href="/book"
+              onClick={() => setMobileOpen(false)}
+              data-testid="link-book-mobile"
+              className="font-display text-[11px] tracking-[0.18em] text-foreground inline-flex items-center gap-2 pt-3 border-t border-border"
+            >
+              <CalendarClock className="w-3.5 h-3.5" strokeWidth={1.6} />
+              BOOK A TIME
+            </Link>
             <a
               href={SPENCER_PHONE_HREF}
-              className="font-display text-[11px] tracking-[0.18em] text-foreground inline-flex items-center gap-2 pt-3 border-t border-border"
+              className="font-display text-[11px] tracking-[0.18em] text-foreground inline-flex items-center gap-2"
             >
               <Phone className="w-3.5 h-3.5" strokeWidth={1.6} />
               {SPENCER_PHONE}

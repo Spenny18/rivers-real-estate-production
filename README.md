@@ -51,7 +51,8 @@ fly deploy
 | `OPENAI_API_KEY`         | Condo hero image generation    |
 | `PILLAR9_USER` / `_PASS` | RETS feed credentials          |
 | `MAKE_WEBHOOK_URL`       | Social composer outbound hook  |
-| `GOOGLE_CLIENT_ID` / `_SECRET` | Calendar OAuth          |
+| `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` | Calendar OAuth (bookings + free/busy) |
+| `PUBLIC_ORIGIN`          | Absolute origin used in booking links, emails and OAuth redirect |
 
 ## Project layout
 
@@ -88,3 +89,52 @@ needed to edit its copy, images, section order, or metadata.
   click-to-select container the server render doesn't produce.
 - **Cache:** saving invalidates the SSR HTML cache for `/`, so edits appear on
   the live site immediately rather than after the render cache expires.
+
+## Scheduling (the booking system)
+
+A self-hosted Calendly equivalent. Public booking pages live at `/book`, the
+agent's console at `/admin/scheduling`. No third-party scheduling service is
+involved — bookings are rows in this app's own database, and Google Calendar
+is used only to check the agent's real availability and to mirror the meeting
+onto their calendar.
+
+- **Meeting types** (`booking_event_types`) are the shareable links. Each one
+  is `/book/<slug>` and owns its own duration, location, buffers, minimum
+  notice, booking horizon, per-day cap, and an optional extra question. Three
+  are seeded on first boot (buyer consultation, listing appointment, private
+  showing) and every field is editable in the admin — no code change needed.
+- **Availability** is weekly windows (`booking_availability`) plus one-off
+  exceptions (`booking_date_overrides`). A row with a null `event_type_id`
+  belongs to the default schedule every meeting type inherits; giving a type
+  its own rows overrides the default for that type only.
+- **The slot engine** is `server/booking.ts`. It walks each local day in
+  slot-interval steps and drops anything too soon, too far out, or colliding
+  with an existing booking, an existing tour, or a Google free/busy block —
+  each collision widened by the type's before/after buffers. Instants are
+  stored in UTC; availability is stored as minutes from local midnight in the
+  meeting type's IANA zone, so "9:00 AM" stays 9:00 AM across a DST change.
+  There is no timezone library: `Intl.DateTimeFormat` already knows every
+  zone the runtime does.
+- **The browser never decides anything.** Its slot list is a suggestion; the
+  server recomputes and re-validates the exact start time at write time, so a
+  stale page or a tampered payload gets a 409, not a booking.
+- **Every booking is also a lead** — a row in `leads` and a push to Follow Up
+  Boss, so bookings show up in `/admin/leads` alongside form inquiries.
+- **Invitees manage their own booking** at `/book/manage/<uid>`, where the
+  128-bit uid is the only credential. They can reschedule, cancel, or download
+  an `.ics`. The same link is in their confirmation email.
+- **Emails** (Resend) go out on booking, reschedule and cancellation, to both
+  the invitee and the agent. See the `buildBooking*Html` builders in
+  `server/email.ts`.
+
+### Google Calendar
+
+Optional but recommended — without it, bookings still work, they just can't
+see events booked anywhere else. Connect it from the card at the top of
+`/admin/scheduling`. Setup steps for the Google Cloud project are in the
+header comment of `server/google-calendar.ts`.
+
+The OAuth scopes are `calendar.events` (write the meeting) and
+`calendar.freebusy` (read busy blocks). A connection made before the
+`freebusy` scope existed keeps working but won't block slots against outside
+events; the admin card flags this and one reconnect fixes it.

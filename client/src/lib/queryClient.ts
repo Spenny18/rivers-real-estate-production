@@ -102,3 +102,24 @@ export const queryClient = new QueryClient({
     },
   },
 });
+
+/**
+ * Pull the human-readable message out of an apiRequest rejection.
+ *
+ * apiRequest throws `Error("409: {\"message\":\"…\"}")` — the status plus the
+ * raw response body. Callers that show the message to a user want just the
+ * message; anything unparseable falls back to the raw text.
+ */
+export function apiErrorMessage(e: unknown, fallback = "Something went wrong. Please try again."): string {
+  const raw = String((e as any)?.message ?? "");
+  const match = /\{[\s\S]*\}/.exec(raw);
+  if (match) {
+    try {
+      const parsed = JSON.parse(match[0]);
+      if (typeof parsed?.message === "string" && parsed.message) return parsed.message;
+    } catch {
+      /* not JSON — fall through to the raw text */
+    }
+  }
+  return raw || fallback;
+}
