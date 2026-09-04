@@ -35,11 +35,11 @@ import {
   type BookingEmailData,
 } from "./email";
 import { pushLeadToFollowUpBoss } from "./follow-up-boss";
-
+import { googleRedirectUri, publicOrigin, publicOriginConfigured } from "./origin";
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
 
 function origin(): string {
-  return (process.env.PUBLIC_ORIGIN || "https://riversrealestate.ca").replace(/\/$/, "");
+  return publicOrigin();
 }
 
 /** The agent the bookings belong to. Single-agent app — Spencer or user #1. */
@@ -529,6 +529,14 @@ export function registerBookingRoutes(
         // The free/busy scope was added after the first release; a token
         // issued before that needs one reconnect to gain it.
         freeBusyScope: !!integ?.scope?.includes("calendar.freebusy"),
+        // Exactly what this deploy sends as `redirect_uri`. Google compares it
+        // character for character against the OAuth client's registered list,
+        // so the console shows it verbatim for copy-paste instead of leaving
+        // it to be reconstructed — getting it wrong is redirect_uri_mismatch.
+        redirectUri: googleRedirectUri(),
+        // False means the origin above is a fallback, not a deliberate
+        // setting — the most common reason the redirect URI is unexpected.
+        originConfigured: publicOriginConfigured(),
       },
       origin: origin(),
     });

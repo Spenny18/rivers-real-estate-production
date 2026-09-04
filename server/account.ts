@@ -36,6 +36,7 @@ import {
 import { sendEmail } from "./email";
 import { storage } from "./storage";
 
+import { publicOrigin, publicOriginConfigured } from "./origin";
 // ---- Config ---------------------------------------------------------------
 
 const COOKIE_NAME = "rrec_account";
@@ -56,11 +57,12 @@ function randHex(bytes = 32): string {
 }
 
 function originFromReq(req: Request): string {
-  return (
-    process.env.PUBLIC_ORIGIN ||
-    `${req.protocol}://${req.get("host")}` ||
-    "https://riversrealestate.ca"
-  );
+  // An explicit PUBLIC_ORIGIN wins; otherwise prefer the host actually being
+  // served (magic links have to come back to where the user already is)
+  // before falling back to the shared default.
+  if (publicOriginConfigured()) return publicOrigin();
+  const host = req.get("host");
+  return host ? `${req.protocol}://${host}` : publicOrigin();
 }
 
 // ---- Storage helpers ------------------------------------------------------

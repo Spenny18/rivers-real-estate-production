@@ -19,11 +19,9 @@
 import { storage } from "./storage";
 import { buildGraph, IDS, type SchemaNode } from "./schema/entities";
 import { getPublicPageContent } from "./page-content";
+import { publicOrigin } from "./origin";
 
-const ORIGIN = (process.env.PUBLIC_ORIGIN || "https://riversrealestate.ca").replace(
-  /\/$/,
-  "",
-);
+const ORIGIN = publicOrigin();
 const SITE_NAME = "Rivers Real Estate";
 const BRAND_TAGLINE = "Spencer Rivers — Luxury Homes Calgary";
 // Brand OG/Twitter card (1200×630, built from the Rivers Real Estate logo —

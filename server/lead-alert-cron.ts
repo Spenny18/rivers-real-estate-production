@@ -15,6 +15,7 @@
 import { storage } from "./storage";
 import { sendEmail, buildLeadAlertHtml, buildMarketSnapshotHtml } from "./email";
 
+import { publicOrigin } from "./origin";
 const FREQ_DAYS: Record<string, number> = {
   instant: 1,
   daily: 1,
@@ -34,7 +35,7 @@ export async function processAlert(
 ): Promise<{ status: "sent" | "skipped" | "error"; matches?: number; error?: string }> {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) return { status: "skipped", error: "RESEND_API_KEY not set" };
-  const origin = process.env.PUBLIC_ORIGIN || "https://luxury-homes-calgary.fly.dev";
+  const origin = publicOrigin();
 
   let recipient: string | null = alert.emailRecipient || null;
   let recipientName = "there";
@@ -190,7 +191,7 @@ export function buildAlertPreview(alertId: number): {
   const alert: any = storage.getSavedSearchById(alertId);
   if (!alert) return null;
 
-  const origin = process.env.PUBLIC_ORIGIN || "https://luxury-homes-calgary.fly.dev";
+  const origin = publicOrigin();
 
   let recipient: string | null = alert.emailRecipient || null;
   let recipientName = "there";

@@ -20,7 +20,8 @@
 import { storage } from "./storage";
 import { metaForPath } from "./seo-inject";
 
-const ORIGIN = process.env.PUBLIC_ORIGIN || "https://riversrealestate.ca";
+import { publicOrigin } from "./origin";
+const ORIGIN = publicOrigin();
 
 /** The other domain Spencer still runs. Links to it leak authority while both
  *  sites target the same market, so the crawler counts them separately. */

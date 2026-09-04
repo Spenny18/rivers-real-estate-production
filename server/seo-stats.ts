@@ -15,6 +15,7 @@
 
 import { JWT } from "google-auth-library";
 
+import { publicOrigin } from "./origin";
 const GSC_API = "https://searchconsole.googleapis.com/webmasters/v3";
 const GA4_API = "https://analyticsdata.googleapis.com/v1beta";
 
@@ -374,7 +375,7 @@ export async function getAccessTokenForSeo(): Promise<string | null> {
 
 /** The configured Search Console property (e.g. sc-domain:riversrealestate.ca). */
 export function gscSiteUrl(): string {
-  return process.env.GSC_SITE_URL || `sc-domain:${(process.env.PUBLIC_ORIGIN || "https://riversrealestate.ca").replace(/^https?:\/\//, "")}`;
+  return process.env.GSC_SITE_URL || `sc-domain:${publicOrigin().replace(/^https?:\/\//, "")}`;
 }
 
 /** Raw searchAnalytics.query passthrough. */

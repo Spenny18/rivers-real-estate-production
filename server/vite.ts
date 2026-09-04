@@ -8,6 +8,7 @@ import { nanoid } from "nanoid";
 import { metaForPath, injectMetaIntoHtml } from "./seo-inject";
 import { createSsrPipeline, type RenderFn } from "./ssr";
 
+import { publicOrigin } from "./origin";
 const viteLogger = createLogger();
 
 export async function setupVite(server: Server, app: Express) {
@@ -72,7 +73,7 @@ export async function setupVite(server: Server, app: Express) {
         const fallbackHtml = injectMetaIntoHtml(page, {
           title: "Page not found — Rivers Real Estate",
           description: "The page you're looking for doesn't exist.",
-          canonical: `${process.env.PUBLIC_ORIGIN || "https://riversrealestate.ca"}${rawPath}`,
+          canonical: `${publicOrigin()}${rawPath}`,
           noindex: true,
         });
         res.status(404).set({ "Content-Type": "text/html" }).end(fallbackHtml);
