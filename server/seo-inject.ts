@@ -340,6 +340,57 @@ export function metaForPath(path: string): SeoMeta | null {
       jsonLd: [crumbs(HOME_CRUMB, ["Contact", `${ORIGIN}/contact`])],
     };
   }
+  // ---- Booking pages ----
+  // /book and /book/<meeting-type> are indexable. A manage link
+  // (/book/manage/<uid>) is one person's private booking — noindex, and never
+  // a soft-404 even after the booking is gone.
+  if (p === "/book") {
+    return {
+      title: `Book a Time with Spencer Rivers — ${SITE_NAME}`,
+      description:
+        "See Spencer Rivers' live availability and book a buyer consultation, listing appointment, or private showing in Calgary. Instant confirmation, no phone tag.",
+      canonical: `${ORIGIN}/book`,
+      jsonLd: [
+        crumbs(HOME_CRUMB, ["Book a Time", `${ORIGIN}/book`]),
+        {
+          "@type": "ReservationPackage",
+          "@id": `${ORIGIN}/book#booking`,
+          name: "Book an appointment with Spencer Rivers",
+          url: `${ORIGIN}/book`,
+          provider: { "@id": IDS.person },
+        },
+      ],
+    };
+  }
+  if (p.startsWith("/book/manage/")) {
+    return {
+      title: `Your Booking — ${SITE_NAME}`,
+      description: "",
+      canonical: `${ORIGIN}${p}`,
+      noindex: true,
+    };
+  }
+  if (p.startsWith("/book/")) {
+    const slug = p.slice("/book/".length);
+    try {
+      // The event type owns the copy, so the crawler sees the same words the
+      // page renders. An unknown slug falls through to the soft-404.
+      const et = storage.getBookingEventTypeBySlug(slug);
+      if (!et || !et.active) return null;
+      return {
+        title: `Book a ${et.name} with Spencer Rivers — ${SITE_NAME}`,
+        description:
+          (et.description || "").replace(/\s+/g, " ").trim().slice(0, 300) ||
+          `Book a ${et.durationMinutes}-minute ${et.name.toLowerCase()} with Calgary REALTOR® Spencer Rivers.`,
+        canonical: `${ORIGIN}/book/${et.slug}`,
+        jsonLd: [
+          crumbs(HOME_CRUMB, ["Book a Time", `${ORIGIN}/book`], [et.name, `${ORIGIN}/book/${et.slug}`]),
+        ],
+      };
+    } catch {
+      return null;
+    }
+  }
   if (p === "/home-evaluation") {
     return {
       // Must match client/src/pages/home-evaluation.tsx <SeoHead> strings.

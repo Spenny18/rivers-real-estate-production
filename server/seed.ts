@@ -791,7 +791,68 @@ export function seedDatabase() {
   } catch (err) {
     console.error("[seed] applyNeighbourhoodImages failed:", err);
   }
+
+  // Booking defaults — three meeting types and a Mon–Fri 9–5 schedule, so
+  // /book works the moment the app boots. Only runs on an empty table; once
+  // Spencer edits anything in /admin/scheduling this is never touched again.
+  try {
+    if (storage.listBookingEventTypes().length === 0) {
+      for (const et of SEED_EVENT_TYPES) {
+        storage.createBookingEventType({ ...et, userId: spencer.id });
+      }
+      storage.replaceBookingAvailability(
+        null,
+        [1, 2, 3, 4, 5].map((dayOfWeek) => ({
+          dayOfWeek,
+          startMinute: 9 * 60,
+          endMinute: 17 * 60,
+        })),
+      );
+      console.log("[seed] Created " + SEED_EVENT_TYPES.length + " booking event types");
+    }
+  } catch (err) {
+    console.error("[seed] booking defaults failed:", err);
+  }
 }
+
+const SEED_EVENT_TYPES = [
+  {
+    slug: "buyer-consultation",
+    name: "Buyer Consultation",
+    description:
+      "A 30-minute call to talk through what you're looking for, which Calgary neighbourhoods fit, and what the current market means for your timing and budget.",
+    durationMinutes: 30,
+    locationType: "phone",
+    minimumNoticeMinutes: 240,
+    bufferAfterMinutes: 15,
+    sortOrder: 0,
+  },
+  {
+    slug: "listing-appointment",
+    name: "Listing Appointment",
+    description:
+      "An in-person walkthrough of your home followed by a pricing strategy, a marketing plan, and a realistic timeline to sold. Please allow a full hour.",
+    durationMinutes: 60,
+    locationType: "in_person",
+    locationDetail: "Your property — I'll come to you.",
+    minimumNoticeMinutes: 1440,
+    bufferAfterMinutes: 30,
+    sortOrder: 1,
+  },
+  {
+    slug: "private-showing",
+    name: "Private Showing",
+    description:
+      "Book a private tour of a listing you've found on the site. Include the MLS® number or address in the notes and I'll confirm access with the listing brokerage.",
+    durationMinutes: 45,
+    locationType: "in_person",
+    locationDetail: "The property address — confirmed by email once access is arranged.",
+    minimumNoticeMinutes: 720,
+    bufferAfterMinutes: 30,
+    customQuestion: "Which property would you like to see? (MLS® number or address)",
+    sortOrder: 2,
+  },
+];
 
 // ---------------------------------------------------------------------------
 // SEED DATA

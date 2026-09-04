@@ -46,6 +46,9 @@ import ContactPage from "@/pages/contact";
 import HomeEvaluationPage from "@/pages/home-evaluation";
 import WorkWithDetailPage, { WorkWithIndexPage } from "@/pages/work-with";
 import AssignmentsPage from "@/pages/assignments";
+const BookIndexPage = lazy(() => import("@/pages/book-index"));
+const BookEventPage = lazy(() => import("@/pages/book-event"));
+const BookManagePage = lazy(() => import("@/pages/book-manage"));
 
 // Admin (existing dashboard) pages — mounted under /admin/*
 import NotFound from "@/pages/not-found";
@@ -65,6 +68,7 @@ const AdminBlogPage = lazy(() => import("@/pages/admin-blog"));
 const AdminHomePage = lazy(() => import("@/pages/admin-home"));
 const AdminNeighbourhoodsPage = lazy(() => import("@/pages/admin-neighbourhoods"));
 const AdminSeoPage = lazy(() => import("@/pages/admin-seo"));
+const AdminSchedulingPage = lazy(() => import("@/pages/admin-scheduling"));
 
 // Consumer portal (/account/*) pages
 const AccountLoginPage = lazy(() => import("@/pages/account-login"));
@@ -129,6 +133,12 @@ function AppRouter() {
       <Route path="/work-with/:slug" component={WorkWithDetailPage} />
       <Route path="/assignments" component={AssignmentsPage} />
 
+      {/* BOOKING — the public scheduler. /book/manage/:uid must be matched
+          before /book/:slug so a manage link isn't read as a meeting type. */}
+      <Route path="/book" component={BookIndexPage} />
+      <Route path="/book/manage/:uid" component={BookManagePage} />
+      <Route path="/book/:slug" component={BookEventPage} />
+
       {/* Public-facing single-listing page (slug-based, agent's own listings) */}
       <Route path="/p/:slug" component={ListingPublicPage} />
 
@@ -167,6 +177,10 @@ function AppRouter() {
       <Route
         path="/admin/calendar"
         component={() => <ProtectedRoute component={AdminCalendarPage} />}
+      />
+      <Route
+        path="/admin/scheduling"
+        component={() => <ProtectedRoute component={AdminSchedulingPage} />}
       />
       <Route
         path="/admin/marketing"

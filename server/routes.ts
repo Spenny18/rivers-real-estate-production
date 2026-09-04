@@ -446,6 +446,15 @@ export async function registerRoutes(
     console.error("[account] failed to register portal routes:", e);
   }
 
+  // Scheduler — public /api/booking/* (the /book pages) plus the agent's
+  // /api/admin/booking/* console. See server/booking.ts for the slot engine.
+  try {
+    const { registerBookingRoutes } = await import("./booking-routes");
+    registerBookingRoutes(app, { requireAuth, rateLimit });
+  } catch (e) {
+    console.error("[booking] failed to register scheduling routes:", e);
+  }
+
   // Home evaluation widget — POST /api/home-value proxies to Gnowise's AVM
   // API and captures a lead. See server/home-value.ts.
   try {

@@ -22,6 +22,7 @@ import {
   MapPinned,
   LayoutTemplate,
   Target,
+  CalendarClock,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -40,6 +41,7 @@ const primaryNav: NavItem[] = [
   { label: "Listings", icon: Home, href: "/admin/listings" },
   { label: "Leads", icon: Users, href: "/admin/leads" },
   { label: "Calendar", icon: Calendar, href: "/admin/calendar" },
+  { label: "Scheduling", icon: CalendarClock, href: "/admin/scheduling" },
   { label: "Marketing", icon: Megaphone, href: "/admin/marketing" },
   { label: "Analytics", icon: BarChart3, href: "/admin/analytics" },
   { label: "Saved Searches", icon: Bookmark, href: "/admin/saved-searches" },

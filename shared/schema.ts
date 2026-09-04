@@ -708,3 +708,150 @@ export const pageRevisions = sqliteTable("page_revisions", {
 
 export type PageRevision = typeof pageRevisions.$inferSelect;
 export type InsertPageRevision = typeof pageRevisions.$inferInsert;
+
+// ---- Scheduling / booking (the Calendly-style booker) ---------------------
+//
+// Four tables drive /book and /admin/scheduling:
+//
+//   booking_event_types      one row per bookable meeting ("Buyer Consult",
+//                            "Listing Appointment", …). The public link is
+//                            /book/<slug>.
+//   booking_availability     recurring weekly windows. A row with a null
+//                            event_type_id belongs to the default schedule,
+//                            which every event type falls back to; rows with
+//                            an id override the default for that type only.
+//   booking_date_overrides   one-off exceptions — a blocked holiday, or a
+//                            single day with different hours.
+//   bookings                 the booked meetings themselves.
+//
+// All instants are stored as UTC ISO strings. Wall-clock availability is
+// stored as minutes-from-midnight in the event type's timezone, so a window
+// stays at "9:00 AM local" across a DST change.
+
+export const bookingEventTypes = sqliteTable("booking_event_types", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().default(1),
+  slug: text("slug").notNull().unique(),
+  name: text("name").notNull(),
+  description: text("description").notNull().default(""),
+  durationMinutes: integer("duration_minutes").notNull().default(30),
+  // 'phone' | 'video' | 'in_person' | 'custom'
+  locationType: text("location_type").notNull().default("phone"),
+  // Phone: left blank (we call the number on the booking). Video: the meeting
+  // URL. In person: the address. Custom: free text shown to the invitee.
+  locationDetail: text("location_detail"),
+  color: text("color").notNull().default("#23412d"),
+  // Padding held around the meeting so back-to-backs never happen.
+  bufferBeforeMinutes: integer("buffer_before_minutes").notNull().default(0),
+  bufferAfterMinutes: integer("buffer_after_minutes").notNull().default(15),
+  // How far ahead a slot must be to still be offered.
+  minimumNoticeMinutes: integer("minimum_notice_minutes").notNull().default(240),
+  // How far into the future the booking page opens up.
+  advanceDays: integer("advance_days").notNull().default(60),
+  // Spacing between candidate start times (15 = :00/:15/:30/:45).
+  slotIntervalMinutes: integer("slot_interval_minutes").notNull().default(30),
+  // Null = unlimited.
+  maxPerDay: integer("max_per_day"),
+  timezone: text("timezone").notNull().default("America/Edmonton"),
+  requirePhone: integer("require_phone", { mode: "boolean" }).notNull().default(true),
+  // One optional extra question asked on the booking form.
+  customQuestion: text("custom_question"),
+  confirmationMessage: text("confirmation_message"),
+  active: integer("active", { mode: "boolean" }).notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+  updatedAt: text("updated_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+});
+
+export type BookingEventType = typeof bookingEventTypes.$inferSelect;
+export type InsertBookingEventType = typeof bookingEventTypes.$inferInsert;
+
+export const bookingAvailability = sqliteTable("booking_availability", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  // Null = part of the default schedule shared by every event type.
+  eventTypeId: integer("event_type_id"),
+  dayOfWeek: integer("day_of_week").notNull(), // 0 = Sunday … 6 = Saturday
+  startMinute: integer("start_minute").notNull(), // minutes from local midnight
+  endMinute: integer("end_minute").notNull(),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+});
+
+export type BookingAvailability = typeof bookingAvailability.$inferSelect;
+export type InsertBookingAvailability = typeof bookingAvailability.$inferInsert;
+
+export const bookingDateOverrides = sqliteTable("booking_date_overrides", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  date: text("date").notNull().unique(), // YYYY-MM-DD, local to the event type tz
+  // true = the whole day is closed. false = the day uses the custom window
+  // below instead of its usual weekly hours.
+  unavailable: integer("unavailable", { mode: "boolean" }).notNull().default(true),
+  startMinute: integer("start_minute"),
+  endMinute: integer("end_minute"),
+  note: text("note"),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+});
+
+export type BookingDateOverride = typeof bookingDateOverrides.$inferSelect;
+export type InsertBookingDateOverride = typeof bookingDateOverrides.$inferInsert;
+
+export const bookings = sqliteTable("bookings", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  // Unguessable public handle — the invitee's manage/cancel link key.
+  uid: text("uid").notNull().unique(),
+  eventTypeId: integer("event_type_id").notNull(),
+  name: text("name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone"),
+  notes: text("notes"),
+  // Answer to the event type's custom question, if it asked one.
+  answer: text("answer"),
+  startsAt: text("starts_at").notNull(), // UTC ISO
+  endsAt: text("ends_at").notNull(), // UTC ISO
+  // IANA zone the invitee booked in, so reminders read back in their time.
+  timezone: text("timezone").notNull().default("America/Edmonton"),
+  // 'confirmed' | 'cancelled' | 'completed' | 'no_show'
+  status: text("status").notNull().default("confirmed"),
+  cancelReason: text("cancel_reason"),
+  cancelledAt: text("cancelled_at"),
+  cancelledBy: text("cancelled_by"), // 'invitee' | 'agent'
+  googleEventId: text("google_event_id"),
+  leadId: integer("lead_id"),
+  // Optional MLS/listing context when booked from a property page.
+  listingId: text("listing_id"),
+  source: text("source").notNull().default("booking_page"),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+  updatedAt: text("updated_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+});
+
+export type Booking = typeof bookings.$inferSelect;
+export type InsertBooking = typeof bookings.$inferInsert;
+
+// Payload the public booking form posts.
+export const createBookingSchema = z.object({
+  name: z.string().min(2, "Please share your name"),
+  email: z.string().email("Please share a valid email"),
+  phone: z.string().optional(),
+  notes: z.string().max(2000).optional(),
+  answer: z.string().max(2000).optional(),
+  // UTC ISO start. The server recomputes the end from the event duration and
+  // re-validates the slot, so a tampered payload can't book outside hours.
+  startsAt: z.string().min(1),
+  timezone: z.string().optional(),
+  listingId: z.string().optional(),
+});
+export type CreateBookingInput = z.infer<typeof createBookingSchema>;
+
+export const LOCATION_TYPES = ["phone", "video", "in_person", "custom"] as const;
+export const BOOKING_STATUSES = ["confirmed", "cancelled", "completed", "no_show"] as const;

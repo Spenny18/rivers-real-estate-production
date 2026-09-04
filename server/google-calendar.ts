@@ -9,8 +9,9 @@
 //   1. https://console.cloud.google.com -> create or pick a project
 //   2. APIs & Services -> Library -> enable "Google Calendar API"
 //   3. APIs & Services -> OAuth consent screen -> External, fill in app name
-//      "Rivers Real Estate", user support email, developer contact. Add the
-//      scope `https://www.googleapis.com/auth/calendar.events`. In Test users
+//      "Rivers Real Estate", user support email, developer contact. Add both
+//      scopes `https://www.googleapis.com/auth/calendar.events` and
+//      `https://www.googleapis.com/auth/calendar.freebusy`. In Test users
 //      add spencer@riversrealestate.ca (Test mode is fine for personal use).
 //   4. APIs & Services -> Credentials -> Create OAuth 2.0 Client ID, type
 //      "Web application". Add Authorized redirect URI:
@@ -21,7 +22,15 @@
 import { storage } from "./storage";
 import type { UserIntegration } from "@shared/schema";
 
-const SCOPE = "https://www.googleapis.com/auth/calendar.events";
+// calendar.events lets us write showings and bookings; calendar.freebusy lets
+// the /book slot engine see the agent's real busy blocks so a slot is never
+// offered over top of something already on the calendar. Adding a scope means
+// reconnecting Google once from /admin/scheduling — until then free/busy
+// simply returns nothing and only in-app bookings are treated as busy.
+const SCOPE = [
+  "https://www.googleapis.com/auth/calendar.events",
+  "https://www.googleapis.com/auth/calendar.freebusy",
+].join(" ");
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const CAL_API = "https://www.googleapis.com/calendar/v3";
@@ -306,6 +315,167 @@ export async function deleteTourFromGoogle(
     "DELETE",
     `/calendars/${encodeURIComponent(calendarId)}/events/${tour.googleEventId}`,
   );
+  if (!r.ok && r.status !== 404 && r.status !== 410) return { ok: false, error: r.error };
+  return { ok: true };
+}
+
+// ---- Free/busy ------------------------------------------------------------
+
+export interface BusyBlock {
+  start: string; // ISO
+  end: string; // ISO
+}
+
+function calendarIdFor(integ: UserIntegration): string {
+  try {
+    return JSON.parse(integ.metadata as any).calendarId || "primary";
+  } catch {
+    return "primary";
+  }
+}
+
+/**
+ * The agent's busy blocks between two instants, straight from Google.
+ *
+ * Returns [] rather than throwing whenever Google isn't connected, isn't
+ * configured, or answers with an error — the booking page has to keep working
+ * when the integration is down, and in-app bookings are still enforced.
+ */
+export async function getFreeBusy(
+  userId: number,
+  timeMinIso: string,
+  timeMaxIso: string,
+): Promise<BusyBlock[]> {
+  if (!googleConfigured()) return [];
+  const integ = storage.getUserIntegration(userId, "google");
+  if (!integ || !integ.active) return [];
+  const calendarId = calendarIdFor(integ);
+  const r = await calApiCall(userId, "POST", "/freeBusy", {
+    timeMin: new Date(timeMinIso).toISOString(),
+    timeMax: new Date(timeMaxIso).toISOString(),
+    items: [{ id: calendarId }],
+  });
+  if (!r.ok) {
+    console.warn("[google-cal] freeBusy failed:", r.status, r.error);
+    return [];
+  }
+  const cal = r.data?.calendars?.[calendarId];
+  if (!cal || !Array.isArray(cal.busy)) return [];
+  return cal.busy
+    .filter((b: any) => b?.start && b?.end)
+    .map((b: any) => ({ start: b.start, end: b.end }));
+}
+
+// ---- Booking events -------------------------------------------------------
+
+interface BookingLike {
+  id: number;
+  uid: string;
+  name: string;
+  email: string;
+  phone?: string | null;
+  notes?: string | null;
+  answer?: string | null;
+  startsAt: string;
+  endsAt: string;
+  status: string;
+  googleEventId?: string | null;
+}
+
+interface EventTypeLike {
+  name: string;
+  locationType: string;
+  locationDetail?: string | null;
+  customQuestion?: string | null;
+}
+
+function buildBookingEvent(
+  booking: BookingLike,
+  eventType: EventTypeLike,
+  origin: string,
+) {
+  const where =
+    eventType.locationDetail?.trim() ||
+    (eventType.locationType === "phone"
+      ? `Phone — ${booking.phone ?? booking.email}`
+      : eventType.locationType === "video"
+        ? "Video call"
+        : "");
+  const desc = [
+    `${eventType.name} booked at ${origin}/book`,
+    "",
+    `Name: ${booking.name}`,
+    `Email: ${booking.email}`,
+    booking.phone ? `Phone: ${booking.phone}` : null,
+    booking.notes ? `\nNotes: ${booking.notes}` : null,
+    eventType.customQuestion && booking.answer
+      ? `\n${eventType.customQuestion}\n${booking.answer}`
+      : null,
+    "",
+    `Manage: ${origin}/book/manage/${booking.uid}`,
+  ]
+    .filter((l) => l !== null)
+    .join("\n");
+
+  return {
+    summary: `${eventType.name} — ${booking.name}`,
+    description: desc,
+    start: { dateTime: new Date(booking.startsAt).toISOString() },
+    end: { dateTime: new Date(booking.endsAt).toISOString() },
+    location: where || undefined,
+    attendees: [{ email: booking.email, displayName: booking.name }],
+    reminders: { useDefault: true },
+  };
+}
+
+/**
+ * Mirror a booking onto the agent's Google Calendar, creating or updating as
+ * needed. `sendUpdates=all` asks Google to email the invitee its own invite,
+ * on top of our confirmation email.
+ */
+export async function syncBookingToGoogle(
+  userId: number,
+  booking: BookingLike,
+  eventType: EventTypeLike,
+  origin: string,
+): Promise<{ ok: boolean; eventId?: string; error?: string }> {
+  if (!googleConfigured()) return { ok: false, error: "Google OAuth not configured" };
+  const integ = storage.getUserIntegration(userId, "google");
+  if (!integ || !integ.active) return { ok: false, error: "Google not connected" };
+  const calendarId = calendarIdFor(integ);
+  const event = buildBookingEvent(booking, eventType, origin);
+  const base = `/calendars/${encodeURIComponent(calendarId)}/events`;
+
+  if (booking.googleEventId) {
+    const r = await calApiCall(
+      userId,
+      "PATCH",
+      `${base}/${booking.googleEventId}?sendUpdates=all`,
+      event,
+    );
+    if (!r.ok) return { ok: false, error: r.error };
+    return { ok: true, eventId: booking.googleEventId };
+  }
+  const r = await calApiCall(userId, "POST", `${base}?sendUpdates=all`, event);
+  if (!r.ok || !r.data?.id) return { ok: false, error: r.error };
+  return { ok: true, eventId: r.data.id };
+}
+
+export async function deleteBookingFromGoogle(
+  userId: number,
+  googleEventId: string | null | undefined,
+): Promise<{ ok: boolean; error?: string }> {
+  if (!googleEventId) return { ok: true };
+  if (!googleConfigured()) return { ok: false, error: "Google OAuth not configured" };
+  const integ = storage.getUserIntegration(userId, "google");
+  if (!integ || !integ.active) return { ok: false, error: "Google not connected" };
+  const calendarId = calendarIdFor(integ);
+  const r = await calApiCall(
+    userId,
+    "DELETE",
+    `/calendars/${encodeURIComponent(calendarId)}/events/${googleEventId}?sendUpdates=all`,
+  );
+  // Already gone is the outcome we wanted anyway.
   if (!r.ok && r.status !== 404 && r.status !== 410) return { ok: false, error: r.error };
   return { ok: true };
 }
