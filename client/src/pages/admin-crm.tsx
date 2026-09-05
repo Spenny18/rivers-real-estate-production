@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   Activity,
+  Archive,
   CalendarClock,
   CheckCircle2,
   CircleAlert,
@@ -68,6 +69,7 @@ interface SyncResult {
 /** Progress of a background sync — see startSyncJob in server/fub-sync.ts. */
 interface SyncJob {
   id: number;
+  kind: "sync" | "text-backfill";
   trigger: string;
   full: boolean;
   startedAt: string;
@@ -76,7 +78,16 @@ interface SyncJob {
   planned: string[];
   current: string | null;
   results: SyncResult[];
+  progress: { done: number; total: number; label: string } | null;
   error: string | null;
+}
+
+interface RecordingInventory {
+  calls: number;
+  withRecording: number;
+  totalSeconds: number;
+  estimatedBytes: number;
+  note: string;
 }
 
 interface ProbeResource {
@@ -182,6 +193,26 @@ function elapsed(startedAt: string): string {
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s}s`;
   return `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+/**
+ * Time left, extrapolated from the rate so far. Honest about being an
+ * estimate — a half-hour job with no finish line reads as a hang.
+ */
+function remaining(startedAt: string, p: { done: number; total: number }): string {
+  const elapsedMs = Date.now() - Date.parse(startedAt);
+  if (!Number.isFinite(elapsedMs) || p.done <= 0) return "a while";
+  const perItem = elapsedMs / p.done;
+  const mins = Math.round(((p.total - p.done) * perItem) / 60000);
+  if (mins < 1) return "under a minute";
+  if (mins < 60) return `${mins} min`;
+  return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+}
+
+function bytes(n: number): string {
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1)} GB`;
+  if (n >= 1e6) return `${Math.round(n / 1e6)} MB`;
+  return `${Math.round(n / 1e3)} KB`;
 }
 
 function duration(seconds: number | null): string | null {
@@ -366,6 +397,29 @@ export default function AdminCrmPage() {
     }
   }
 
+  const backfill = useMutation({
+    mutationFn: async (restart: boolean) => {
+      const res = await apiRequest("POST", "/api/admin/crm/backfill-texts", { restart });
+      return (await res.json()) as { started: boolean; job: SyncJob };
+    },
+    onSuccess: (d) => {
+      qc.setQueryData(["/api/admin/crm/sync-job"], { job: d.job });
+      qc.invalidateQueries({ queryKey: ["/api/admin/crm/sync-job"] });
+      if (!d.started) {
+        toast({
+          title: "Something else is already running",
+          description: "Wait for the job in progress to finish, then try again.",
+        });
+      }
+    },
+    onError: (e) =>
+      toast({ title: "Couldn't start", description: apiErrorMessage(e), variant: "destructive" }),
+  });
+
+  const { data: recordings } = useQuery<RecordingInventory>({
+    queryKey: ["/api/admin/crm/recordings"],
+  });
+
   const test = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("GET", "/api/admin/crm/test");
@@ -440,14 +494,22 @@ export default function AdminCrmPage() {
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground shrink-0" />
                 <div className="min-w-0 flex-1">
                   <div className="font-medium text-[15px]">
-                    {job.trigger === "cron" ? "Hourly sync running" : "Syncing"}
-                    {job.current ? ` — ${job.current}` : "…"}
+                    {job.kind === "text-backfill"
+                      ? "Backfilling text messages"
+                      : `${job.trigger === "cron" ? "Hourly sync running" : "Syncing"}${
+                          job.current ? ` — ${job.current}` : "…"
+                        }`}
                   </div>
                   <div className="text-[12px] text-muted-foreground">
-                    {job.results.length} of {job.planned.length} done ·{" "}
-                    {job.results.reduce((s, r) => s + r.inserted, 0)} new ·{" "}
+                    {job.progress
+                      ? `${job.progress.done.toLocaleString("en-CA")} of ${job.progress.total.toLocaleString("en-CA")} contacts`
+                      : `${job.results.length} of ${job.planned.length} done`}{" "}
+                    · {job.results.reduce((s, r) => s + r.inserted, 0)} new ·{" "}
                     {job.results.reduce((s, r) => s + r.updated, 0)} updated · running for{" "}
                     {elapsed(job.startedAt)}
+                    {job.progress && job.progress.done > 0 && (
+                      <> · about {remaining(job.startedAt, job.progress)} left</>
+                    )}
                   </div>
                 </div>
               </div>
@@ -455,33 +517,40 @@ export default function AdminCrmPage() {
                 <div
                   className="h-full bg-foreground transition-all duration-500"
                   style={{
-                    width: `${Math.round((job.results.length / Math.max(job.planned.length, 1)) * 100)}%`,
+                    width: `${Math.round(
+                      job.progress
+                        ? (job.progress.done / Math.max(job.progress.total, 1)) * 100
+                        : (job.results.length / Math.max(job.planned.length, 1)) * 100,
+                    )}%`,
                   }}
                 />
               </div>
-              <div className="flex flex-wrap gap-1.5">
-                {job.planned.map((r) => {
-                  const done = job.results.find((x) => x.resource === r);
-                  return (
-                    <Badge
-                      key={r}
-                      variant="outline"
-                      className={`text-[10px] tracking-[0.1em] ${
-                        done
-                          ? (STATUS_STYLE[done.status] ?? "")
-                          : r === job.current
-                            ? "border-foreground"
-                            : "text-muted-foreground"
-                      }`}
-                    >
-                      {r}
-                    </Badge>
-                  );
-                })}
-              </div>
+              {job.kind === "sync" && (
+                <div className="flex flex-wrap gap-1.5">
+                  {job.planned.map((r) => {
+                    const done = job.results.find((x) => x.resource === r);
+                    return (
+                      <Badge
+                        key={r}
+                        variant="outline"
+                        className={`text-[10px] tracking-[0.1em] ${
+                          done
+                            ? (STATUS_STYLE[done.status] ?? "")
+                            : r === job.current
+                              ? "border-foreground"
+                              : "text-muted-foreground"
+                        }`}
+                      >
+                        {r}
+                      </Badge>
+                    );
+                  })}
+                </div>
+              )}
               <p className="text-[12px] text-muted-foreground mt-3 leading-relaxed">
-                It keeps running on the server even if you close this page — the first full pull can
-                take several minutes, and later ones are quicker because people syncs incrementally.
+                {job.kind === "text-backfill"
+                  ? "It keeps running on the server even if you close this page, and it resumes where it stopped — so an interrupted run doesn't start over."
+                  : "It keeps running on the server even if you close this page — the first full pull can take several minutes, and later ones are quicker because people syncs incrementally."}
               </p>
             </CardContent>
           </Card>
@@ -848,11 +917,88 @@ export default function AdminCrmPage() {
                   showing empty is a mapping mistake or a genuinely empty CRM.
                 </span>
               </div>
-              <p className="text-[12px] text-muted-foreground mb-4 max-w-2xl leading-relaxed border-l-2 border-border pl-3">
-                Text messages aren't in this list on purpose. Follow Up Boss won't return them
-                account-wide — the endpoint requires a specific contact — so they're pulled for one
-                person at a time, when you open their history. Everything else mirrors hourly.
-              </p>
+              {/* ---- Getting your data out ----
+                  Separated from the sync controls above because it answers a
+                  different question: not "is the dashboard current" but "could
+                  I leave Follow Up Boss tomorrow without losing anything". */}
+              <Card className="mb-5 border-amber-300 dark:border-amber-900">
+                <CardContent className="p-5">
+                  <div className="flex items-start gap-3 mb-4">
+                    <Archive className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="font-medium text-[15px] mb-1">Getting your data out</div>
+                      <p className="text-sm text-muted-foreground leading-relaxed max-w-2xl">
+                        The hourly sync keeps this dashboard current. It is not the same as having a
+                        complete copy — two things live only in Follow Up Boss, and both stop being
+                        reachable the day the subscription ends.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="rounded-sm bg-secondary/40 p-4">
+                      <div className="font-display text-[10px] tracking-[0.16em] text-muted-foreground mb-2">
+                        TEXT MESSAGES
+                      </div>
+                      <p className="text-[13px] text-foreground/80 leading-relaxed mb-3">
+                        Follow Up Boss won't list texts account-wide — the endpoint needs a specific
+                        contact — so the sync can't mirror them and they're fetched when you open
+                        someone. Every contact you've never clicked has no texts stored here.
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => backfill.mutate(false)}
+                        disabled={backfill.isPending || syncing || !overview?.configured}
+                        data-testid="button-crm-backfill-texts"
+                        className="rounded-sm text-[11px] font-display tracking-[0.14em]"
+                      >
+                        {backfill.isPending ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" /> STARTING…
+                          </>
+                        ) : (
+                          <>
+                            <MessageSquare className="h-3.5 w-3.5 mr-2" /> BACKFILL ALL TEXTS
+                          </>
+                        )}
+                      </Button>
+                      <p className="text-[11.5px] text-muted-foreground mt-2 leading-relaxed">
+                        One request per contact, so it runs for a while. It resumes if interrupted.
+                      </p>
+                    </div>
+
+                    <div className="rounded-sm bg-secondary/40 p-4">
+                      <div className="font-display text-[10px] tracking-[0.16em] text-muted-foreground mb-2">
+                        CALL RECORDINGS
+                      </div>
+                      {recordings ? (
+                        <>
+                          <p className="text-[13px] text-foreground/80 leading-relaxed mb-2">
+                            <span className="font-medium" data-testid="recording-count">
+                              {recordings.withRecording.toLocaleString("en-CA")}
+                            </span>{" "}
+                            of {recordings.calls.toLocaleString("en-CA")} mirrored calls have audio,
+                            roughly{" "}
+                            <span className="font-medium">{bytes(recordings.estimatedBytes)}</span>{" "}
+                            in total.
+                          </p>
+                          <p className="text-[13px] text-foreground/80 leading-relaxed">
+                            The audio itself is hosted by Follow Up Boss. Only the link is stored
+                            here, and those links stop working when the account closes.
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-[13px] text-muted-foreground">Counting…</p>
+                      )}
+                      <p className="text-[11.5px] text-muted-foreground mt-2 leading-relaxed">
+                        Downloading them is the next piece of work — it needs somewhere to put them
+                        first.
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
               <div className="space-y-1.5" data-testid="crm-sync-runs">
                 {(overview?.syncRuns.length ?? 0) === 0 ? (
                   <Card>

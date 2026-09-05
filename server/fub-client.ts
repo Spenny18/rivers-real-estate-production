@@ -382,6 +382,23 @@ export async function probe(): Promise<{
     { resource: "calls", path: "/calls", note: "FUB's calling runs on Twilio underneath." },
     { resource: "textMessages", path: "/textMessages" },
     { resource: "users", path: "/users" },
+
+    // Everything below is discovery rather than diagnosis: these are resources
+    // the mirror does NOT pull, and which would be lost the day the account
+    // closes. A 404 means the endpoint isn't there under that name and the
+    // data is reachable some other way (or not at all); a 200 means there is
+    // something to extract and we should be extracting it.
+    { resource: "notes", path: "/notes", note: "Not mirrored. Events reference a noteId, so notes exist as their own records." },
+    { resource: "emails", path: "/emails", note: "Not mirrored. Logged correspondence against a contact." },
+    { resource: "emailTemplates", path: "/emailTemplates", note: "Not mirrored." },
+    { resource: "attachments", path: "/attachments", note: "Not mirrored. Files stored against a contact." },
+    { resource: "files", path: "/files", note: "Alternative name for attachments." },
+    { resource: "smartLists", path: "/smartLists", note: "Saved filters. Configuration, not data — rebuildable." },
+    { resource: "actionPlans", path: "/actionPlans", note: "Drip sequences. The behaviour that has to be rebuilt rather than exported." },
+    { resource: "customFields", path: "/customFields", note: "Field definitions. Values already ride along in each row's raw payload." },
+    { resource: "groups", path: "/groups" },
+    { resource: "webhooks", path: "/webhooks", note: "Anything pointed at FUB that would need re-pointing on the way out." },
+    { resource: "identity", path: "/identity", note: "Account and plan details." },
   ];
 
   const resources: ProbeResource[] = [];
