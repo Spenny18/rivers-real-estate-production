@@ -479,6 +479,9 @@ export const RESOURCE_SPECS: ResourceSpec[] = [
 
 type ActivityMapper = (r: any, syncedAt: string) => Record<string, any>;
 
+/** The resources the scheduled sync covers — anything else is retired. */
+export const SYNCED_RESOURCES = RESOURCE_SPECS.map((s) => s.resource);
+
 const ACTIVITY_MAPPERS: Record<string, ActivityMapper | undefined> = {
   events: mapEvent,
   calls: mapCall,
@@ -728,7 +731,9 @@ export async function syncAll(
     opts.onProgress?.({ current: null, results });
   }
   try {
-    storage.pruneCrmSyncRuns();
+    // Always the full spec list, never `only` — a partial sync must not
+    // retire the resources it happened to skip.
+    storage.pruneCrmSyncRuns(20, SYNCED_RESOURCES);
   } catch {
     /* pruning is housekeeping; never fail a sync over it */
   }
