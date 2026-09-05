@@ -7,6 +7,7 @@ import { serveStatic } from "./static";
 import { createServer } from "node:http";
 import { startSyncCron } from "./rets-sync";
 import { startLeadAlertCron } from "./lead-alert-cron";
+import { startCrmSyncCron } from "./fub-sync";
 import { storage } from "./storage";
 
 import { warnIfPublicOriginUnset } from "./origin";
@@ -122,6 +123,11 @@ app.use((req, res, next) => {
     startLeadAlertCron();
   } catch (err) {
     console.error("[lead-alerts] failed to start cron:", err);
+  }
+  try {
+    startCrmSyncCron();
+  } catch (err) {
+    console.error("[crm-sync] failed to start cron:", err);
   }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

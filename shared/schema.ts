@@ -855,3 +855,154 @@ export type CreateBookingInput = z.infer<typeof createBookingSchema>;
 
 export const LOCATION_TYPES = ["phone", "video", "in_person", "custom"] as const;
 export const BOOKING_STATUSES = ["confirmed", "cancelled", "completed", "no_show"] as const;
+
+// ---- CRM mirror (Follow Up Boss) ------------------------------------------
+//
+// A local read-model of the FUB account, refreshed hourly, so /admin/crm can
+// render a pipeline and a contact history without a live API round-trip on
+// every page view — and so the dashboard still works when FUB is unreachable.
+//
+// Every table keeps the untouched API payload in `raw` alongside the columns
+// worth querying. That is deliberate: this was built without access to the FUB
+// reference (the build environment blocks it), so the normalized columns are a
+// best mapping rather than a verified one. Keeping `raw` means a column that
+// mapped to the wrong field name can be re-derived later from data already
+// synced, instead of needing a full re-pull.
+//
+// `fubId` is FUB's own id and is what upserts match on; the local integer id
+// is never exposed to the API.
+
+export const crmContacts = sqliteTable("crm_contacts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  fubId: text("fub_id").notNull().unique(),
+  name: text("name"),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
+  email: text("email"),
+  phone: text("phone"),
+  stage: text("stage"),
+  source: text("source"),
+  assignedTo: text("assigned_to"),
+  tags: text("tags").notNull().default("[]"), // JSON array
+  // FUB's own timestamps, kept as ISO strings for range queries.
+  fubCreatedAt: text("fub_created_at"),
+  fubUpdatedAt: text("fub_updated_at"),
+  lastActivityAt: text("last_activity_at"),
+  raw: text("raw").notNull().default("{}"),
+  syncedAt: text("synced_at").notNull(),
+});
+export type CrmContact = typeof crmContacts.$inferSelect;
+export type InsertCrmContact = typeof crmContacts.$inferInsert;
+
+export const crmPipelines = sqliteTable("crm_pipelines", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  fubId: text("fub_id").notNull().unique(),
+  name: text("name"),
+  raw: text("raw").notNull().default("{}"),
+  syncedAt: text("synced_at").notNull(),
+});
+export type CrmPipeline = typeof crmPipelines.$inferSelect;
+
+export const crmStages = sqliteTable("crm_stages", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  fubId: text("fub_id").notNull().unique(),
+  pipelineFubId: text("pipeline_fub_id"),
+  name: text("name"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  raw: text("raw").notNull().default("{}"),
+  syncedAt: text("synced_at").notNull(),
+});
+export type CrmStage = typeof crmStages.$inferSelect;
+
+export const crmDeals = sqliteTable("crm_deals", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  fubId: text("fub_id").notNull().unique(),
+  name: text("name"),
+  // Stored in dollars. FUB may express this as a number or a string; the
+  // mapper coerces, and `raw` keeps whatever actually arrived.
+  value: real("value"),
+  stageFubId: text("stage_fub_id"),
+  stageName: text("stage_name"),
+  pipelineFubId: text("pipeline_fub_id"),
+  status: text("status"),
+  contactFubId: text("contact_fub_id"),
+  closedDate: text("closed_date"),
+  fubCreatedAt: text("fub_created_at"),
+  fubUpdatedAt: text("fub_updated_at"),
+  raw: text("raw").notNull().default("{}"),
+  syncedAt: text("synced_at").notNull(),
+});
+export type CrmDeal = typeof crmDeals.$inferSelect;
+
+/**
+ * Everything that happened, in one timeline: FUB events, calls, texts,
+ * appointments and tasks. One table rather than five because the admin always
+ * renders them interleaved by time, and `kind` keeps them separable.
+ */
+export const crmActivities = sqliteTable("crm_activities", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  // Namespaced as "<kind>:<fubId>" — FUB ids are only unique per resource.
+  uid: text("uid").notNull().unique(),
+  // 'event' | 'call' | 'text' | 'task' | 'appointment'
+  kind: text("kind").notNull(),
+  fubId: text("fub_id"),
+  contactFubId: text("contact_fub_id"),
+  title: text("title"),
+  body: text("body"),
+  // Calls: inbound/outbound. Texts: same. Null elsewhere.
+  direction: text("direction"),
+  outcome: text("outcome"),
+  durationSeconds: integer("duration_seconds"),
+  occurredAt: text("occurred_at"),
+  // Tasks/appointments only.
+  dueAt: text("due_at"),
+  completed: integer("completed", { mode: "boolean" }).notNull().default(false),
+  assignedTo: text("assigned_to"),
+  raw: text("raw").notNull().default("{}"),
+  syncedAt: text("synced_at").notNull(),
+});
+export type CrmActivity = typeof crmActivities.$inferSelect;
+export type InsertCrmActivity = typeof crmActivities.$inferInsert;
+
+/**
+ * One row per resource per sync attempt — the audit trail behind the admin's
+ * status panel, and where a mapping problem becomes visible: `nullRates`
+ * records how often each normalized column came out empty, so a column that
+ * silently mapped to a field name FUB doesn't use shows up as 100%.
+ */
+export const crmSyncRuns = sqliteTable("crm_sync_runs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  resource: text("resource").notNull(),
+  // 'ok' | 'partial' | 'error' | 'skipped'
+  status: text("status").notNull(),
+  fetched: integer("fetched").notNull().default(0),
+  inserted: integer("inserted").notNull().default(0),
+  updated: integer("updated").notNull().default(0),
+  pages: integer("pages").notNull().default(0),
+  httpStatus: integer("http_status"),
+  error: text("error"),
+  // JSON {field: fractionNull} for the mapping-health warning.
+  nullRates: text("null_rates").notNull().default("{}"),
+  // High-water mark handed to the next incremental run.
+  cursor: text("cursor"),
+  startedAt: text("started_at").notNull(),
+  finishedAt: text("finished_at"),
+  durationMs: integer("duration_ms"),
+  // 'cron' | 'manual'
+  trigger: text("trigger").notNull().default("cron"),
+});
+export type CrmSyncRun = typeof crmSyncRuns.$inferSelect;
+export type InsertCrmSyncRun = typeof crmSyncRuns.$inferInsert;
+
+export const CRM_RESOURCES = [
+  "people",
+  "pipelines",
+  "stages",
+  "deals",
+  "events",
+  "calls",
+  "textMessages",
+  "tasks",
+  "appointments",
+] as const;
+export type CrmResource = (typeof CRM_RESOURCES)[number];
