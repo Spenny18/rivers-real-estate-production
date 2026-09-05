@@ -4,7 +4,7 @@
 // FUB per page view, so this stays fast and still renders when the API is
 // down. The Sync now button forces a refresh.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
 import { Card, CardContent } from "@/components/ui/card";
@@ -28,7 +28,9 @@ import {
   MessageSquare,
   Phone,
   RefreshCw,
+  Copy,
   Search,
+  Stethoscope,
   TrendingUp,
   TriangleAlert,
   Users,
@@ -52,6 +54,42 @@ interface SyncRun {
   finishedAt: string | null;
   durationMs: number | null;
   trigger: string;
+}
+
+interface SyncResult {
+  resource: string;
+  status: string;
+  fetched: number;
+  inserted: number;
+  updated: number;
+  error?: string;
+}
+
+/** Progress of a background sync — see startSyncJob in server/fub-sync.ts. */
+interface SyncJob {
+  id: number;
+  trigger: string;
+  full: boolean;
+  startedAt: string;
+  finishedAt: string | null;
+  running: boolean;
+  planned: string[];
+  current: string | null;
+  results: SyncResult[];
+  error: string | null;
+}
+
+interface ProbeResource {
+  resource: string;
+  path: string;
+  ok: boolean;
+  status: number;
+  count?: number;
+  envelopeKeys?: string[];
+  metadata?: Record<string, unknown>;
+  recordKeys?: string[];
+  error?: string;
+  note?: string;
 }
 
 interface Overview {
@@ -137,6 +175,15 @@ function when(iso: string | null): string {
   }).format(d);
 }
 
+/** Rough "running for" text, refreshed by the sync poll rather than a timer. */
+function elapsed(startedAt: string): string {
+  const ms = Date.now() - Date.parse(startedAt);
+  if (!Number.isFinite(ms) || ms < 0) return "a moment";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
 function duration(seconds: number | null): string | null {
   if (!seconds || seconds <= 0) return null;
   const m = Math.floor(seconds / 60);
@@ -216,27 +263,103 @@ export default function AdminCrmPage() {
     });
   }
 
+  // The sync runs in the background on the server and this polls it, rather
+  // than the button holding a request open for the whole run. A full pass takes
+  // minutes and Fly's proxy closes an idle connection at about a minute, so a
+  // waiting request would report a failure for a sync that finished fine.
+  // Polling starts on its own if a cron cycle is already under way when the
+  // page loads.
+  const { data: syncState } = useQuery<{ job: SyncJob | null }>({
+    queryKey: ["/api/admin/crm/sync-job"],
+    refetchInterval: (q) => (q.state.data?.job?.running ? 2000 : false),
+    // The page-wide default is staleTime: Infinity, which is right for mirrored
+    // CRM rows and wrong here — coming back to this page would then show a
+    // cached "idle" while an hourly cycle was actually under way.
+    staleTime: 0,
+  });
+  const job = syncState?.job ?? null;
+  const syncing = !!job?.running;
+
+  // Report the outcome of a run we actually watched finish.
+  //
+  // Keyed on having seen it running, not just on it being finished: the server
+  // keeps the last job around, so a page load an hour after the cron ran would
+  // otherwise pop a toast about a sync the user never started and already knows
+  // the result of.
+  const watchedJob = useRef<number | null>(null);
+  useEffect(() => {
+    if (!job) return;
+    if (job.running) {
+      watchedJob.current = job.id;
+      return;
+    }
+    if (watchedJob.current !== job.id) return;
+    watchedJob.current = null;
+    refresh();
+    const failed = job.results.filter((r) => r.status === "error");
+    const added = job.results.reduce((s, r) => s + r.inserted, 0);
+    const changed = job.results.reduce((s, r) => s + r.updated, 0);
+    toast({
+      title: job.error ? "Sync stopped early" : `Synced — ${added} new, ${changed} updated`,
+      description:
+        job.error ??
+        (failed.length ? `Couldn't reach: ${failed.map((f) => f.resource).join(", ")}` : undefined),
+      variant: job.error || failed.length ? "destructive" : undefined,
+    });
+    // refresh/toast are stable for this page's lifetime; the job is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.id, job?.running]);
+
   const sync = useMutation({
     mutationFn: async (full: boolean) => {
       const res = await apiRequest("POST", "/api/admin/crm/sync", { full });
-      return (await res.json()) as { results: Array<{ resource: string; status: string; inserted: number; updated: number; error?: string }> };
+      return (await res.json()) as { started: boolean; job: SyncJob };
     },
     onSuccess: (d) => {
-      refresh();
-      const failed = d.results.filter((r) => r.status === "error");
-      const added = d.results.reduce((s, r) => s + r.inserted, 0);
-      const changed = d.results.reduce((s, r) => s + r.updated, 0);
-      toast({
-        title: `Synced — ${added} new, ${changed} updated`,
-        description: failed.length
-          ? `Couldn't reach: ${failed.map((f) => f.resource).join(", ")}`
-          : undefined,
-        variant: failed.length ? "destructive" : undefined,
-      });
+      // Seed the polled state so the button flips to "syncing" immediately
+      // instead of on the next poll.
+      qc.setQueryData(["/api/admin/crm/sync-job"], { job: d.job });
+      qc.invalidateQueries({ queryKey: ["/api/admin/crm/sync-job"] });
+      if (!d.started) {
+        toast({
+          title: "A sync is already running",
+          description: `Started ${d.job.trigger === "cron" ? "by the hourly cycle" : "a moment ago"} — watching that one.`,
+        });
+      }
     },
     onError: (e) =>
-      toast({ title: "Sync failed", description: apiErrorMessage(e), variant: "destructive" }),
+      toast({ title: "Sync failed to start", description: apiErrorMessage(e), variant: "destructive" }),
   });
+
+  // Reads the live API and reports the field names it actually returns, so the
+  // mapping in fub-sync.ts can be corrected from evidence. Never returns record
+  // values — names only.
+  const [probeOpen, setProbeOpen] = useState(false);
+  const probe = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("GET", "/api/admin/crm/probe");
+      return (await res.json()) as { configured: boolean; resources: ProbeResource[] };
+    },
+    onSuccess: () => setProbeOpen(true),
+    onError: (e) =>
+      toast({ title: "Probe failed", description: apiErrorMessage(e), variant: "destructive" }),
+  });
+
+  async function copyProbe() {
+    const text = JSON.stringify(probe.data, null, 2);
+    try {
+      await navigator.clipboard.writeText(text);
+      toast({ title: "Copied", description: "Paste it back into the chat." });
+    } catch {
+      // Clipboard access is denied outside a secure context, and in some
+      // embedded browsers. The textarea below is selectable either way.
+      toast({
+        title: "Couldn't copy automatically",
+        description: "Select the text below and copy it by hand.",
+        variant: "destructive",
+      });
+    }
+  }
 
   const test = useMutation({
     mutationFn: async () => {
@@ -285,11 +408,11 @@ export default function AdminCrmPage() {
             </Button>
             <Button
               onClick={() => sync.mutate(false)}
-              disabled={sync.isPending || !overview?.configured}
+              disabled={sync.isPending || syncing || !overview?.configured}
               data-testid="button-crm-sync"
               className="rounded-sm text-[11px] font-display tracking-[0.14em]"
             >
-              {sync.isPending ? (
+              {sync.isPending || syncing ? (
                 <>
                   <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" /> SYNCING…
                 </>
@@ -301,6 +424,63 @@ export default function AdminCrmPage() {
             </Button>
           </div>
         </div>
+
+        {/* ---- Live sync progress ----
+            Answers "how long should this take?" while it's happening, instead
+            of a spinner that gives no sign of whether anything is moving. */}
+        {job?.running && (
+          <Card className="mb-6" data-testid="crm-sync-progress">
+            <CardContent className="p-5">
+              <div className="flex flex-wrap items-center gap-3 mb-3">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium text-[15px]">
+                    {job.trigger === "cron" ? "Hourly sync running" : "Syncing"}
+                    {job.current ? ` — ${job.current}` : "…"}
+                  </div>
+                  <div className="text-[12px] text-muted-foreground">
+                    {job.results.length} of {job.planned.length} done ·{" "}
+                    {job.results.reduce((s, r) => s + r.inserted, 0)} new ·{" "}
+                    {job.results.reduce((s, r) => s + r.updated, 0)} updated · running for{" "}
+                    {elapsed(job.startedAt)}
+                  </div>
+                </div>
+              </div>
+              <div className="h-1 rounded-full bg-secondary overflow-hidden mb-3">
+                <div
+                  className="h-full bg-foreground transition-all duration-500"
+                  style={{
+                    width: `${Math.round((job.results.length / Math.max(job.planned.length, 1)) * 100)}%`,
+                  }}
+                />
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {job.planned.map((r) => {
+                  const done = job.results.find((x) => x.resource === r);
+                  return (
+                    <Badge
+                      key={r}
+                      variant="outline"
+                      className={`text-[10px] tracking-[0.1em] ${
+                        done
+                          ? (STATUS_STYLE[done.status] ?? "")
+                          : r === job.current
+                            ? "border-foreground"
+                            : "text-muted-foreground"
+                      }`}
+                    >
+                      {r}
+                    </Badge>
+                  );
+                })}
+              </div>
+              <p className="text-[12px] text-muted-foreground mt-3 leading-relaxed">
+                It keeps running on the server even if you close this page — the first full pull can
+                take several minutes, and later ones are quicker because people syncs incrementally.
+              </p>
+            </CardContent>
+          </Card>
+        )}
 
         {/* ---- Not configured ---- */}
         {overview && !overview.configured && (
@@ -624,11 +804,11 @@ export default function AdminCrmPage() {
 
             {/* ================= SYNC ================= */}
             <TabsContent value="sync">
-              <div className="flex flex-wrap items-center gap-3 mb-4">
+              <div className="flex flex-wrap items-center gap-3 mb-3">
                 <Button
                   variant="outline"
                   onClick={() => sync.mutate(true)}
-                  disabled={sync.isPending || !overview?.configured}
+                  disabled={sync.isPending || syncing || !overview?.configured}
                   data-testid="button-crm-full-sync"
                   className="rounded-sm text-[11px] font-display tracking-[0.14em]"
                 >
@@ -637,6 +817,30 @@ export default function AdminCrmPage() {
                 <span className="text-[12px] text-muted-foreground">
                   Ignores the incremental cursor and re-pulls everything. Slower; use after fixing a
                   mapping.
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 mb-5">
+                <Button
+                  variant="outline"
+                  onClick={() => probe.mutate()}
+                  disabled={probe.isPending || !overview?.configured}
+                  data-testid="button-crm-probe"
+                  className="rounded-sm text-[11px] font-display tracking-[0.14em]"
+                >
+                  {probe.isPending ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" /> PROBING…
+                    </>
+                  ) : (
+                    <>
+                      <Stethoscope className="h-3.5 w-3.5 mr-2" /> RUN PROBE
+                    </>
+                  )}
+                </Button>
+                <span className="text-[12px] text-muted-foreground max-w-xl leading-relaxed">
+                  Asks Follow Up Boss what its endpoints actually return — response shape and{" "}
+                  <em>field names only</em>, never contact data. This is what proves whether a column
+                  showing empty is a mapping mistake or a genuinely empty CRM.
                 </span>
               </div>
               <div className="space-y-1.5" data-testid="crm-sync-runs">
@@ -696,6 +900,92 @@ export default function AdminCrmPage() {
           </Tabs>
         )}
       </div>
+
+      {/* ---- Probe result ----
+          Rendered as a summary plus the raw JSON: the summary is readable, and
+          the JSON is the thing worth pasting back so the mapping can be fixed
+          against real field names. */}
+      <Dialog open={probeOpen} onOpenChange={setProbeOpen}>
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="font-serif text-2xl">What Follow Up Boss returns</DialogTitle>
+          </DialogHeader>
+          {probe.data && (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={copyProbe}
+                  data-testid="button-copy-probe"
+                  className="rounded-sm text-[11px] font-display tracking-[0.14em]"
+                >
+                  <Copy className="h-3.5 w-3.5 mr-2" /> COPY JSON
+                </Button>
+                <span className="text-[12px] text-muted-foreground">
+                  Field names and response shapes only — no contact details.
+                </span>
+              </div>
+
+              <div className="space-y-1.5">
+                {probe.data.resources.map((r) => (
+                  <div
+                    key={r.resource}
+                    className="px-3.5 py-3 rounded-sm bg-secondary/40"
+                    data-testid={`probe-${r.resource}`}
+                  >
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <span className="font-medium text-[14px] w-32 shrink-0">{r.resource}</span>
+                      <Badge
+                        variant="outline"
+                        className={`text-[10px] tracking-[0.1em] ${
+                          r.ok ? STATUS_STYLE.ok : STATUS_STYLE.error
+                        }`}
+                      >
+                        {r.ok ? `HTTP ${r.status}` : `HTTP ${r.status || "ERR"}`}
+                      </Badge>
+                      {r.ok && (
+                        <span className="text-[12px] text-muted-foreground">
+                          envelope: {(r.envelopeKeys ?? []).join(", ") || "—"}
+                        </span>
+                      )}
+                    </div>
+                    {r.ok && (r.recordKeys?.length ?? 0) > 0 && (
+                      <p className="text-[12px] text-foreground/75 mt-1.5 leading-relaxed break-words">
+                        <span className="text-muted-foreground">fields:</span>{" "}
+                        {r.recordKeys!.join(", ")}
+                      </p>
+                    )}
+                    {r.ok && (r.recordKeys?.length ?? 0) === 0 && (
+                      <p className="text-[12px] text-muted-foreground mt-1.5">
+                        Reachable, but no records came back — nothing to read field names from.
+                      </p>
+                    )}
+                    {!r.ok && (
+                      <p className="text-[12px] text-muted-foreground mt-1.5 leading-relaxed">
+                        {r.status === 403 && r.note ? r.note : (r.error ?? "Unreachable")}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div>
+                <div className="font-display text-[10px] tracking-[0.18em] text-muted-foreground mb-2">
+                  RAW
+                </div>
+                <textarea
+                  readOnly
+                  value={JSON.stringify(probe.data, null, 2)}
+                  data-testid="probe-json"
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="w-full h-56 text-[11.5px] font-mono leading-relaxed rounded-sm border border-border bg-secondary/30 p-3"
+                />
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* ---- Contact detail ---- */}
       <Dialog open={!!openContact} onOpenChange={(o) => !o && setOpenContact(null)}>

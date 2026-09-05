@@ -6,7 +6,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { storage } from "./storage";
 import { fubConfigured, probe, testConnection } from "./fub-client";
-import { RESOURCE_SPECS, syncAll } from "./fub-sync";
+import { RESOURCE_SPECS, currentSyncJob, startSyncJob } from "./fub-sync";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
 
@@ -267,10 +267,16 @@ export function registerCrmRoutes(app: Express, deps: { requireAuth: Middleware 
   });
 
   /**
-   * Run a sync now. `full=1` ignores the incremental cursor and re-pulls
-   * everything; `only=people,deals` limits which resources run.
+   * Start a sync. `full` ignores the incremental cursor and re-pulls
+   * everything; `only: ["people","deals"]` limits which resources run.
+   *
+   * Returns as soon as the job is running rather than waiting for it. A full
+   * pass walks nine paged endpoints and takes minutes, while Fly's proxy drops
+   * an idle connection after about a minute — so waiting here would show the
+   * browser a failure for a sync that was going to succeed. The client polls
+   * /sync-job for progress instead.
    */
-  app.post("/api/admin/crm/sync", requireAuth, async (req, res) => {
+  app.post("/api/admin/crm/sync", requireAuth, (req, res) => {
     if (!fubConfigured()) {
       return res.status(400).json({ message: "FUB_API_KEY not set on server" });
     }
@@ -278,18 +284,23 @@ export function registerCrmRoutes(app: Express, deps: { requireAuth: Middleware 
       typeof req.body?.only === "string"
         ? req.body.only.split(",").map((s: string) => s.trim()).filter(Boolean)
         : Array.isArray(req.body?.only)
-          ? req.body.only
+          ? req.body.only.map((s: unknown) => String(s))
           : undefined;
-    try {
-      const results = await syncAll({
-        trigger: "manual",
-        full: !!req.body?.full,
-        only,
-      });
-      res.json({ ok: true, results });
-    } catch (e: any) {
-      res.status(500).json({ message: e?.message ?? "Sync failed" });
-    }
+
+    const { started, job } = startSyncJob({
+      trigger: "manual",
+      full: !!req.body?.full,
+      only,
+    });
+    // 202 either way: a sync is running when this returns, which is what was
+    // asked for. `started: false` only says it was already under way — an
+    // hourly cycle, or a double-click — and the caller should watch that one.
+    res.status(202).json({ started, job });
+  });
+
+  /** Live progress of the running sync, or the last one that finished. */
+  app.get("/api/admin/crm/sync-job", requireAuth, (_req, res) => {
+    res.json({ job: currentSyncJob() });
   });
 
   app.get("/api/admin/crm/sync-runs", requireAuth, (_req, res) => {
