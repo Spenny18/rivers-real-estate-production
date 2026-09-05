@@ -644,6 +644,7 @@ sqlite.exec(`
     pages INTEGER NOT NULL DEFAULT 0,
     http_status INTEGER,
     error TEXT,
+    truncated INTEGER NOT NULL DEFAULT 0,
     null_rates TEXT NOT NULL DEFAULT '{}',
     cursor TEXT,
     started_at TEXT NOT NULL,
@@ -3068,11 +3069,17 @@ export class DatabaseStorage implements IStorage {
       .all()
       .sort((a, b) => a.sortOrder - b.sortOrder);
   }
-  listCrmDeals(opts: { stageFubId?: string; limit?: number } = {}): CrmDeal[] {
+  listCrmDeals(
+    opts: { stageFubId?: string; contactFubId?: string; limit?: number } = {},
+  ): CrmDeal[] {
+    // Filters are applied in the query, before the limit. Truncating the whole
+    // account first and filtering after would hide a contact's deals whenever
+    // they fall outside the newest N account-wide.
+    const clauses: any[] = [];
+    if (opts.stageFubId) clauses.push(eq(crmDeals.stageFubId, opts.stageFubId));
+    if (opts.contactFubId) clauses.push(eq(crmDeals.contactFubId, opts.contactFubId));
     const base = db.select().from(crmDeals);
-    const rows = opts.stageFubId
-      ? base.where(eq(crmDeals.stageFubId, opts.stageFubId)).all()
-      : base.all();
+    const rows = clauses.length > 0 ? base.where(and(...clauses)!).all() : base.all();
     return rows
       .sort((a, b) => (b.fubUpdatedAt ?? "").localeCompare(a.fubUpdatedAt ?? ""))
       .slice(0, opts.limit ?? 500);

@@ -85,7 +85,12 @@ app.use((req, res, next) => {
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+        // Truncated: some endpoints return hundreds of rows, and a log line
+        // is not the place for a whole result set. Handlers that return
+        // personal data project it down before it ever reaches here (see the
+        // DTOs in server/crm-routes.ts) — this is the backstop, not the fix.
+        const body = JSON.stringify(capturedJsonResponse);
+        logLine += ` :: ${body.length > 500 ? `${body.slice(0, 500)}… (${body.length} bytes)` : body}`;
       }
 
       log(logLine);

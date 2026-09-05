@@ -427,7 +427,17 @@ export async function syncResource(
     cursor = stamps.length > 0 ? stamps.sort().slice(-1)[0] : storage.lastCrmCursor(spec.resource);
   }
 
-  const status: SyncResult["status"] = page.ok ? "ok" : mapped.length > 0 ? "partial" : "error";
+  // A run that hit a safety cutoff is "partial", never "ok". Reporting it as
+  // complete is worse than reporting nothing: a resource with no incremental
+  // filter would re-fetch the same first N every hour, so the remainder would
+  // never mirror, and the status panel would insist everything was fine.
+  const status: SyncResult["status"] = !page.ok
+    ? mapped.length > 0
+      ? "partial"
+      : "error"
+    : page.truncated
+      ? "partial"
+      : "ok";
   storage.finishCrmSyncRun(run.id, {
     status,
     fetched: page.records.length,
@@ -435,7 +445,12 @@ export async function syncResource(
     updated,
     pages: page.pages,
     httpStatus: page.status ?? null,
-    error: page.error ? String(page.error).slice(0, 500) : null,
+    error: page.error
+      ? String(page.error).slice(0, 500)
+      : page.truncated
+        ? `Stopped at a safety cutoff after ${page.records.length} records — the API had more. Raise maxRecords for this resource, or give it an incremental filter.`
+        : null,
+    truncated: !!page.truncated,
     nullRates: JSON.stringify(nullRates(mapped, spec.watchFields)),
     cursor,
     finishedAt: new Date().toISOString(),

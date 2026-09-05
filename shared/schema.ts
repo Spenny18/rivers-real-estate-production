@@ -981,6 +981,8 @@ export const crmSyncRuns = sqliteTable("crm_sync_runs", {
   pages: integer("pages").notNull().default(0),
   httpStatus: integer("http_status"),
   error: text("error"),
+  // True when a safety cutoff stopped paging with more still available.
+  truncated: integer("truncated", { mode: "boolean" }).notNull().default(false),
   // JSON {field: fractionNull} for the mapping-health warning.
   nullRates: text("null_rates").notNull().default("{}"),
   // High-water mark handed to the next incremental run.

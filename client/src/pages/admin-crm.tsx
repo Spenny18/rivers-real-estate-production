@@ -4,7 +4,7 @@
 // FUB per page view, so this stays fast and still renders when the API is
 // down. The Sync now button forces a refresh.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
 import { Card, CardContent } from "@/components/ui/card";
@@ -47,6 +47,7 @@ interface SyncRun {
   updated: number;
   httpStatus: number | null;
   error: string | null;
+  truncated: boolean;
   nullRates: string;
   finishedAt: string | null;
   durationMs: number | null;
@@ -104,6 +105,11 @@ interface CrmDeal {
   fubId: string;
   name: string | null;
   value: number | null;
+  // The counts in the overview are computed on stageFubId, so the cards match
+  // on it too. Matching on stageName instead put a deal in every column whose
+  // stage happened to share a name, and showed none at all when a deal had an
+  // id but no mapped name.
+  stageFubId: string | null;
   stageName: string | null;
   status: string | null;
   contactFubId: string | null;
@@ -154,6 +160,16 @@ const STATUS_STYLE: Record<string, string> = {
   skipped: "bg-secondary text-muted-foreground border-border",
 };
 
+/** Debounce so typing in the search box isn't one request per keystroke. */
+function useDebounced<T>(value: T, ms: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return debounced;
+}
+
 // =============================================================================
 
 export default function AdminCrmPage() {
@@ -166,14 +182,20 @@ export default function AdminCrmPage() {
   const { data: overview, isLoading } = useQuery<Overview>({
     queryKey: ["/api/admin/crm/overview"],
   });
-  const { data: contacts = [] } = useQuery<CrmContact[]>({
-    queryKey: ["/api/admin/crm/contacts"],
+  // The search term and the activity kind go to the server. Filtering the
+  // loaded array instead would silently search only the page in hand, so a
+  // contact outside the newest 200 could never be found.
+  const debouncedSearch = useDebounced(search, 250);
+  const { data: contacts = [], isFetching: contactsFetching } = useQuery<CrmContact[]>({
+    queryKey: [`/api/admin/crm/contacts?q=${encodeURIComponent(debouncedSearch)}&limit=200`],
   });
   const { data: activities = [] } = useQuery<CrmActivity[]>({
-    queryKey: ["/api/admin/crm/activities"],
+    queryKey: [
+      `/api/admin/crm/activities?limit=200${activityKind === "all" ? "" : `&kind=${activityKind}`}`,
+    ],
   });
   const { data: deals = [] } = useQuery<CrmDeal[]>({
-    queryKey: ["/api/admin/crm/deals"],
+    queryKey: ["/api/admin/crm/deals?limit=500"],
   });
   const { data: detail } = useQuery<{
     contact: CrmContact;
@@ -184,15 +206,14 @@ export default function AdminCrmPage() {
     enabled: !!openContact,
   });
 
+  // Query keys carry their filters, so match on the path prefix rather than
+  // an exact key.
   function refresh() {
-    for (const k of [
-      "/api/admin/crm/overview",
-      "/api/admin/crm/contacts",
-      "/api/admin/crm/activities",
-      "/api/admin/crm/deals",
-    ]) {
-      qc.invalidateQueries({ queryKey: [k] });
-    }
+    qc.invalidateQueries({
+      predicate: (q) =>
+        typeof q.queryKey[0] === "string" &&
+        (q.queryKey[0] as string).startsWith("/api/admin/crm/"),
+    });
   }
 
   const sync = useMutation({
@@ -232,20 +253,9 @@ export default function AdminCrmPage() {
       toast({ title: "Test failed", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
-  const filteredContacts = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return contacts;
-    return contacts.filter((c) =>
-      [c.name, c.email, c.phone, c.stage, c.source]
-        .filter(Boolean)
-        .some((v) => String(v).toLowerCase().includes(q)),
-    );
-  }, [contacts, search]);
-
-  const visibleActivities = useMemo(
-    () => (activityKind === "all" ? activities : activities.filter((a) => a.kind === activityKind)),
-    [activities, activityKind],
-  );
+  // Both lists arrive already filtered by the query above.
+  const filteredContacts = contacts;
+  const visibleActivities = activities;
 
   const contactName = (fubId: string | null) =>
     contacts.find((c) => c.fubId === fubId)?.name ?? null;
@@ -398,7 +408,7 @@ export default function AdminCrmPage() {
                         </div>
                         <div className="space-y-1.5">
                           {deals
-                            .filter((d) => d.stageName === s.name)
+                            .filter((d) => d.stageFubId === s.fubId)
                             .slice(0, 6)
                             .map((d) => (
                               <button
@@ -436,6 +446,9 @@ export default function AdminCrmPage() {
                   data-testid="input-crm-search"
                   className="pl-9 rounded-sm"
                 />
+                {contactsFetching && (
+                  <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                )}
               </div>
               {filteredContacts.length === 0 ? (
                 <Card>
@@ -447,7 +460,7 @@ export default function AdminCrmPage() {
                 </Card>
               ) : (
                 <div className="space-y-1.5" data-testid="crm-contact-list">
-                  {filteredContacts.slice(0, 100).map((c) => (
+                  {filteredContacts.map((c) => (
                     <button
                       key={c.fubId}
                       onClick={() => setOpenContact(c.fubId)}
@@ -488,9 +501,9 @@ export default function AdminCrmPage() {
                       </Card>
                     </button>
                   ))}
-                  {filteredContacts.length > 100 && (
+                  {filteredContacts.length >= 200 && (
                     <p className="text-[12px] text-muted-foreground pt-2">
-                      Showing the 100 most recently updated of {filteredContacts.length}.
+                      Showing the 200 most recently updated matches — narrow the search to see more.
                     </p>
                   )}
                 </div>
@@ -662,6 +675,15 @@ export default function AdminCrmPage() {
                               {r.httpStatus === 403 && optional
                                 ? `403 — this resource isn't enabled on your Follow Up Boss plan. Everything else still syncs.`
                                 : r.error.slice(0, 300)}
+                            </p>
+                          )}
+                          {r.truncated && (
+                            <p
+                              className="text-[12px] text-amber-700 dark:text-amber-400 mt-2 border-l-2 border-amber-400 pl-3 leading-relaxed"
+                              data-testid={`sync-truncated-${r.resource}`}
+                            >
+                              Not everything was pulled — this stopped at a safety cutoff with more
+                              still available, so treat the numbers above as a floor.
                             </p>
                           )}
                         </CardContent>

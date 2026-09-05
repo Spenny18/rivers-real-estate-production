@@ -213,10 +213,14 @@ export interface PageOptions {
   params?: Record<string, string | number | undefined>;
   /** Page size. FUB caps this; 100 is the conventional maximum. */
   limit?: number;
-  /** Safety valve so a paging bug can't spin forever. */
-  maxPages?: number;
-  /** Stop once this many records have been collected. */
+  /**
+   * Hard ceiling on records collected in one call. The page cap is derived
+   * from this rather than set independently — the two disagreeing is how a
+   * "25,000 record limit" silently became 10,000.
+   */
   maxRecords?: number;
+  /** Extra page headroom on top of maxRecords/limit, for a paging bug. */
+  maxPages?: number;
   /** Courtesy pause between pages, to stay clear of the rate limit. */
   pauseMs?: number;
 }
@@ -227,6 +231,13 @@ export interface PageResult {
   pages: number;
   status?: number;
   error?: string;
+  /**
+   * True when a safety cutoff stopped paging while the API still had more.
+   * Callers must not treat a truncated run as a complete one: for a resource
+   * with no incremental filter, re-fetching the same first N every hour would
+   * mean the remainder never mirrors at all.
+   */
+  truncated?: boolean;
   /** The first body seen, kept so callers can report the real shape. */
   sampleBody?: any;
 }
@@ -238,8 +249,10 @@ export async function fubGetAll(
   opts: PageOptions = {},
 ): Promise<PageResult> {
   const limit = opts.limit ?? 100;
-  const maxPages = opts.maxPages ?? 100;
   const maxRecords = opts.maxRecords ?? 25_000;
+  // Enough pages to actually reach maxRecords, plus a little headroom for a
+  // short page, rather than an independent number that silently wins.
+  const maxPages = opts.maxPages ?? Math.ceil(maxRecords / limit) + 5;
   const pauseMs = opts.pauseMs ?? 250;
 
   const records: any[] = [];
@@ -250,6 +263,7 @@ export async function fubGetAll(
   };
   let sampleBody: any;
   let pages = 0;
+  let truncated = false;
 
   for (; pages < maxPages; pages++) {
     const r = await fubGet(path, params);
@@ -269,19 +283,30 @@ export async function fubGetAll(
 
     const batch = extractCollection(r.data, collectionKey);
     records.push(...batch);
-    if (records.length >= maxRecords) break;
 
     const next = nextPageParams(r.data, {
       offset: Number(params.offset ?? 0),
       limit,
     }, batch.length);
+
+    // Record cutoff. Trim to the stated ceiling rather than overshooting to
+    // the page boundary, so maxRecords means what it says; `truncated` is only
+    // true if the API actually had more beyond it.
+    if (records.length >= maxRecords) {
+      truncated = !!next || records.length > maxRecords;
+      records.length = maxRecords;
+      break;
+    }
     if (!next) break;
 
     params = { ...(opts.params ?? {}), ...next };
     if (pauseMs > 0) await sleep(pauseMs);
   }
 
-  return { ok: true, records, pages: pages + 1, sampleBody };
+  // Ran out of pages with the API still offering more.
+  if (pages >= maxPages) truncated = true;
+
+  return { ok: true, records, pages: Math.min(pages + 1, maxPages), truncated, sampleBody };
 }
 
 // ---- Probe -----------------------------------------------------------------

@@ -20,6 +20,87 @@ function qs(req: Request, name: string): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
 }
 
+// ---- Response projection ---------------------------------------------------
+//
+// Never return the storage row itself. Each row carries the untouched FUB
+// payload in `raw` — kept so a wrong field mapping can be re-derived — which
+// the client has no use for and which contains contact fields beyond what this
+// UI shows. It would also end up in the application log, because the request
+// logger in server/index.ts stringifies every JSON API response: a single CRM
+// page load would write a hundred full contact records into Fly's logs.
+//
+// So these DTOs are the wire format, and `raw` never leaves the database.
+
+function dtoContact(c: any) {
+  return {
+    fubId: c.fubId,
+    name: c.name,
+    firstName: c.firstName,
+    lastName: c.lastName,
+    email: c.email,
+    phone: c.phone,
+    stage: c.stage,
+    source: c.source,
+    assignedTo: c.assignedTo,
+    tags: c.tags,
+    fubCreatedAt: c.fubCreatedAt,
+    fubUpdatedAt: c.fubUpdatedAt,
+    lastActivityAt: c.lastActivityAt,
+  };
+}
+
+function dtoDeal(d: any) {
+  return {
+    fubId: d.fubId,
+    name: d.name,
+    value: d.value,
+    stageFubId: d.stageFubId,
+    stageName: d.stageName,
+    pipelineFubId: d.pipelineFubId,
+    status: d.status,
+    contactFubId: d.contactFubId,
+    closedDate: d.closedDate,
+    fubUpdatedAt: d.fubUpdatedAt,
+  };
+}
+
+function dtoActivity(a: any) {
+  return {
+    id: a.id,
+    kind: a.kind,
+    contactFubId: a.contactFubId,
+    title: a.title,
+    body: a.body,
+    direction: a.direction,
+    outcome: a.outcome,
+    durationSeconds: a.durationSeconds,
+    occurredAt: a.occurredAt,
+    dueAt: a.dueAt,
+    completed: a.completed,
+    assignedTo: a.assignedTo,
+  };
+}
+
+/** Sync runs minus the raw error blob, which can be a whole API response. */
+function dtoSyncRun(r: any) {
+  return {
+    id: r.id,
+    resource: r.resource,
+    status: r.status,
+    fetched: r.fetched,
+    inserted: r.inserted,
+    updated: r.updated,
+    pages: r.pages,
+    httpStatus: r.httpStatus,
+    error: r.error ? String(r.error).slice(0, 300) : null,
+    truncated: r.truncated ?? false,
+    nullRates: r.nullRates,
+    finishedAt: r.finishedAt,
+    durationMs: r.durationMs,
+    trigger: r.trigger,
+  };
+}
+
 /**
  * Columns reading 100% null across a run almost certainly mapped to a field
  * name Follow Up Boss doesn't use. Surfaced so an empty column is diagnosed
@@ -93,8 +174,8 @@ export function registerCrmRoutes(app: Express, deps: { requireAuth: Middleware 
         texts: storage.listCrmActivities({ kind: "text", limit: 1000 }).length,
         events: storage.listCrmActivities({ kind: "event", limit: 1000 }).length,
       },
-      openTasks: storage.listCrmOpenTasks(10),
-      syncRuns: storage.latestCrmSyncRuns(),
+      openTasks: storage.listCrmOpenTasks(10).map(dtoActivity),
+      syncRuns: storage.latestCrmSyncRuns().map(dtoSyncRun),
       mappingWarnings: mappingWarnings(),
       resources: RESOURCE_SPECS.map((s) => ({
         resource: s.resource,
@@ -104,13 +185,18 @@ export function registerCrmRoutes(app: Express, deps: { requireAuth: Middleware 
     });
   });
 
+  // Search and stage filtering happen in the query, not in the browser — the
+  // client only ever holds a page of rows, so filtering there would silently
+  // search just that page.
   app.get("/api/admin/crm/contacts", requireAuth, (req, res) => {
     res.json(
-      storage.listCrmContacts({
-        q: qs(req, "q"),
-        stage: qs(req, "stage"),
-        limit: Math.min(toInt(req.query.limit, 100), 500),
-      }),
+      storage
+        .listCrmContacts({
+          q: qs(req, "q"),
+          stage: qs(req, "stage"),
+          limit: Math.min(toInt(req.query.limit, 200), 500),
+        })
+        .map(dtoContact),
     );
   });
 
@@ -120,33 +206,41 @@ export function registerCrmRoutes(app: Express, deps: { requireAuth: Middleware 
     const contact = storage.getCrmContact(fubId);
     if (!contact) return res.status(404).json({ message: "Contact not found" });
     res.json({
-      contact,
-      activities: storage.listCrmActivities({ contactFubId: fubId, limit: 200 }),
-      deals: storage.listCrmDeals({ limit: 500 }).filter((d) => d.contactFubId === fubId),
+      contact: dtoContact(contact),
+      activities: storage.listCrmActivities({ contactFubId: fubId, limit: 200 }).map(dtoActivity),
+      // Filtered in the query rather than after a global limit — otherwise a
+      // contact whose deals fall outside the newest N account-wide shows an
+      // empty drawer despite having mirrored deals.
+      deals: storage.listCrmDeals({ contactFubId: fubId, limit: 200 }).map(dtoDeal),
     });
   });
 
   app.get("/api/admin/crm/deals", requireAuth, (req, res) => {
     res.json(
-      storage.listCrmDeals({
-        stageFubId: qs(req, "stage"),
-        limit: Math.min(toInt(req.query.limit, 200), 1000),
-      }),
+      storage
+        .listCrmDeals({
+          stageFubId: qs(req, "stage"),
+          contactFubId: qs(req, "contact"),
+          limit: Math.min(toInt(req.query.limit, 500), 2000),
+        })
+        .map(dtoDeal),
     );
   });
 
   app.get("/api/admin/crm/activities", requireAuth, (req, res) => {
     res.json(
-      storage.listCrmActivities({
-        kind: qs(req, "kind"),
-        contactFubId: qs(req, "contact"),
-        limit: Math.min(toInt(req.query.limit, 100), 500),
-      }),
+      storage
+        .listCrmActivities({
+          kind: qs(req, "kind"),
+          contactFubId: qs(req, "contact"),
+          limit: Math.min(toInt(req.query.limit, 200), 1000),
+        })
+        .map(dtoActivity),
     );
   });
 
   app.get("/api/admin/crm/tasks", requireAuth, (_req, res) => {
-    res.json(storage.listCrmOpenTasks(100));
+    res.json(storage.listCrmOpenTasks(100).map(dtoActivity));
   });
 
   /** Credential check for the connection card. */
@@ -199,6 +293,6 @@ export function registerCrmRoutes(app: Express, deps: { requireAuth: Middleware 
   });
 
   app.get("/api/admin/crm/sync-runs", requireAuth, (_req, res) => {
-    res.json(storage.latestCrmSyncRuns());
+    res.json(storage.latestCrmSyncRuns().map(dtoSyncRun));
   });
 }
