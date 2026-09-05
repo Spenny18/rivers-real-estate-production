@@ -39,8 +39,10 @@
 //   * /v1/textMessages cannot be listed account-wide; it 400s without a
 //     personId or thread. Texts are fetched per contact instead, on demand.
 
+import fs from "node:fs";
+import nodePath from "node:path";
 import { storage } from "./storage";
-import { fubGetAll, fubConfigured, sinceIdCursor, type PageResult } from "./fub-client";
+import { fubGet, fubGetAll, fubConfigured, sinceIdCursor, type PageResult } from "./fub-client";
 
 // ---- Field helpers ---------------------------------------------------------
 
@@ -365,6 +367,76 @@ function inviteePersonId(invitees: any): string | null {
 }
 
 /**
+ * Notes: id, created, updated, createdBy, personId, subject, body, type,
+ * isHtml, actionPlanId, isExternal. Confirmed by probe — 1,609 of them, and
+ * unlike texts and emails they list account-wide, so they sync on the hourly
+ * schedule like everything else.
+ *
+ * A note is an activity in every way that matters here: it belongs to one
+ * contact, it happened at a time, and it wants to interleave with their calls
+ * and showings. So it goes in the same timeline rather than a table of its own.
+ */
+function mapNote(n: any, syncedAt: string): Record<string, any> {
+  const html = bool(pick(n, ["isHtml"]));
+  const text = str(pick(n, ["body", "content", "note"]));
+  return {
+    ...activityBase(n, "note", syncedAt),
+    contactFubId: idOf(pick(n, ["personId", "person", "contactId"])),
+    title: str(pick(n, ["subject", "title"])) ?? "Note",
+    // Notes can be stored as HTML. Kept as readable text for the timeline;
+    // the original markup is still in `raw` if it is ever wanted back.
+    body: body(html && text ? stripHtml(text) : text),
+    outcome: str(pick(n, ["type"])),
+    occurredAt: iso(pick(n, ["created", "createdAt"])),
+    assignedTo: nameOf(pick(n, ["createdBy", "createdByName", "user"])),
+  };
+}
+
+/** Enough HTML stripping for a note body — entities and tags, nothing clever. */
+function stripHtml(s: string): string {
+  return s
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/**
+ * Logged emails, fetched per contact.
+ *
+ * Same constraint as texts: GET /v1/emails refuses a bare listing and demands
+ * an id list, thread or personId, so there is no collection to schedule. The
+ * field names could not be read from the probe for exactly that reason, so
+ * this stays candidate-based.
+ */
+function mapEmail(e: any, personId: string, syncedAt: string): Record<string, any> {
+  const html = bool(pick(e, ["isHtml"]));
+  const text = str(pick(e, ["body", "message", "content", "text", "snippet"]));
+  const incoming = pick(e, ["isIncoming", "inbound"]);
+  return {
+    ...activityBase(e, "email", syncedAt),
+    contactFubId: idOf(pick(e, ["personId", "person", "contactId"])) ?? personId,
+    title: str(pick(e, ["subject", "title"])) ?? "Email",
+    body: body(html && text ? stripHtml(text) : text),
+    direction:
+      incoming === undefined
+        ? str(pick(e, ["direction"]))
+        : bool(incoming)
+          ? "inbound"
+          : "outbound",
+    occurredAt: iso(pick(e, ["sentAt", "created", "createdAt", "date"])),
+    assignedTo: nameOf(pick(e, ["createdBy", "userName", "user", "from"])),
+  };
+}
+
+/**
  * Text messages, fetched per contact — see syncTextsForContact. The shape is
  * the one resource the probe could not report, because listing the collection
  * needs a personId, so this stays candidate-based throughout.
@@ -469,6 +541,16 @@ export const RESOURCE_SPECS: ResourceSpec[] = [
     watchFields: ["title", "dueAt"],
     optional: true,
   },
+  {
+    // Your written notes on people — the highest-value free text in the whole
+    // account, and the probe confirmed they list account-wide, so unlike texts
+    // and emails they mirror on the ordinary schedule.
+    resource: "notes",
+    path: "/notes",
+    collectionKey: "notes",
+    watchFields: ["contactFubId", "body", "occurredAt"],
+    optional: true,
+  },
 ];
 
 // textMessages is deliberately absent. GET /v1/textMessages rejects a bare
@@ -496,6 +578,7 @@ const ACTIVITY_MAPPERS: Record<string, ActivityMapper | undefined> = {
   calls: mapCall,
   tasks: mapTask,
   appointments: mapAppointment,
+  notes: mapNote,
 };
 
 export interface SyncResult {
@@ -773,22 +856,49 @@ function plannedSpecs(only?: string[]): ResourceSpec[] {
 export async function syncTextsForContact(
   personFubId: string,
 ): Promise<{ ok: boolean; fetched: number; error?: string }> {
+  return fetchPerContact(personFubId, [
+    { path: "/textMessages", key: "textMessages", map: mapText },
+    // Emails carry the same restriction — "id list, inboxThreadId, personId or
+    // personId and threadId must be specified" — so they ride along here
+    // rather than needing a second walk over every contact.
+    { path: "/emails", key: "emails", map: mapEmail },
+  ]);
+}
+
+async function fetchPerContact(
+  personFubId: string,
+  sources: Array<{
+    path: string;
+    key: string;
+    map: (r: any, personId: string, syncedAt: string) => Record<string, any>;
+  }>,
+): Promise<{ ok: boolean; fetched: number; error?: string }> {
   if (!fubConfigured()) return { ok: false, fetched: 0, error: "FUB_API_KEY not set" };
 
-  const page = await fubGetAll("/textMessages", "textMessages", {
-    params: { personId: personFubId },
-    maxRecords: 2_000,
-  });
-  if (!page.ok && page.records.length === 0) {
-    return { ok: false, fetched: 0, error: page.error ?? `HTTP ${page.status}` };
-  }
-
   const syncedAt = new Date().toISOString();
-  const mapped = page.records
-    .map((r) => mapText(r, personFubId, syncedAt))
-    .filter((m) => m.fubId);
-  if (mapped.length > 0) storage.upsertCrmActivities(mapped);
-  return { ok: page.ok, fetched: mapped.length };
+  let fetched = 0;
+  let ok = false;
+  let error: string | undefined;
+
+  for (const src of sources) {
+    const page = await fubGetAll(src.path, src.key, {
+      params: { personId: personFubId },
+      maxRecords: 2_000,
+    });
+    // One source failing must not lose the other. A contact with texts but no
+    // email thread is ordinary, and so is the reverse.
+    if (!page.ok && page.records.length === 0) {
+      error ??= page.error ?? `HTTP ${page.status} on ${src.path}`;
+      continue;
+    }
+    ok = true;
+    const mapped = page.records
+      .map((r) => src.map(r, personFubId, syncedAt))
+      .filter((m) => m.fubId);
+    if (mapped.length > 0) storage.upsertCrmActivities(mapped);
+    fetched += mapped.length;
+  }
+  return { ok: ok || !error, fetched, error: ok ? undefined : error };
 }
 
 // ---- Background job --------------------------------------------------------
@@ -916,6 +1026,217 @@ export function startSyncJob(opts: {
 // filtered out of the sync panel but deliberately kept by the pruner), so a
 // crash, a deploy or a cancelled run picks up where it stopped instead of
 // spending another half hour re-fetching what it already has.
+
+// ---- Configuration snapshot ------------------------------------------------
+//
+// Settings rather than records: 70 action plans, 12 smart lists, 22 custom
+// field definitions, the lead-routing groups and the account itself. None of
+// it is rendered in the CRM, and none of it survives cancellation.
+//
+// The action plans are the reason this exists. Seventy automated sequences is
+// years of accumulated process, and the list endpoint returns their names,
+// categories, step counts and how many contacts are running each — enough to
+// rebuild deliberately rather than from memory. Whether the individual steps
+// come back too is a per-plan fetch we can only find out by trying, so this
+// stores whatever the list gives and says plainly what it did not.
+
+const CONFIG_RESOURCES: Array<{ resource: string; path: string; collectionKey: string }> = [
+  { resource: "actionPlans", path: "/actionPlans", collectionKey: "actionPlans" },
+  { resource: "smartLists", path: "/smartLists", collectionKey: "smartlists" },
+  { resource: "customFields", path: "/customFields", collectionKey: "customfields" },
+  { resource: "groups", path: "/groups", collectionKey: "groups" },
+  { resource: "users", path: "/users", collectionKey: "users" },
+];
+
+export async function snapshotConfig(): Promise<
+  Array<{ resource: string; ok: boolean; count: number; error?: string }>
+> {
+  const out: Array<{ resource: string; ok: boolean; count: number; error?: string }> = [];
+  for (const c of CONFIG_RESOURCES) {
+    const page = await fubGetAll(c.path, c.collectionKey, { maxRecords: 5_000 });
+    if (page.records.length > 0) storage.putCrmConfig(c.resource, page.records);
+    out.push({
+      resource: c.resource,
+      ok: page.ok,
+      count: page.records.length,
+      error: page.ok ? undefined : (page.error ?? `HTTP ${page.status}`),
+    });
+  }
+  // /identity is a single object rather than a collection — the account and
+  // user record, which is what identifies the plan being cancelled.
+  const id = await fubGet("/identity");
+  if (id.ok && id.data) {
+    storage.putCrmConfig("identity", [id.data]);
+    out.push({ resource: "identity", ok: true, count: 1 });
+  } else {
+    out.push({ resource: "identity", ok: false, count: 0, error: id.error });
+  }
+  return out;
+}
+
+// ---- Recording download preflight ------------------------------------------
+//
+// Every one of the 6,708 calls has audio. The size estimate derived from call
+// duration assumes a compressed recording at roughly 32 kbps; if Follow Up
+// Boss serves WAV instead — 8 kHz 16-bit mono, which is what Twilio stores by
+// default — the same audio is about four times larger. A 3.8 GB estimate and a
+// 15 GB reality are different decisions.
+//
+// So nothing downloads until this has measured the real thing: it asks for the
+// first byte of a handful of recordings and reads the length and type off the
+// response headers, then reports that against the free space actually on the
+// volume. Filling the disk under a running app would stop SQLite writing and
+// take the site down, which is a far worse outcome than not having the
+// recordings yet.
+
+/** Where downloaded audio would live — beside the uploads on the volume. */
+export function recordingsDir(): string {
+  const base =
+    process.env.RECORDINGS_DIR ??
+    (process.env.NODE_ENV === "production"
+      ? "/data/recordings"
+      : nodePath.resolve(process.cwd(), "data/recordings"));
+  return base;
+}
+
+/** Free bytes on the filesystem holding a path, or null if unknowable. */
+function freeBytes(dir: string): number | null {
+  try {
+    // statfs needs a path that exists; walk up until one does.
+    let probe = dir;
+    for (let i = 0; i < 6 && !fs.existsSync(probe); i++) probe = nodePath.dirname(probe);
+    const st = (fs as any).statfsSync?.(probe);
+    if (!st) return null;
+    return Number(st.bavail) * Number(st.bsize);
+  } catch {
+    return null;
+  }
+}
+
+export interface RecordingPreflight {
+  totalRecordings: number;
+  /** Estimated from call duration, at the assumed bitrate. */
+  estimatedBytesFromDuration: number;
+  sampled: Array<{
+    uid: string;
+    status: number;
+    bytes: number | null;
+    contentType: string | null;
+    error?: string;
+  }>;
+  /** Mean bytes-per-second measured across the samples that answered. */
+  measuredBytesPerSecond: number | null;
+  /** The estimate re-derived from what the samples actually weigh. */
+  projectedBytes: number | null;
+  destination: string;
+  freeBytes: number | null;
+  /** False when the projection would not fit with room to spare. */
+  fits: boolean | null;
+  advice: string;
+}
+
+export async function preflightRecordings(sampleSize = 8): Promise<RecordingPreflight> {
+  const inv = storage.crmRecordingInventory();
+  const dest = recordingsDir();
+  const free = freeBytes(dest);
+  const sampled: RecordingPreflight["sampled"] = [];
+
+  if (fubConfigured()) {
+    const candidates = storage.listCrmRecordingUrls(sampleSize);
+    for (const c of candidates) {
+      try {
+        const res = await fetch(c.url, {
+          // One byte is enough to learn the type; Content-Range carries the
+          // full length even when the server honours the range.
+          headers: {
+            Range: "bytes=0-0",
+            Authorization: `Basic ${Buffer.from(`${process.env.FUB_API_KEY ?? ""}:`).toString("base64")}`,
+          },
+          redirect: "follow",
+        });
+        const range = res.headers.get("content-range");
+        const total = range?.match(/\/(\d+)\s*$/)?.[1];
+        const len = total
+          ? Number(total)
+          : Number(res.headers.get("content-length") ?? NaN);
+        sampled.push({
+          uid: c.uid,
+          status: res.status,
+          bytes: Number.isFinite(len) ? len : null,
+          contentType: res.headers.get("content-type"),
+        });
+      } catch (e: any) {
+        sampled.push({
+          uid: c.uid,
+          status: 0,
+          bytes: null,
+          contentType: null,
+          error: String(e?.message ?? e).slice(0, 120),
+        });
+      }
+      await new Promise((s) => setTimeout(s, 150));
+    }
+  }
+
+  const good = sampled.filter((s) => s.bytes && s.bytes > 1);
+  // Re-derive bytes-per-second from the samples rather than trusting the
+  // assumed bitrate, then scale by the total recorded seconds.
+  const measuredBps =
+    good.length > 0 && inv.totalSeconds > 0
+      ? good.reduce((sum, s) => sum + (s.bytes ?? 0), 0) /
+        Math.max(
+          good.reduce((sum, s) => {
+            const secs = storageDurationFor(s.uid);
+            return sum + (secs ?? 0);
+          }, 0),
+          1,
+        )
+      : null;
+  const projected =
+    measuredBps && Number.isFinite(measuredBps)
+      ? Math.round(measuredBps * inv.totalSeconds)
+      : null;
+
+  // Insist on double the projection free, so the download cannot squeeze the
+  // database out of the space it needs to keep working.
+  const fits = projected != null && free != null ? free > projected * 2 : null;
+
+  let advice: string;
+  if (!fubConfigured()) {
+    advice = "FUB_API_KEY is not set, so nothing could be sampled.";
+  } else if (good.length === 0) {
+    advice =
+      "None of the sampled recordings could be read. The URLs may need a different " +
+      "credential than the API key — worth asking Follow Up Boss how to fetch recording audio.";
+  } else if (fits === false) {
+    advice =
+      `The volume does not have room. Roughly ${Math.ceil((projected ?? 0) / 1e9)} GB of audio ` +
+      `against ${free != null ? (free / 1e9).toFixed(1) : "?"} GB free — grow the Fly volume ` +
+      `(fly volumes extend) or send the audio to object storage instead.`;
+  } else if (fits === true) {
+    advice = "There is room on the volume. Safe to download.";
+  } else {
+    advice = "Could not determine free space; treat the projection as unverified.";
+  }
+
+  return {
+    totalRecordings: inv.withRecording,
+    estimatedBytesFromDuration: inv.estimatedBytes,
+    sampled,
+    measuredBytesPerSecond: measuredBps,
+    projectedBytes: projected,
+    destination: dest,
+    freeBytes: free,
+    fits,
+    advice,
+  };
+}
+
+/** Duration of the call behind a sampled uid, for the bytes-per-second maths. */
+function storageDurationFor(uid: string): number | null {
+  const a = storage.getCrmActivityByUid(uid);
+  return a?.durationSeconds ?? null;
+}
 
 export const TEXT_BACKFILL_RESOURCE = "textMessages";
 

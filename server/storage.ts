@@ -653,6 +653,20 @@ sqlite.exec(`
     trigger TEXT NOT NULL DEFAULT 'cron'
   );
   CREATE INDEX IF NOT EXISTS idx_crm_sync_runs_resource ON crm_sync_runs(resource, id DESC);
+
+  -- Follow Up Boss configuration, stored whole rather than modelled.
+  --
+  -- Action plans, smart lists, custom field definitions, lead-routing groups
+  -- and the account record are settings, not records: nothing here is rendered
+  -- in the CRM, and giving each one a typed table would be a lot of schema for
+  -- data whose only job is to still exist after the subscription ends. Kept as
+  -- the API returned it, keyed by resource.
+  CREATE TABLE IF NOT EXISTS crm_config (
+    resource TEXT PRIMARY KEY,
+    count INTEGER NOT NULL DEFAULT 0,
+    json TEXT NOT NULL,
+    fetched_at TEXT NOT NULL
+  );
 `);
 
 // Migration: add account_user_id to saved_searches so portal users own
@@ -3103,6 +3117,61 @@ export class DatabaseStorage implements IStorage {
           .prepare("SELECT fub_id FROM crm_contacts ORDER BY CAST(fub_id AS INTEGER)")
           .all();
     return (rows as Array<{ fub_id: string }>).map((r) => r.fub_id);
+  }
+
+  /** Store a Follow Up Boss configuration resource exactly as it came back. */
+  putCrmConfig(resource: string, records: unknown[]): void {
+    sqlite
+      .prepare(
+        "INSERT INTO crm_config (resource, count, json, fetched_at) VALUES (?,?,?,?) " +
+          "ON CONFLICT(resource) DO UPDATE SET count=excluded.count, json=excluded.json, fetched_at=excluded.fetched_at",
+      )
+      .run(resource, records.length, JSON.stringify(records), new Date().toISOString());
+  }
+
+  /** Config resources with their record counts, without the payloads. */
+  listCrmConfig(): Array<{ resource: string; count: number; fetchedAt: string }> {
+    return (
+      sqlite
+        .prepare("SELECT resource, count, fetched_at FROM crm_config ORDER BY resource")
+        .all() as Array<{ resource: string; count: number; fetched_at: string }>
+    ).map((r) => ({ resource: r.resource, count: r.count, fetchedAt: r.fetched_at }));
+  }
+
+  getCrmConfig(resource: string): unknown[] | null {
+    const row = sqlite
+      .prepare("SELECT json FROM crm_config WHERE resource = ?")
+      .get(resource) as { json: string } | undefined;
+    if (!row) return null;
+    try {
+      return JSON.parse(row.json);
+    } catch {
+      return null;
+    }
+  }
+
+  getCrmActivityByUid(uid: string): CrmActivity | undefined {
+    return db.select().from(crmActivities).where(eq(crmActivities.uid, uid)).get();
+  }
+
+  /** Every stored recording URL, with the call it belongs to. */
+  listCrmRecordingUrls(limit?: number): Array<{ uid: string; fubId: string | null; url: string }> {
+    const rows = sqlite
+      .prepare("SELECT uid, fub_id, raw FROM crm_activities WHERE kind = 'call'")
+      .all() as Array<{ uid: string; fub_id: string | null; raw: string }>;
+    const out: Array<{ uid: string; fubId: string | null; url: string }> = [];
+    for (const r of rows) {
+      let url: unknown;
+      try {
+        url = JSON.parse(r.raw)?.recordingUrl;
+      } catch {
+        continue;
+      }
+      if (typeof url !== "string" || !url) continue;
+      out.push({ uid: r.uid, fubId: r.fub_id, url });
+      if (limit && out.length >= limit) break;
+    }
+    return out;
   }
 
   /**
