@@ -477,14 +477,19 @@ export async function syncResource(
  * activity.
  */
 export async function syncAll(
-  opts: { trigger?: "cron" | "manual"; full?: boolean; only?: string[] } = {},
+  opts: {
+    trigger?: "cron" | "manual";
+    full?: boolean;
+    only?: string[];
+    /** Called before each resource starts and after each one finishes. */
+    onProgress?: (p: { current: string | null; results: SyncResult[] }) => void;
+  } = {},
 ): Promise<SyncResult[]> {
-  const specs = opts.only?.length
-    ? RESOURCE_SPECS.filter((s) => opts.only!.includes(s.resource))
-    : RESOURCE_SPECS;
+  const specs = plannedSpecs(opts.only);
 
   const results: SyncResult[] = [];
   for (const spec of specs) {
+    opts.onProgress?.({ current: spec.resource, results });
     try {
       results.push(await syncResource(spec, opts));
     } catch (e: any) {
@@ -498,6 +503,7 @@ export async function syncAll(
         error: String(e?.message ?? e),
       });
     }
+    opts.onProgress?.({ current: null, results });
   }
   try {
     storage.pruneCrmSyncRuns();
@@ -505,6 +511,104 @@ export async function syncAll(
     /* pruning is housekeeping; never fail a sync over it */
   }
   return results;
+}
+
+function plannedSpecs(only?: string[]): ResourceSpec[] {
+  return only?.length ? RESOURCE_SPECS.filter((s) => only.includes(s.resource)) : RESOURCE_SPECS;
+}
+
+// ---- Background job --------------------------------------------------------
+//
+// A full sync walks nine endpoints and pages each one, so it routinely runs
+// for minutes. It must not be the body of an HTTP request: Fly's proxy closes
+// an idle connection at around 60 seconds, so a request that waits for the
+// whole thing shows the browser a network failure while the server carries on
+// and finishes perfectly well — the one failure mode guaranteed to make a
+// working sync look broken.
+//
+// So the route starts a job and returns immediately, and the page polls this
+// state. The lock is the other half: cron and the button share it, so hitting
+// Sync now during an hourly cycle joins that run rather than starting a second
+// concurrent pass over the same rows.
+
+export interface SyncJob {
+  id: number;
+  trigger: "cron" | "manual";
+  full: boolean;
+  startedAt: string;
+  finishedAt: string | null;
+  running: boolean;
+  /** Every resource this run will touch, in the order it will touch them. */
+  planned: string[];
+  /** The resource being fetched right now; null between resources or at the end. */
+  current: string | null;
+  /** Results so far — grows as the run progresses. */
+  results: SyncResult[];
+  /** Only set if the run itself threw, as opposed to one resource failing. */
+  error: string | null;
+}
+
+let job: SyncJob | null = null;
+let jobDone: Promise<SyncJob> = Promise.resolve(null as any);
+let jobSeq = 0;
+
+/** The current run if one is in flight, else the last one that finished. */
+export function currentSyncJob(): SyncJob | null {
+  return job;
+}
+
+/**
+ * Start a sync in the background.
+ *
+ * Returns `started: false` with the in-flight job when one is already running
+ * — the caller should show that job's progress rather than report a failure.
+ * `done` resolves with the finished job either way, so a caller that does want
+ * to wait (the cron, for its log line) can, without the HTTP path doing so.
+ */
+export function startSyncJob(opts: {
+  trigger?: "cron" | "manual";
+  full?: boolean;
+  only?: string[];
+}): { started: boolean; job: SyncJob; done: Promise<SyncJob> } {
+  if (job?.running) return { started: false, job, done: jobDone };
+
+  const next: SyncJob = {
+    id: ++jobSeq,
+    trigger: opts.trigger ?? "manual",
+    full: !!opts.full,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    running: true,
+    planned: plannedSpecs(opts.only).map((s) => s.resource),
+    current: null,
+    results: [],
+    error: null,
+  };
+  job = next;
+
+  // Deliberately not awaited here: this returns to the HTTP handler at once.
+  jobDone = syncAll({
+    ...opts,
+    onProgress: ({ current, results }) => {
+      next.current = current;
+      next.results = [...results];
+    },
+  })
+    .then((results) => {
+      next.results = results;
+    })
+    .catch((e: any) => {
+      next.error = String(e?.message ?? e).slice(0, 500);
+      console.error("[crm-sync] job failed:", e);
+    })
+    .then(() => {
+      next.current = null;
+      next.running = false;
+      next.finishedAt = new Date().toISOString();
+      return next;
+    });
+
+  return { started: true, job: next, done: jobDone };
 }
 
 // ---- Cron ------------------------------------------------------------------
@@ -518,8 +622,16 @@ export function startCrmSyncCron(): void {
     return;
   }
   const runCycle = () => {
-    syncAll({ trigger: "cron" })
-      .then((rs) => {
+    // Through the same job lock as the manual button, so an hour boundary
+    // landing mid-sync doesn't start a second pass over the same rows.
+    const { started, job: j, done } = startSyncJob({ trigger: "cron" });
+    if (!started) {
+      console.log(`[crm-sync] cycle skipped — a ${j.trigger} sync is still running`);
+      return;
+    }
+    done
+      .then((finished) => {
+        const rs = finished.results;
         const ok = rs.filter((r) => r.status === "ok").length;
         const failed = rs.filter((r) => r.status === "error");
         console.log(
