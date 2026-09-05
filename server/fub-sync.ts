@@ -479,8 +479,17 @@ export const RESOURCE_SPECS: ResourceSpec[] = [
 
 type ActivityMapper = (r: any, syncedAt: string) => Record<string, any>;
 
-/** The resources the scheduled sync covers — anything else is retired. */
+/** The resources the scheduled sync covers. Drives what the Sync panel shows. */
 export const SYNCED_RESOURCES = RESOURCE_SPECS.map((s) => s.resource);
+
+/**
+ * Resources whose run history is kept, which is deliberately wider than what
+ * is displayed. The text backfill stores its resume point as the cursor on a
+ * `textMessages` run row; pruning by the displayed set alone would delete that
+ * row on the next sync and silently reset a half-finished 4,907-contact walk
+ * back to the beginning.
+ */
+export const RETAINED_RESOURCES = [...SYNCED_RESOURCES, "textMessages"];
 
 const ACTIVITY_MAPPERS: Record<string, ActivityMapper | undefined> = {
   events: mapEvent,
@@ -731,9 +740,10 @@ export async function syncAll(
     opts.onProgress?.({ current: null, results });
   }
   try {
-    // Always the full spec list, never `only` — a partial sync must not
-    // retire the resources it happened to skip.
-    storage.pruneCrmSyncRuns(20, SYNCED_RESOURCES);
+    // Always the full retained list, never `only` — a partial sync must not
+    // retire the resources it happened to skip, and must not throw away the
+    // text backfill's resume point.
+    storage.pruneCrmSyncRuns(20, RETAINED_RESOURCES);
   } catch {
     /* pruning is housekeeping; never fail a sync over it */
   }
@@ -797,6 +807,12 @@ export async function syncTextsForContact(
 
 export interface SyncJob {
   id: number;
+  /**
+   * Which long-running job this is. Both hold the same lock: they are the two
+   * things that hammer the Follow Up Boss API for minutes at a time, and
+   * running them together would just spend the rate limit twice as fast.
+   */
+  kind: "sync" | "text-backfill";
   trigger: "cron" | "manual";
   full: boolean;
   startedAt: string;
@@ -808,6 +824,12 @@ export interface SyncJob {
   current: string | null;
   /** Results so far — grows as the run progresses. */
   results: SyncResult[];
+  /**
+   * Item-level progress, for a job whose unit of work isn't a resource. The
+   * backfill walks 4,907 contacts; "1 of 1 resources" would be a useless
+   * progress bar for something that runs for half an hour.
+   */
+  progress: { done: number; total: number; label: string } | null;
   /** Only set if the run itself threw, as opposed to one resource failing. */
   error: string | null;
 }
@@ -838,6 +860,7 @@ export function startSyncJob(opts: {
 
   const next: SyncJob = {
     id: ++jobSeq,
+    kind: "sync",
     trigger: opts.trigger ?? "manual",
     full: !!opts.full,
     startedAt: new Date().toISOString(),
@@ -846,6 +869,7 @@ export function startSyncJob(opts: {
     planned: plannedSpecs(opts.only).map((s) => s.resource),
     current: null,
     results: [],
+    progress: null,
     error: null,
   };
   job = next;
@@ -873,6 +897,164 @@ export function startSyncJob(opts: {
     });
 
   return { started: true, job: next, done: jobDone };
+}
+
+// ---- Text backfill ---------------------------------------------------------
+//
+// The scheduled sync cannot mirror texts, because Follow Up Boss has no
+// account-wide text listing — so the CRM fetches them for one contact at a
+// time, when their history is opened. That is fine for a dashboard reading a
+// live CRM, and completely inadequate as an export: a contact nobody has
+// clicked has no texts stored anywhere but Follow Up Boss.
+//
+// This walks every contact once and closes that gap. It is a one-time job by
+// intention, not a schedule — 4,907 contacts is 4,907 requests, which is a
+// reasonable thing to do deliberately and an unreasonable thing to do hourly.
+//
+// It resumes. Progress is recorded as a cursor against a `textMessages` run
+// row (a resource the scheduled sync doesn't cover, which is why that row is
+// filtered out of the sync panel but deliberately kept by the pruner), so a
+// crash, a deploy or a cancelled run picks up where it stopped instead of
+// spending another half hour re-fetching what it already has.
+
+export const TEXT_BACKFILL_RESOURCE = "textMessages";
+
+export interface BackfillProgress {
+  contactsDone: number;
+  contactsTotal: number;
+  textsFetched: number;
+  failures: number;
+}
+
+export function startTextBackfillJob(opts: { restart?: boolean } = {}): {
+  started: boolean;
+  job: SyncJob;
+  done: Promise<SyncJob>;
+} {
+  if (job?.running) return { started: false, job, done: jobDone };
+
+  // includePartial, because an interrupted run is exactly when resuming
+  // matters and such a run is recorded as `partial`.
+  const resumeAfter = opts.restart
+    ? null
+    : storage.lastCrmCursor(TEXT_BACKFILL_RESOURCE, { includePartial: true });
+  const ids = storage.listCrmContactIds(resumeAfter);
+
+  const next: SyncJob = {
+    id: ++jobSeq,
+    kind: "text-backfill",
+    trigger: "manual",
+    full: !!opts.restart,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    running: true,
+    planned: [TEXT_BACKFILL_RESOURCE],
+    current: TEXT_BACKFILL_RESOURCE,
+    results: [],
+    progress: {
+      done: 0,
+      total: ids.length,
+      label: resumeAfter ? `Resuming after contact ${resumeAfter}` : "Every contact",
+    },
+    error: null,
+  };
+  job = next;
+
+  jobDone = runTextBackfill(ids, next, resumeAfter)
+    .catch((e: any) => {
+      next.error = String(e?.message ?? e).slice(0, 500);
+      console.error("[crm-backfill] failed:", e);
+    })
+    .then(() => {
+      next.current = null;
+      next.running = false;
+      next.finishedAt = new Date().toISOString();
+      return next;
+    });
+
+  return { started: true, job: next, done: jobDone };
+}
+
+async function runTextBackfill(
+  ids: string[],
+  state: SyncJob,
+  resumeAfter: string | null,
+): Promise<void> {
+  const t0 = Date.now();
+  const run = storage.createCrmSyncRun({
+    resource: TEXT_BACKFILL_RESOURCE,
+    status: "error",
+    startedAt: state.startedAt,
+    trigger: "manual",
+  } as any);
+
+  let fetched = 0;
+  let failures = 0;
+  let lastDone: string | null = null;
+  let aborted: string | null = null;
+
+  for (const fubId of ids) {
+    try {
+      const r = await syncTextsForContact(fubId);
+      if (r.ok) {
+        fetched += r.fetched;
+      } else {
+        failures++;
+        // A contact with no texts is not a failure, but a run where nothing
+        // works at all is — usually a revoked key or a rate limit we are not
+        // backing off from. Stopping keeps the cursor honest instead of
+        // marching to the end recording thousands of empty successes.
+        if (failures > 50 && fetched === 0) {
+          aborted = `Gave up after ${failures} consecutive failures without a single text — check the API key.`;
+          break;
+        }
+      }
+    } catch (e: any) {
+      failures++;
+    }
+    lastDone = fubId;
+    if (state.progress) {
+      state.progress.done++;
+    }
+    // Deliberately unhurried. This runs once and has all the time it needs;
+    // tripping Follow Up Boss's rate limit would cost more than it saves.
+    await new Promise((s) => setTimeout(s, 200));
+  }
+
+  // A run with nothing queued is finished, not partial: it means a previous
+  // pass already reached the end. Getting this wrong mattered — the row would
+  // land as `partial` with a null cursor, and because the resume now honours
+  // partial rows, the *next* run would read that null and walk all 4,907
+  // contacts from the top.
+  const complete = !aborted && (ids.length === 0 || lastDone === ids[ids.length - 1]);
+  storage.finishCrmSyncRun(run.id, {
+    status: aborted ? "error" : complete ? "ok" : "partial",
+    fetched,
+    inserted: fetched,
+    updated: 0,
+    pages: ids.length,
+    httpStatus: null,
+    error: aborted,
+    truncated: !complete,
+    nullRates: "{}",
+    // The last contact actually finished. Never regress: a run that processed
+    // nobody keeps the previous mark rather than clearing it, so the resume
+    // point only ever moves forward.
+    cursor: lastDone ?? resumeAfter,
+    finishedAt: new Date().toISOString(),
+    durationMs: Date.now() - t0,
+  } as any);
+
+  state.results = [
+    {
+      resource: TEXT_BACKFILL_RESOURCE,
+      status: aborted ? "error" : complete ? "ok" : "partial",
+      fetched,
+      inserted: fetched,
+      updated: 0,
+      error: aborted ?? (failures > 0 ? `${failures} contacts could not be read` : undefined),
+    },
+  ];
 }
 
 // ---- Cron ------------------------------------------------------------------

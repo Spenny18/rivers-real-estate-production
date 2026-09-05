@@ -3084,6 +3084,67 @@ export class DatabaseStorage implements IStorage {
   countCrmContacts(): number {
     return db.select().from(crmContacts).all().length;
   }
+  /**
+   * Just the contact ids, in numeric order, for the text backfill to walk.
+   *
+   * Ordered and resumed on the id cast to an integer rather than compared as
+   * text: Follow Up Boss ids are numeric strings, and lexicographic order puts
+   * "10000" before "9999", which would make a resume skip several thousand
+   * contacts and call the job complete.
+   */
+  listCrmContactIds(afterFubId?: string | null): string[] {
+    const rows = afterFubId
+      ? sqlite
+          .prepare(
+            "SELECT fub_id FROM crm_contacts WHERE CAST(fub_id AS INTEGER) > CAST(? AS INTEGER) ORDER BY CAST(fub_id AS INTEGER)",
+          )
+          .all(afterFubId)
+      : sqlite
+          .prepare("SELECT fub_id FROM crm_contacts ORDER BY CAST(fub_id AS INTEGER)")
+          .all();
+    return (rows as Array<{ fub_id: string }>).map((r) => r.fub_id);
+  }
+
+  /**
+   * What the call recordings would cost to bring across, without fetching any.
+   *
+   * The audio itself lives on Follow Up Boss's infrastructure and the stored
+   * `recordingUrl` stops resolving when the account closes, so this is the
+   * number that decides whether downloading them is an afternoon or a storage
+   * problem. Size is estimated from call duration at a typical compressed
+   * bitrate — good enough to choose a disk, not a billing figure.
+   */
+  crmRecordingInventory(): {
+    calls: number;
+    withRecording: number;
+    totalSeconds: number;
+    estimatedBytes: number;
+  } {
+    const rows = sqlite
+      .prepare("SELECT duration_seconds, raw FROM crm_activities WHERE kind = 'call'")
+      .all() as Array<{ duration_seconds: number | null; raw: string }>;
+
+    let withRecording = 0;
+    let totalSeconds = 0;
+    for (const r of rows) {
+      let url: unknown;
+      try {
+        url = JSON.parse(r.raw)?.recordingUrl;
+      } catch {
+        continue;
+      }
+      if (typeof url !== "string" || !url) continue;
+      withRecording++;
+      totalSeconds += r.duration_seconds ?? 0;
+    }
+    // ~32 kbps mono, the usual shape of a call recording: 4 KB per second.
+    return {
+      calls: rows.length,
+      withRecording,
+      totalSeconds,
+      estimatedBytes: totalSeconds * 4096,
+    };
+  }
 
   listCrmPipelines(): CrmPipeline[] {
     return db.select().from(crmPipelines).all();
@@ -3170,14 +3231,26 @@ export class DatabaseStorage implements IStorage {
     }
     return out;
   }
-  /** Newest successful cursor for a resource, for incremental syncing. */
-  lastCrmCursor(resource: string): string | null {
-    const row = db
-      .select()
-      .from(crmSyncRuns)
-      .where(and(eq(crmSyncRuns.resource, resource), eq(crmSyncRuns.status, "ok"))!)
-      .orderBy(desc(crmSyncRuns.id))
-      .get();
+  /**
+   * Newest cursor for a resource, for resuming where the last run stopped.
+   *
+   * Successful runs only by default, which is what the scheduled sync wants:
+   * its cursor is a high-water mark over a whole collection, and honouring one
+   * from a run that failed part-way could skip everything after the failure.
+   *
+   * `includePartial` takes the newest cursor whatever the run's status, for a
+   * job whose cursor means "the last item I definitely finished" rather than
+   * "how far this collection is mirrored". The text backfill is that job — it
+   * records the last contact it actually completed, so an interrupted run is
+   * precisely the case where its cursor matters most. Without this the resume
+   * it advertises silently never happens: the interrupted run is `partial`, so
+   * its mark is ignored and the next run walks all 4,907 contacts again.
+   */
+  lastCrmCursor(resource: string, opts: { includePartial?: boolean } = {}): string | null {
+    const where = opts.includePartial
+      ? eq(crmSyncRuns.resource, resource)
+      : and(eq(crmSyncRuns.resource, resource), eq(crmSyncRuns.status, "ok"))!;
+    const row = db.select().from(crmSyncRuns).where(where).orderBy(desc(crmSyncRuns.id)).get();
     return row?.cursor ?? null;
   }
   /**

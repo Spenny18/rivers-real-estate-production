@@ -11,6 +11,7 @@ import {
   SYNCED_RESOURCES,
   currentSyncJob,
   startSyncJob,
+  startTextBackfillJob,
   syncTextsForContact,
 } from "./fub-sync";
 
@@ -362,6 +363,41 @@ export function registerCrmRoutes(app: Express, deps: { requireAuth: Middleware 
   /** Live progress of the running sync, or the last one that finished. */
   app.get("/api/admin/crm/sync-job", requireAuth, (_req, res) => {
     res.json({ job: currentSyncJob() });
+  });
+
+  /**
+   * Walk every contact once and pull their texts.
+   *
+   * Follow Up Boss has no account-wide text listing, so the scheduled sync
+   * cannot mirror texts and the CRM fetches them per contact on demand. That
+   * leaves every contact nobody has clicked with no texts stored anywhere but
+   * Follow Up Boss — fine for a dashboard, useless as an export. This closes
+   * that gap in one deliberate pass, and resumes where it left off.
+   */
+  app.post("/api/admin/crm/backfill-texts", requireAuth, (req, res) => {
+    if (!fubConfigured()) {
+      return res.status(400).json({ message: "FUB_API_KEY not set on server" });
+    }
+    const { started, job } = startTextBackfillJob({ restart: !!req.body?.restart });
+    res.status(202).json({ started, job });
+  });
+
+  /**
+   * How much call audio there is to bring across, and roughly how big.
+   *
+   * Reads what is already mirrored — no requests to Follow Up Boss — so it is
+   * safe to call from a page load.
+   */
+  app.get("/api/admin/crm/recordings", requireAuth, (_req, res) => {
+    const inv = storage.crmRecordingInventory();
+    res.json({
+      ...inv,
+      // The reason this endpoint exists rather than a number in a doc.
+      note:
+        "Recording audio is hosted by Follow Up Boss and the stored URLs stop " +
+        "resolving when the account closes. Downloading is a one-time job that " +
+        "has to happen before cancelling.",
+    });
   });
 
   app.get("/api/admin/crm/sync-runs", requireAuth, (_req, res) => {
