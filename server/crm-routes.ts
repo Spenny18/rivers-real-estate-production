@@ -6,7 +6,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { storage } from "./storage";
 import { fubConfigured, probe, testConnection } from "./fub-client";
-import { RESOURCE_SPECS, currentSyncJob, startSyncJob } from "./fub-sync";
+import { RESOURCE_SPECS, currentSyncJob, startSyncJob, syncTextsForContact } from "./fub-sync";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
 
@@ -102,6 +102,50 @@ function dtoSyncRun(r: any) {
 }
 
 /**
+ * The pipeline board's columns.
+ *
+ * Built from two sources deliberately. The synced stage list gives order and
+ * keeps a stage with no deals visible as an empty column, which is most of the
+ * point of a board. The deals themselves are the backstop: each one carries
+ * its own stageId AND stageName, so any stage the synced list is missing is
+ * still rendered rather than silently swallowing its deals.
+ *
+ * That second half is what makes this robust to the mistake it replaces. The
+ * board previously came from /v1/stages alone, which returns people stages —
+ * a different id space entirely — so every column was empty while the deal
+ * count above it read 128. Deriving from the deals cannot desync that way,
+ * because the ids being grouped are the ids being matched.
+ */
+function dealStageBoard(
+  stages: Array<{ fubId: string; name: string | null; sortOrder: number }>,
+  deals: Array<{ stageFubId: string | null; stageName: string | null; value: number | null }>,
+): Array<{ fubId: string; name: string | null; count: number; value: number }> {
+  const columns = new Map<string, { fubId: string; name: string | null; sortOrder: number }>();
+  for (const s of stages) columns.set(s.fubId, s);
+  for (const d of deals) {
+    if (!d.stageFubId || columns.has(d.stageFubId)) continue;
+    columns.set(d.stageFubId, {
+      fubId: d.stageFubId,
+      name: d.stageName,
+      // Unknown to the synced order; park these after the known stages
+      // rather than interleaving them at position zero.
+      sortOrder: Number.MAX_SAFE_INTEGER,
+    });
+  }
+  return Array.from(columns.values())
+    .sort((a, b) => a.sortOrder - b.sortOrder || (a.name ?? "").localeCompare(b.name ?? ""))
+    .map((s) => {
+      const inStage = deals.filter((d) => d.stageFubId === s.fubId);
+      return {
+        fubId: s.fubId,
+        name: s.name,
+        count: inStage.length,
+        value: inStage.reduce((sum, d) => sum + (d.value ?? 0), 0),
+      };
+    });
+}
+
+/**
  * Columns reading 100% null across a run almost certainly mapped to a field
  * name Follow Up Boss doesn't use. Surfaced so an empty column is diagnosed
  * as a mapping bug rather than mistaken for an empty CRM.
@@ -159,15 +203,7 @@ export function registerCrmRoutes(app: Express, deps: { requireAuth: Middleware 
         open: open.length,
         openValue: open.reduce((s, d) => s + (d.value ?? 0), 0),
         wonValue: won.reduce((s, d) => s + (d.value ?? 0), 0),
-        stages: stages.map((s) => {
-          const inStage = deals.filter((d) => d.stageFubId === s.fubId);
-          return {
-            fubId: s.fubId,
-            name: s.name,
-            count: inStage.length,
-            value: inStage.reduce((sum, d) => sum + (d.value ?? 0), 0),
-          };
-        }),
+        stages: dealStageBoard(stages, deals),
       },
       activity: {
         calls: storage.listCrmActivities({ kind: "call", limit: 1000 }).length,
@@ -201,11 +237,30 @@ export function registerCrmRoutes(app: Express, deps: { requireAuth: Middleware 
   });
 
   /** One contact with their full interleaved history. */
-  app.get("/api/admin/crm/contacts/:fubId", requireAuth, (req, res) => {
+  app.get("/api/admin/crm/contacts/:fubId", requireAuth, async (req, res) => {
     const fubId = String((req.params as any).fubId ?? "");
     const contact = storage.getCrmContact(fubId);
     if (!contact) return res.status(404).json({ message: "Contact not found" });
+
+    // Texts are the one resource with no account-wide listing — Follow Up Boss
+    // requires a personId — so they are pulled here, for this contact, while
+    // their history is being assembled. One request against an endpoint that
+    // has already returned a page in this session; awaited so the texts appear
+    // in the same response rather than on a second click.
+    //
+    // Never fatal: this drawer's calls, events and deals come from the mirror
+    // and render fine without it.
+    let texts: { ok: boolean; fetched: number; error?: string } = { ok: true, fetched: 0 };
+    if (fubConfigured()) {
+      try {
+        texts = await syncTextsForContact(fubId);
+      } catch (e: any) {
+        texts = { ok: false, fetched: 0, error: String(e?.message ?? e).slice(0, 200) };
+      }
+    }
+
     res.json({
+      texts,
       contact: dtoContact(contact),
       activities: storage.listCrmActivities({ contactFubId: fubId, limit: 200 }).map(dtoActivity),
       // Filtered in the query rather than after a global limit — otherwise a

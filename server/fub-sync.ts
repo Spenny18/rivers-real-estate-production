@@ -5,28 +5,42 @@
 // doesn't include that add-on must not stop People from syncing.
 //
 // ---------------------------------------------------------------------------
-// MAPPING UNDER UNCERTAINTY
+// MAPPING
 //
-// The FUB reference was unreachable from the environment this was written in,
-// so the field names below are informed guesses, not verified ones. Three
-// things keep that honest rather than fragile:
+// The field names below are the ones a live Follow Up Boss account actually
+// returns, read off /api/admin/crm/probe against the production key. They are
+// no longer guesses — where a comment says a resource uses a particular field,
+// that was observed.
 //
-//   1. `pick()` accepts a list of candidate field names and takes the first
-//      that is present, so a resource that calls it `created` rather than
-//      `createdAt` still maps.
-//   2. The untouched payload goes into `raw` on every row. Nothing the API
-//      returned is ever discarded, so a column found to be mapped wrongly can
-//      be recomputed from data already stored.
-//   3. Each run records how often every normalized column came out null
-//      (`nullRates`). A column that mapped to a field FUB doesn't use reads
-//      100% null and is surfaced in the admin as a mapping warning — the
-//      mistake announces itself instead of looking like an empty CRM.
+// `pick()` still takes candidate lists, now for a different reason: the
+// confirmed name goes first and the old guesses stay behind it, so a tenant on
+// a different API revision degrades to the previous behaviour instead of
+// mapping to null. The other two safeguards are unchanged: every row keeps the
+// untouched payload in `raw`, and each run records per-column null rates so a
+// column that stops mapping announces itself in the admin.
 //
-// Run the probe on the Integrations card to see the real field names, then
-// tighten the candidate lists here.
+// Things the probe settled, each of which was mapped wrongly before:
+//
+//   * Deal stages are NOT /v1/stages. That endpoint returns the twelve PEOPLE
+//     stages (Lead, Sphere, Trash, … — it even carries `peopleCount`). Deal
+//     stages arrive nested inside /v1/pipelines as `stages`, and deals carry
+//     `stageId`/`stageName` from that set. Building the board from /v1/stages
+//     gave twelve columns that no deal could ever match.
+//   * Tasks carry BOTH `completed` (a timestamp) and `isCompleted` (the
+//     boolean). Reading the first non-empty of the two made every finished
+//     task look open.
+//   * Tasks spell the assignee `AssignedTo`, capitalised, unlike every other
+//     resource.
+//   * Calls have no `direction`; they have `isIncoming`. And their `name` is
+//     the CONTACT's name, not a title for the call.
+//   * Events have `occurred`, which is what the activity feed should sort on,
+//     distinct from `created`.
+//   * Appointments have no `personId` at all — they link through `invitees`.
+//   * /v1/textMessages cannot be listed account-wide; it 400s without a
+//     personId or thread. Texts are fetched per contact instead, on demand.
 
 import { storage } from "./storage";
-import { fubGetAll, fubConfigured, type PageResult } from "./fub-client";
+import { fubGetAll, fubConfigured, sinceIdCursor, type PageResult } from "./fub-client";
 
 // ---- Field helpers ---------------------------------------------------------
 
@@ -120,6 +134,11 @@ function nullRates(rows: Array<Record<string, any>>, fields: string[]): Record<s
 
 // ---- Per-resource mappers --------------------------------------------------
 
+/**
+ * People: id, created, updated, lastActivity, name, firstName, lastName,
+ * stage (the name, as a string), stageId, source, assignedTo, tags, emails,
+ * phones. Confirmed by probe; this one mapped correctly from the start.
+ */
 function mapContact(p: any, syncedAt: string): Record<string, any> {
   const first = str(pick(p, ["firstName", "first_name", "givenName"]));
   const last = str(pick(p, ["lastName", "last_name", "familyName"]));
@@ -145,6 +164,7 @@ function mapContact(p: any, syncedAt: string): Record<string, any> {
   };
 }
 
+/** Pipelines: id, name, description, orderWeight, stages (the deal stages). */
 function mapPipeline(p: any, syncedAt: string): Record<string, any> {
   return {
     fubId: String(idOf(p) ?? ""),
@@ -154,32 +174,47 @@ function mapPipeline(p: any, syncedAt: string): Record<string, any> {
   };
 }
 
-function mapStage(s: any, syncedAt: string): Record<string, any> {
+/**
+ * A deal stage, as carried inside a pipeline's `stages`.
+ *
+ * These are the ids deals reference. The separate /v1/stages endpoint returns
+ * people stages from a different id space, which is why the board used to
+ * render twelve columns that never matched a deal.
+ */
+function mapStage(s: any, pipelineFubId: string | null, syncedAt: string): Record<string, any> {
   return {
     fubId: String(idOf(s) ?? ""),
-    pipelineFubId: idOf(pick(s, ["pipelineId", "pipeline"])),
+    pipelineFubId: idOf(pick(s, ["pipelineId", "pipeline"])) ?? pipelineFubId,
     name: nameOf(s),
-    sortOrder: Number(pick(s, ["order", "sortOrder", "position"]) ?? 0) || 0,
+    sortOrder: Number(pick(s, ["orderWeight", "order", "sortOrder", "position"]) ?? 0) || 0,
     raw: jsonOf(s),
     syncedAt,
   };
 }
 
+/**
+ * Deals: id, name, status, price, createdAt, pipelineId, pipelineName,
+ * stageId, stageName, projectedCloseDate, people.
+ *
+ * Note there is no `updated` field on this resource at all, so fubUpdatedAt
+ * stays null and deals cannot sync incrementally on a timestamp. At 128 rows
+ * that costs two pages an hour.
+ */
 function mapDeal(d: any, syncedAt: string): Record<string, any> {
-  const stage = pick(d, ["stage", "dealStage"]);
   return {
     fubId: String(idOf(d) ?? ""),
     name: str(pick(d, ["name", "title", "description"])),
     value: num(pick(d, ["price", "value", "amount", "dealValue"])),
-    stageFubId: idOf(stage) ?? idOf(pick(d, ["stageId"])),
-    stageName: nameOf(stage) ?? str(pick(d, ["stageName"])),
+    stageFubId: idOf(pick(d, ["stageId"])) ?? idOf(pick(d, ["stage", "dealStage"])),
+    stageName: str(pick(d, ["stageName"])) ?? nameOf(pick(d, ["stage", "dealStage"])),
     pipelineFubId: idOf(pick(d, ["pipelineId", "pipeline"])),
     status: str(pick(d, ["status", "state"])),
+    // The contact is in `people`, an array — there is no personId here.
     contactFubId:
       idOf(pick(d, ["personId", "person", "contactId", "contact"])) ??
       (Array.isArray(d?.people) ? idOf(d.people[0]) : null),
     closedDate: iso(pick(d, ["closedDate", "closeDate", "projectedCloseDate"])),
-    fubCreatedAt: iso(pick(d, ["created", "createdAt"])),
+    fubCreatedAt: iso(pick(d, ["createdAt", "created"])),
     fubUpdatedAt: iso(pick(d, ["updated", "updatedAt"])),
     raw: jsonOf(d),
     syncedAt,
@@ -189,42 +224,166 @@ function mapDeal(d: any, syncedAt: string): Record<string, any> {
 /**
  * Events, calls, texts, tasks and appointments all land in crm_activities.
  * `kind` keeps them apart; the uid namespaces FUB's per-resource ids.
+ *
+ * They get one mapper each rather than one generic mapper with exceptions:
+ * the five payloads share almost no field names, and the generic version
+ * mis-mapped four of the five (see the header). Every mapper fills the same
+ * shape, so the timeline can still interleave them.
  */
-function mapActivity(a: any, kind: string, syncedAt: string): Record<string, any> {
+function activityBase(a: any, kind: string, syncedAt: string): Record<string, any> {
   const fubId = idOf(a);
-  const occurred = iso(
-    pick(a, ["created", "createdAt", "occurredAt", "date", "sentAt", "startTime", "start"]),
-  );
-  const due = iso(pick(a, ["dueDate", "dueAt", "due", "startTime", "start"]));
-
-  let title = str(pick(a, ["type", "subject", "name", "title"]));
-  let body = str(pick(a, ["message", "body", "description", "note", "text"]));
-  if (kind === "call") {
-    title = title ?? "Call";
-    body = body ?? str(pick(a, ["notes", "summary"]));
-  } else if (kind === "text") {
-    title = title ?? "Text message";
-  }
-
   return {
-    uid: `${kind}:${fubId ?? `${occurred ?? syncedAt}-${Math.random().toString(36).slice(2, 8)}`}`,
+    uid: `${kind}:${fubId ?? `${syncedAt}-${Math.random().toString(36).slice(2, 8)}`}`,
     kind,
     fubId,
-    contactFubId: idOf(pick(a, ["personId", "person", "contactId", "contact"])),
-    title,
-    body: body ? body.slice(0, 4000) : null,
-    direction: str(pick(a, ["direction", "isIncoming", "inbound"])),
-    outcome: str(pick(a, ["outcome", "result", "status", "disposition"])),
-    durationSeconds:
-      num(pick(a, ["duration", "durationSeconds", "callDuration"])) != null
-        ? Math.round(num(pick(a, ["duration", "durationSeconds", "callDuration"]))!)
-        : null,
-    occurredAt: occurred,
-    dueAt: kind === "task" || kind === "appointment" ? due : null,
-    completed: bool(pick(a, ["completed", "isCompleted", "done"])),
-    assignedTo: nameOf(pick(a, ["assignedTo", "assignedUser", "user", "owner"])),
+    contactFubId: null,
+    title: null,
+    body: null,
+    direction: null,
+    outcome: null,
+    durationSeconds: null,
+    occurredAt: null,
+    dueAt: null,
+    completed: false,
+    assignedTo: null,
     raw: jsonOf(a),
     syncedAt,
+  };
+}
+
+/** Trim and cap free text bound for the `body` column. */
+function body(v: any): string | null {
+  const s = str(v);
+  return s ? s.slice(0, 4000) : null;
+}
+
+/** Events: id, occurred, created, personId, message, description, type, source. */
+function mapEvent(e: any, syncedAt: string): Record<string, any> {
+  return {
+    ...activityBase(e, "event", syncedAt),
+    contactFubId: idOf(pick(e, ["personId", "person", "contactId"])),
+    title: str(pick(e, ["type", "subject", "title"])),
+    // `occurred` is when it happened; `created` is when FUB recorded it. The
+    // feed sorts on this, so prefer the former.
+    occurredAt: iso(pick(e, ["occurred", "created", "createdAt", "date"])),
+    body: body(pick(e, ["message", "description", "pageTitle", "note"])),
+    outcome: str(pick(e, ["source"])),
+  };
+}
+
+/** Calls: id, personId, note, outcome, isIncoming, duration, startedAt, userName. */
+function mapCall(c: any, syncedAt: string): Record<string, any> {
+  const duration = num(pick(c, ["duration", "durationSeconds", "callDuration"]));
+  const incoming = pick(c, ["isIncoming", "inbound"]);
+  return {
+    ...activityBase(c, "call", syncedAt),
+    contactFubId: idOf(pick(c, ["personId", "person", "contactId"])),
+    // A call's `name`/`firstName`/`lastName` are the CONTACT's, not a subject
+    // line — using them titled every call with the person it was already
+    // filed under.
+    title: "Call",
+    body: body(pick(c, ["note", "notes", "summary"])),
+    direction:
+      incoming === undefined
+        ? str(pick(c, ["direction"]))
+        : bool(incoming)
+          ? "inbound"
+          : "outbound",
+    outcome: str(pick(c, ["outcome", "result", "disposition"])),
+    durationSeconds: duration != null ? Math.round(duration) : null,
+    occurredAt: iso(pick(c, ["startedAt", "created", "createdAt"])),
+    assignedTo: nameOf(pick(c, ["userName", "user", "assignedTo"])),
+  };
+}
+
+/** Tasks: id, personId, name, type, isCompleted, completed, dueDate, AssignedTo. */
+function mapTask(t: any, syncedAt: string): Record<string, any> {
+  return {
+    ...activityBase(t, "task", syncedAt),
+    contactFubId: idOf(pick(t, ["personId", "person", "contactId"])),
+    // `name` is the task ("Send CMA"); `type` is its category. The generic
+    // mapper preferred `type` and labelled every task with its category.
+    title: str(pick(t, ["name", "title", "subject"])) ?? str(pick(t, ["type"])),
+    outcome: str(pick(t, ["type"])),
+    occurredAt: iso(pick(t, ["created", "createdAt"])),
+    dueAt: iso(pick(t, ["dueDateTime", "dueDate", "dueAt", "due"])),
+    // `completed` is a TIMESTAMP here, not a flag — truthy as a string on a
+    // finished task and absent on an open one, which the old boolean coercion
+    // read as false either way. `isCompleted` is the actual boolean; the
+    // timestamp is a sound fallback precisely because it is only ever set.
+    completed: t?.isCompleted !== undefined ? bool(t.isCompleted) : !!str(pick(t, ["completed"])),
+    // Capitalised on this resource alone.
+    assignedTo: nameOf(pick(t, ["AssignedTo", "assignedTo", "assignedUser", "user"])),
+  };
+}
+
+/** Appointments: id, title, description, start, end, invitees, type, outcome. */
+function mapAppointment(a: any, syncedAt: string): Record<string, any> {
+  const start = iso(pick(a, ["start", "startTime"]));
+  const end = Date.parse(str(pick(a, ["end", "endTime"])) ?? "");
+  const startMs = Date.parse(start ?? "");
+  return {
+    ...activityBase(a, "appointment", syncedAt),
+    // No personId on this resource — the contact is in `invitees`.
+    contactFubId: inviteePersonId(a?.invitees),
+    title: str(pick(a, ["title", "name", "subject"])) ?? nameOf(pick(a, ["type"])),
+    body: body(pick(a, ["description", "location", "note"])),
+    outcome: nameOf(pick(a, ["outcome"])),
+    durationSeconds:
+      Number.isFinite(end) && Number.isFinite(startMs) && end > startMs
+        ? Math.round((end - startMs) / 1000)
+        : null,
+    occurredAt: start,
+    dueAt: start,
+    // An appointment is done once its start time has passed; FUB has no flag.
+    completed: Number.isFinite(startMs) ? startMs < Date.now() : false,
+  };
+}
+
+/**
+ * The contact an appointment is with.
+ *
+ * `invitees` mixes the agent and the client, and the exact member names could
+ * not be confirmed from the probe (it reports field names, not values). So
+ * this prefers an explicit personId, then an entry that identifies itself as a
+ * person, and only then the first id present. A wrong guess leaves the
+ * appointment unlinked and shows up as a null rate rather than filing it under
+ * the wrong contact — and `raw` keeps the invitee list either way.
+ */
+function inviteePersonId(invitees: any): string | null {
+  if (!Array.isArray(invitees) || invitees.length === 0) return null;
+  for (const key of ["personId", "person_id"]) {
+    for (const inv of invitees) {
+      const v = idOf(pick(inv, [key]));
+      if (v) return v;
+    }
+  }
+  const person = invitees.find(
+    (i: any) => i && typeof i === "object" && /person|contact|lead/i.test(String(i.type ?? "")),
+  );
+  return person ? idOf(person) : null;
+}
+
+/**
+ * Text messages, fetched per contact — see syncTextsForContact. The shape is
+ * the one resource the probe could not report, because listing the collection
+ * needs a personId, so this stays candidate-based throughout.
+ */
+function mapText(t: any, personId: string, syncedAt: string): Record<string, any> {
+  const incoming = pick(t, ["isIncoming", "inbound"]);
+  return {
+    ...activityBase(t, "text", syncedAt),
+    contactFubId: idOf(pick(t, ["personId", "person", "contactId"])) ?? personId,
+    title: "Text message",
+    body: body(pick(t, ["message", "body", "text", "content"])),
+    direction:
+      incoming === undefined
+        ? str(pick(t, ["direction"]))
+        : bool(incoming)
+          ? "inbound"
+          : "outbound",
+    occurredAt: iso(pick(t, ["sentAt", "created", "createdAt", "sent"])),
+    assignedTo: nameOf(pick(t, ["userName", "user", "assignedTo"])),
   };
 }
 
@@ -239,21 +398,24 @@ export interface ResourceSpec {
   watchFields: string[];
   /** Query param name for an incremental "changed since" filter, if any. */
   incrementalParam?: string;
+  /**
+   * Append-only: records are never revised after they are written, so the run
+   * can resume from the highest id already mirrored instead of re-reading the
+   * collection. Mutually exclusive with incrementalParam.
+   */
+  appendOnly?: boolean;
+  /** Ceiling for one run. Only matters for a first, non-incremental pull. */
+  maxRecords?: number;
   optional?: boolean;
   note?: string;
 }
 
 export const RESOURCE_SPECS: ResourceSpec[] = [
   {
+    // Also the source of deal stages, which arrive nested here as `stages`.
     resource: "pipelines",
     path: "/pipelines",
     collectionKey: "pipelines",
-    watchFields: ["name"],
-  },
-  {
-    resource: "stages",
-    path: "/stages",
-    collectionKey: "stages",
     watchFields: ["name"],
   },
   {
@@ -272,33 +434,35 @@ export const RESOURCE_SPECS: ResourceSpec[] = [
     note: "Deals is a Follow Up Boss add-on. A 403 here means the plan doesn't include it.",
   },
   {
+    // The big one — tens of thousands of rows on an established account, and
+    // an event is never rewritten once logged, so this resumes by id.
     resource: "events",
     path: "/events",
     collectionKey: "events",
     watchFields: ["contactFubId", "occurredAt"],
+    appendOnly: true,
+    maxRecords: 100_000,
   },
   {
     resource: "calls",
     path: "/calls",
     collectionKey: "calls",
     watchFields: ["contactFubId", "occurredAt"],
+    appendOnly: true,
+    maxRecords: 50_000,
     optional: true,
   },
   {
-    resource: "textMessages",
-    path: "/textMessages",
-    collectionKey: "textMessages",
-    watchFields: ["contactFubId", "occurredAt"],
-    optional: true,
-  },
-  {
+    // Not append-only: a task's whole point is being completed later.
     resource: "tasks",
     path: "/tasks",
     collectionKey: "tasks",
     watchFields: ["title", "dueAt"],
+    maxRecords: 50_000,
     optional: true,
   },
   {
+    // Rescheduled and given outcomes after the fact, so re-read in full.
     resource: "appointments",
     path: "/appointments",
     collectionKey: "appointments",
@@ -307,12 +471,19 @@ export const RESOURCE_SPECS: ResourceSpec[] = [
   },
 ];
 
-const ACTIVITY_KIND: Record<string, string> = {
-  events: "event",
-  calls: "call",
-  textMessages: "text",
-  tasks: "task",
-  appointments: "appointment",
+// textMessages is deliberately absent. GET /v1/textMessages rejects a bare
+// listing outright — "personId, threadId, phone, toNumber, fromNumber,
+// sharedInboxId, groupTextId, participants, or id list must be specified" —
+// so there is no account-wide pull to schedule. Texts are fetched for one
+// contact at a time by syncTextsForContact, when their history is opened.
+
+type ActivityMapper = (r: any, syncedAt: string) => Record<string, any>;
+
+const ACTIVITY_MAPPERS: Record<string, ActivityMapper | undefined> = {
+  events: mapEvent,
+  calls: mapCall,
+  tasks: mapTask,
+  appointments: mapAppointment,
 };
 
 export interface SyncResult {
@@ -352,22 +523,47 @@ export async function syncResource(
     trigger,
   } as any);
 
-  // Incremental where the endpoint supports it: ask only for what changed
-  // since the last good run, minus an hour of overlap so nothing is missed
-  // at the boundary.
+  // Ask only for what is new, two ways.
+  //
+  //   * A timestamp filter where the endpoint takes one, minus an hour of
+  //     overlap so nothing falls through the boundary.
+  //   * An id cursor for append-only resources, which is the only thing that
+  //     makes /events tractable: thirty thousand rows is three hundred pages
+  //     an hour otherwise, and every one of them a record already mirrored.
+  //
+  // Both are requests the API may refuse, so `usedIncremental` is remembered
+  // and a 4xx on the first page retries the resource in full below.
   const params: Record<string, string | number | undefined> = {};
+  let startCursor: string | undefined;
   let cursor: string | null = null;
-  if (spec.incrementalParam && !opts.full) {
-    const last = storage.lastCrmCursor(spec.resource);
-    if (last) {
-      const since = new Date(Date.parse(last) - 60 * 60_000).toISOString();
-      params[spec.incrementalParam] = since;
-    }
+  const lastCursor = opts.full ? null : storage.lastCrmCursor(spec.resource);
+
+  if (spec.incrementalParam && lastCursor) {
+    const since = new Date(Date.parse(lastCursor) - 60 * 60_000).toISOString();
+    if (!Number.isNaN(Date.parse(since))) params[spec.incrementalParam] = since;
+  } else if (spec.appendOnly && lastCursor && /^\d+$/.test(lastCursor)) {
+    startCursor = sinceIdCursor(lastCursor);
   }
+  const usedIncremental = !!params[spec.incrementalParam ?? ""] || !!startCursor;
 
   let page: PageResult;
   try {
-    page = await fubGetAll(spec.path, spec.collectionKey, { params });
+    page = await fubGetAll(spec.path, spec.collectionKey, {
+      params,
+      startCursor,
+      maxRecords: spec.maxRecords,
+    });
+    // A rejected incremental filter must not read as an outage. Retrying the
+    // whole resource unfiltered costs one wasted request and self-corrects,
+    // where reporting the 4xx would leave the resource stuck refusing to sync
+    // every hour for as long as the cursor stayed in place.
+    const status = page.status ?? 0;
+    if (!page.ok && usedIncremental && status >= 400 && status < 500) {
+      console.warn(
+        `[crm-sync] ${spec.resource}: incremental request rejected (HTTP ${status}) — retrying in full`,
+      );
+      page = await fubGetAll(spec.path, spec.collectionKey, { maxRecords: spec.maxRecords });
+    }
   } catch (e: any) {
     storage.finishCrmSyncRun(run.id, {
       status: "error",
@@ -386,18 +582,16 @@ export async function syncResource(
   }
 
   const syncedAt = new Date().toISOString();
-  const kind = ACTIVITY_KIND[spec.resource];
+  const activityMapper = ACTIVITY_MAPPERS[spec.resource];
   let mapped: Array<Record<string, any>>;
-  if (kind) {
-    mapped = page.records.map((r) => mapActivity(r, kind, syncedAt));
+  if (activityMapper) {
+    mapped = page.records.map((r) => activityMapper(r, syncedAt));
   } else if (spec.resource === "people") {
     mapped = page.records.map((r) => mapContact(r, syncedAt));
   } else if (spec.resource === "deals") {
     mapped = page.records.map((r) => mapDeal(r, syncedAt));
-  } else if (spec.resource === "pipelines") {
-    mapped = page.records.map((r) => mapPipeline(r, syncedAt));
   } else {
-    mapped = page.records.map((r) => mapStage(r, syncedAt));
+    mapped = page.records.map((r) => mapPipeline(r, syncedAt));
   }
   // A record with no id can't be upserted or de-duplicated.
   mapped = mapped.filter((m) => (m.fubId ?? m.uid) && m.fubId !== "");
@@ -405,26 +599,54 @@ export async function syncResource(
   let inserted = 0;
   let updated = 0;
   if (mapped.length > 0) {
-    const r = kind
+    const r = activityMapper
       ? storage.upsertCrmActivities(mapped)
       : spec.resource === "people"
         ? storage.upsertCrmContacts(mapped)
         : spec.resource === "deals"
           ? storage.upsertCrmDeals(mapped)
-          : spec.resource === "pipelines"
-            ? storage.upsertCrmPipelines(mapped)
-            : storage.upsertCrmStages(mapped);
+          : storage.upsertCrmPipelines(mapped);
     inserted = r.inserted;
     updated = r.updated;
   }
 
-  // High-water mark for the next incremental run: the newest updated
-  // timestamp actually seen, not "now" — so a clock skew can't skip records.
+  // Deal stages ride along inside the pipelines payload, and are replaced
+  // rather than upserted so a stage retired in Follow Up Boss stops rendering
+  // as a permanently empty column — and so the twelve people stages an earlier
+  // version wrote into this table are cleared out on the first run.
+  if (spec.resource === "pipelines") {
+    const stages: Array<Record<string, any>> = [];
+    for (const p of page.records) {
+      const pipelineId = idOf(p);
+      const nested = Array.isArray(p?.stages) ? p.stages : [];
+      for (const s of nested) {
+        const row = mapStage(s, pipelineId, syncedAt);
+        if (row.fubId) stages.push(row);
+      }
+    }
+    if (page.ok) storage.replaceCrmStages(stages);
+  }
+
+  // High-water mark for the next run, in whichever currency this resource
+  // resumes on. Both take it from the records actually seen, never from "now":
+  // a clock skew or a page that failed late would otherwise advance the mark
+  // past records this run never stored, and they would never be fetched again.
+  //
+  // A run that fetched nothing keeps the previous mark rather than clearing
+  // it — that is the normal shape of an up-to-date incremental run.
   if (spec.incrementalParam) {
     const stamps = mapped
       .map((m) => m.fubUpdatedAt ?? m.occurredAt)
       .filter((s): s is string => typeof s === "string");
-    cursor = stamps.length > 0 ? stamps.sort().slice(-1)[0] : storage.lastCrmCursor(spec.resource);
+    cursor = stamps.length > 0 ? stamps.sort().slice(-1)[0] : lastCursor;
+  } else if (spec.appendOnly) {
+    const ids = mapped
+      .map((m) => Number(m.fubId))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    // Only advance on a clean run: stopping at a cutoff or an error mid-page
+    // leaves a gap, and the highest id seen would skip straight over it.
+    cursor =
+      page.ok && !page.truncated && ids.length > 0 ? String(Math.max(...ids)) : lastCursor;
   }
 
   // A run that hit a safety cutoff is "partial", never "ok". Reporting it as
@@ -515,6 +737,43 @@ export async function syncAll(
 
 function plannedSpecs(only?: string[]): ResourceSpec[] {
   return only?.length ? RESOURCE_SPECS.filter((s) => only.includes(s.resource)) : RESOURCE_SPECS;
+}
+
+// ---- Text messages, one contact at a time ----------------------------------
+
+/**
+ * Mirror a single contact's texts.
+ *
+ * Unlike every other resource this cannot be scheduled: GET /v1/textMessages
+ * refuses a bare listing and demands a personId (or a thread, phone number or
+ * id list) — so there is no account-wide collection to walk hourly. Fetching
+ * per contact would be 4,900 requests an hour; fetching for the one contact
+ * whose history is on screen is one request, and it lands in the same
+ * crm_activities timeline as their calls and events.
+ *
+ * Failure is deliberately quiet. This runs while rendering a contact drawer
+ * that already has their calls, events and deals from the mirror; a texting
+ * endpoint being unavailable should cost the texts, not the drawer.
+ */
+export async function syncTextsForContact(
+  personFubId: string,
+): Promise<{ ok: boolean; fetched: number; error?: string }> {
+  if (!fubConfigured()) return { ok: false, fetched: 0, error: "FUB_API_KEY not set" };
+
+  const page = await fubGetAll("/textMessages", "textMessages", {
+    params: { personId: personFubId },
+    maxRecords: 2_000,
+  });
+  if (!page.ok && page.records.length === 0) {
+    return { ok: false, fetched: 0, error: page.error ?? `HTTP ${page.status}` };
+  }
+
+  const syncedAt = new Date().toISOString();
+  const mapped = page.records
+    .map((r) => mapText(r, personFubId, syncedAt))
+    .filter((m) => m.fubId);
+  if (mapped.length > 0) storage.upsertCrmActivities(mapped);
+  return { ok: page.ok, fetched: mapped.length };
 }
 
 // ---- Background job --------------------------------------------------------

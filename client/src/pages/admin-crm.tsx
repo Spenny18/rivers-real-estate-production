@@ -244,10 +244,15 @@ export default function AdminCrmPage() {
   const { data: deals = [] } = useQuery<CrmDeal[]>({
     queryKey: ["/api/admin/crm/deals?limit=500"],
   });
-  const { data: detail } = useQuery<{
+  // Opening a contact also pulls their texts live — Follow Up Boss has no
+  // account-wide text listing, so this is the only place they can be fetched.
+  // That makes this request slower than the rest of the page and worth its own
+  // loading state.
+  const { data: detail, isFetching: detailFetching } = useQuery<{
     contact: CrmContact;
     activities: CrmActivity[];
     deals: CrmDeal[];
+    texts?: { ok: boolean; fetched: number; error?: string };
   }>({
     queryKey: [`/api/admin/crm/contacts/${openContact}`],
     enabled: !!openContact,
@@ -843,6 +848,11 @@ export default function AdminCrmPage() {
                   showing empty is a mapping mistake or a genuinely empty CRM.
                 </span>
               </div>
+              <p className="text-[12px] text-muted-foreground mb-4 max-w-2xl leading-relaxed border-l-2 border-border pl-3">
+                Text messages aren't in this list on purpose. Follow Up Boss won't return them
+                account-wide — the endpoint requires a specific contact — so they're pulled for one
+                person at a time, when you open their history. Everything else mirrors hourly.
+              </p>
               <div className="space-y-1.5" data-testid="crm-sync-runs">
                 {(overview?.syncRuns.length ?? 0) === 0 ? (
                   <Card>
@@ -991,8 +1001,11 @@ export default function AdminCrmPage() {
       <Dialog open={!!openContact} onOpenChange={(o) => !o && setOpenContact(null)}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="font-serif text-2xl">
+            <DialogTitle className="font-serif text-2xl flex items-center gap-2.5">
               {detail?.contact.name ?? "Contact"}
+              {detailFetching && (
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground shrink-0" />
+              )}
             </DialogTitle>
           </DialogHeader>
           {detail && (
@@ -1041,6 +1054,12 @@ export default function AdminCrmPage() {
                 <div className="font-display text-[10px] tracking-[0.18em] text-muted-foreground mb-2">
                   HISTORY
                 </div>
+                {detail.texts && !detail.texts.ok && (
+                  <p className="text-[12px] text-muted-foreground mb-2 border-l-2 border-border pl-3 leading-relaxed">
+                    Couldn't load this contact's texts just now — calls, events and tasks below are
+                    from the hourly mirror and are unaffected. {detail.texts.error}
+                  </p>
+                )}
                 {detail.activities.length === 0 ? (
                   <p className="text-[13px] text-muted-foreground">Nothing recorded yet.</p>
                 ) : (
