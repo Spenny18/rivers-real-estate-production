@@ -22,6 +22,12 @@ import {
   bookingAvailability,
   bookingDateOverrides,
   bookings,
+  crmContacts,
+  crmPipelines,
+  crmStages,
+  crmDeals,
+  crmActivities,
+  crmSyncRuns,
 } from "@shared/schema";
 import type {
   User,
@@ -66,6 +72,13 @@ import type {
   InsertBookingDateOverride,
   Booking,
   InsertBooking,
+  CrmContact,
+  CrmPipeline,
+  CrmStage,
+  CrmDeal,
+  CrmActivity,
+  CrmSyncRun,
+  InsertCrmSyncRun,
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
@@ -536,6 +549,110 @@ sqlite.exec(`
   CREATE INDEX IF NOT EXISTS idx_bookings_starts_at ON bookings(starts_at);
   CREATE INDEX IF NOT EXISTS idx_bookings_status ON bookings(status, starts_at);
   CREATE INDEX IF NOT EXISTS idx_bookings_event_type ON bookings(event_type_id, starts_at);
+
+  -- CRM mirror of the Follow Up Boss account, refreshed hourly. Every table
+  -- keeps the untouched payload in a raw column, so a normalized column that
+  -- mapped to the wrong field can be re-derived without re-pulling the API.
+  CREATE TABLE IF NOT EXISTS crm_contacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fub_id TEXT NOT NULL UNIQUE,
+    name TEXT,
+    first_name TEXT,
+    last_name TEXT,
+    email TEXT,
+    phone TEXT,
+    stage TEXT,
+    source TEXT,
+    assigned_to TEXT,
+    tags TEXT NOT NULL DEFAULT '[]',
+    fub_created_at TEXT,
+    fub_updated_at TEXT,
+    last_activity_at TEXT,
+    raw TEXT NOT NULL DEFAULT '{}',
+    synced_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_crm_contacts_email ON crm_contacts(email);
+  CREATE INDEX IF NOT EXISTS idx_crm_contacts_stage ON crm_contacts(stage);
+  CREATE INDEX IF NOT EXISTS idx_crm_contacts_updated ON crm_contacts(fub_updated_at DESC);
+
+  CREATE TABLE IF NOT EXISTS crm_pipelines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fub_id TEXT NOT NULL UNIQUE,
+    name TEXT,
+    raw TEXT NOT NULL DEFAULT '{}',
+    synced_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS crm_stages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fub_id TEXT NOT NULL UNIQUE,
+    pipeline_fub_id TEXT,
+    name TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    raw TEXT NOT NULL DEFAULT '{}',
+    synced_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS crm_deals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fub_id TEXT NOT NULL UNIQUE,
+    name TEXT,
+    value REAL,
+    stage_fub_id TEXT,
+    stage_name TEXT,
+    pipeline_fub_id TEXT,
+    status TEXT,
+    contact_fub_id TEXT,
+    closed_date TEXT,
+    fub_created_at TEXT,
+    fub_updated_at TEXT,
+    raw TEXT NOT NULL DEFAULT '{}',
+    synced_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_crm_deals_stage ON crm_deals(stage_fub_id);
+  CREATE INDEX IF NOT EXISTS idx_crm_deals_contact ON crm_deals(contact_fub_id);
+
+  CREATE TABLE IF NOT EXISTS crm_activities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL,
+    fub_id TEXT,
+    contact_fub_id TEXT,
+    title TEXT,
+    body TEXT,
+    direction TEXT,
+    outcome TEXT,
+    duration_seconds INTEGER,
+    occurred_at TEXT,
+    due_at TEXT,
+    completed INTEGER NOT NULL DEFAULT 0,
+    assigned_to TEXT,
+    raw TEXT NOT NULL DEFAULT '{}',
+    synced_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_crm_activities_contact ON crm_activities(contact_fub_id, occurred_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_crm_activities_kind ON crm_activities(kind, occurred_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_crm_activities_due ON crm_activities(due_at) WHERE due_at IS NOT NULL;
+
+  CREATE TABLE IF NOT EXISTS crm_sync_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    resource TEXT NOT NULL,
+    status TEXT NOT NULL,
+    fetched INTEGER NOT NULL DEFAULT 0,
+    inserted INTEGER NOT NULL DEFAULT 0,
+    updated INTEGER NOT NULL DEFAULT 0,
+    pages INTEGER NOT NULL DEFAULT 0,
+    http_status INTEGER,
+    error TEXT,
+    truncated INTEGER NOT NULL DEFAULT 0,
+    null_rates TEXT NOT NULL DEFAULT '{}',
+    cursor TEXT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    duration_ms INTEGER,
+    trigger TEXT NOT NULL DEFAULT 'cron'
+  );
+  CREATE INDEX IF NOT EXISTS idx_crm_sync_runs_resource ON crm_sync_runs(resource, id DESC);
 `);
 
 // Migration: add account_user_id to saved_searches so portal users own
@@ -2864,6 +2981,178 @@ export class DatabaseStorage implements IStorage {
     return this.listBookingsInRange(fromIso, toIso).filter((b) =>
       eventTypeId ? b.eventTypeId === eventTypeId : true,
     ).length;
+  }
+
+  // ---- CRM mirror (Follow Up Boss) ---------------------------------------
+  //
+  // Upserts are keyed on FUB's own id so a re-sync updates in place rather
+  // than duplicating, and are batched in one transaction per resource: a
+  // people sync can be thousands of rows, and committing each individually
+  // makes an hourly cron visibly slow.
+
+  /** Generic upsert-by-fub_id. Returns how many rows were new vs. changed. */
+  private upsertByFubId(
+    table: any,
+    rows: Array<Record<string, any>>,
+    key: string = "fubId",
+  ): { inserted: number; updated: number } {
+    let inserted = 0;
+    let updated = 0;
+    const txn = sqlite.transaction(() => {
+      for (const row of rows) {
+        const idValue = row[key];
+        if (idValue == null || idValue === "") continue;
+        const existing = db.select().from(table).where(eq(table[key], idValue)).get();
+        if (existing) {
+          db.update(table).set(row).where(eq(table[key], idValue)).run();
+          updated++;
+        } else {
+          db.insert(table).values(row).run();
+          inserted++;
+        }
+      }
+    });
+    txn();
+    return { inserted, updated };
+  }
+
+  upsertCrmContacts(rows: Array<Record<string, any>>) {
+    return this.upsertByFubId(crmContacts, rows);
+  }
+  upsertCrmPipelines(rows: Array<Record<string, any>>) {
+    return this.upsertByFubId(crmPipelines, rows);
+  }
+  upsertCrmStages(rows: Array<Record<string, any>>) {
+    return this.upsertByFubId(crmStages, rows);
+  }
+  upsertCrmDeals(rows: Array<Record<string, any>>) {
+    return this.upsertByFubId(crmDeals, rows);
+  }
+  /** Activities are keyed on the namespaced uid, not the bare FUB id. */
+  upsertCrmActivities(rows: Array<Record<string, any>>) {
+    return this.upsertByFubId(crmActivities, rows, "uid");
+  }
+
+  listCrmContacts(opts: { q?: string; stage?: string; limit?: number } = {}): CrmContact[] {
+    const clauses: any[] = [];
+    if (opts.stage) clauses.push(eq(crmContacts.stage, opts.stage));
+    if (opts.q) {
+      const like = `%${opts.q.toLowerCase()}%`;
+      clauses.push(
+        or(
+          sql`lower(${crmContacts.name}) LIKE ${like}`,
+          sql`lower(${crmContacts.email}) LIKE ${like}`,
+          sql`${crmContacts.phone} LIKE ${like}`,
+        )!,
+      );
+    }
+    const base = db.select().from(crmContacts);
+    const rows = clauses.length > 0 ? base.where(and(...clauses)!).all() : base.all();
+    return rows
+      .sort((a, b) => (b.fubUpdatedAt ?? "").localeCompare(a.fubUpdatedAt ?? ""))
+      .slice(0, opts.limit ?? 200);
+  }
+  getCrmContact(fubId: string): CrmContact | undefined {
+    return db.select().from(crmContacts).where(eq(crmContacts.fubId, fubId)).get();
+  }
+  countCrmContacts(): number {
+    return db.select().from(crmContacts).all().length;
+  }
+
+  listCrmPipelines(): CrmPipeline[] {
+    return db.select().from(crmPipelines).all();
+  }
+  listCrmStages(): CrmStage[] {
+    return db
+      .select()
+      .from(crmStages)
+      .all()
+      .sort((a, b) => a.sortOrder - b.sortOrder);
+  }
+  listCrmDeals(
+    opts: { stageFubId?: string; contactFubId?: string; limit?: number } = {},
+  ): CrmDeal[] {
+    // Filters are applied in the query, before the limit. Truncating the whole
+    // account first and filtering after would hide a contact's deals whenever
+    // they fall outside the newest N account-wide.
+    const clauses: any[] = [];
+    if (opts.stageFubId) clauses.push(eq(crmDeals.stageFubId, opts.stageFubId));
+    if (opts.contactFubId) clauses.push(eq(crmDeals.contactFubId, opts.contactFubId));
+    const base = db.select().from(crmDeals);
+    const rows = clauses.length > 0 ? base.where(and(...clauses)!).all() : base.all();
+    return rows
+      .sort((a, b) => (b.fubUpdatedAt ?? "").localeCompare(a.fubUpdatedAt ?? ""))
+      .slice(0, opts.limit ?? 500);
+  }
+
+  listCrmActivities(
+    opts: { contactFubId?: string; kind?: string; limit?: number } = {},
+  ): CrmActivity[] {
+    const clauses: any[] = [];
+    if (opts.contactFubId) clauses.push(eq(crmActivities.contactFubId, opts.contactFubId));
+    if (opts.kind) clauses.push(eq(crmActivities.kind, opts.kind));
+    const base = db.select().from(crmActivities);
+    const rows = clauses.length > 0 ? base.where(and(...clauses)!).all() : base.all();
+    return rows
+      .sort((a, b) => (b.occurredAt ?? "").localeCompare(a.occurredAt ?? ""))
+      .slice(0, opts.limit ?? 200);
+  }
+  /** Open tasks and upcoming appointments, soonest first. */
+  listCrmOpenTasks(limit = 50): CrmActivity[] {
+    return db
+      .select()
+      .from(crmActivities)
+      .where(
+        and(
+          inArray(crmActivities.kind, ["task", "appointment"]),
+          eq(crmActivities.completed, false),
+        )!,
+      )
+      .all()
+      .sort((a, b) => (a.dueAt ?? "9999").localeCompare(b.dueAt ?? "9999"))
+      .slice(0, limit);
+  }
+
+  createCrmSyncRun(data: Omit<InsertCrmSyncRun, "id">): CrmSyncRun {
+    return db.insert(crmSyncRuns).values(data as any).returning().get();
+  }
+  finishCrmSyncRun(id: number, patch: Partial<InsertCrmSyncRun>): CrmSyncRun | undefined {
+    return db.update(crmSyncRuns).set(patch as any).where(eq(crmSyncRuns.id, id)).returning().get();
+  }
+  /** The most recent run per resource — what the admin status panel shows. */
+  latestCrmSyncRuns(): CrmSyncRun[] {
+    const all = db.select().from(crmSyncRuns).orderBy(desc(crmSyncRuns.id)).all();
+    const seen = new Set<string>();
+    const out: CrmSyncRun[] = [];
+    for (const r of all) {
+      if (seen.has(r.resource)) continue;
+      seen.add(r.resource);
+      out.push(r);
+    }
+    return out;
+  }
+  /** Newest successful cursor for a resource, for incremental syncing. */
+  lastCrmCursor(resource: string): string | null {
+    const row = db
+      .select()
+      .from(crmSyncRuns)
+      .where(and(eq(crmSyncRuns.resource, resource), eq(crmSyncRuns.status, "ok"))!)
+      .orderBy(desc(crmSyncRuns.id))
+      .get();
+    return row?.cursor ?? null;
+  }
+  pruneCrmSyncRuns(keepPerResource = 20): void {
+    const byResource = new Map<string, number[]>();
+    for (const r of db.select().from(crmSyncRuns).orderBy(desc(crmSyncRuns.id)).all()) {
+      const list = byResource.get(r.resource) ?? [];
+      list.push(r.id);
+      byResource.set(r.resource, list);
+    }
+    const stale: number[] = [];
+    for (const ids of Array.from(byResource.values())) stale.push(...ids.slice(keepPerResource));
+    if (stale.length > 0) {
+      db.delete(crmSyncRuns).where(inArray(crmSyncRuns.id, stale)).run();
+    }
   }
 }
 

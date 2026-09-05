@@ -138,3 +138,58 @@ The OAuth scopes are `calendar.events` (write the meeting) and
 `calendar.freebusy` (read busy blocks). A connection made before the
 `freebusy` scope existed keeps working but won't block slots against outside
 events; the admin card flags this and one reconnect fixes it.
+
+## CRM mirror (Follow Up Boss)
+
+`/admin/crm` shows the Follow Up Boss account — people, deals, pipelines,
+calls, texts, events and tasks — read from a **local mirror** refreshed hourly,
+not from a live API call per page view. That keeps the page fast and keeps it
+rendering when FUB is unreachable.
+
+It is read-only by design. Edits still happen in Follow Up Boss and appear
+here on the next sync; the only write path to FUB remains the existing
+inquiry push in `server/follow-up-boss.ts`.
+
+- **`server/fub-client.ts`** — the read client. HTTP Basic with the API key as
+  username and an empty password (FUB's convention). Pages through
+  collections, retries 429s honouring `Retry-After`, and treats 401/403 as
+  terminal rather than retrying a permission problem.
+- **`server/fub-sync.ts`** — maps payloads into the mirror and drives the
+  hourly cron. Each resource syncs independently, so a resource the account's
+  plan doesn't include can 403 without stopping the rest.
+- **`server/crm-routes.ts`** — `/api/admin/crm/*`, all behind `requireAuth`.
+- **Tables** — `crm_contacts`, `crm_deals`, `crm_pipelines`, `crm_stages`,
+  `crm_activities` (one timeline for events/calls/texts/tasks/appointments)
+  and `crm_sync_runs`.
+
+### The field mapping is unverified
+
+This was built without access to `docs.followupboss.com` or
+`api.followupboss.com` — both are blocked by the build environment's egress
+proxy — so the **field names in `fub-sync.ts` are informed guesses, not
+verified against the real API.** The envelope handling and the mapping are
+deliberately built to survive being wrong:
+
+- `pick()` takes a list of candidate field names, so `created` vs `createdAt`
+  both map.
+- Every row stores the untouched payload in `raw`, so a column that mapped to
+  the wrong name can be re-derived from data already synced — no re-pull.
+- Every run records how often each column came out null (`nullRates`). A
+  column reading 100% null is surfaced on the page as a mapping warning, so
+  the mistake announces itself instead of looking like an empty CRM.
+
+**To pin the mapping down:** hit `GET /api/admin/crm/probe` while signed in.
+It fetches one page per resource and reports the real envelope keys, metadata
+and field names (names only — never values). Correct the candidate lists in
+`fub-sync.ts` from that, then run a Full re-sync.
+
+### Setup
+
+| Secret | What it's for |
+|---|---|
+| `FUB_API_KEY` | Follow Up Boss -> Admin -> API. Without it the page says so and the cron stays off. |
+| `FUB_SYSTEM` | Optional `X-System` header. Defaults to `RiversRealEstate`. |
+| `FUB_SYSTEM_KEY` | Optional `X-System-Key`, if the tenant enforces system identity. |
+
+Deals are a Follow Up Boss add-on. If the plan doesn't include them, the Sync
+tab shows a 403 against `deals` and everything else still works.

@@ -7,6 +7,7 @@ import { serveStatic } from "./static";
 import { createServer } from "node:http";
 import { startSyncCron } from "./rets-sync";
 import { startLeadAlertCron } from "./lead-alert-cron";
+import { startCrmSyncCron } from "./fub-sync";
 import { storage } from "./storage";
 
 import { warnIfPublicOriginUnset } from "./origin";
@@ -84,7 +85,12 @@ app.use((req, res, next) => {
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+        // Truncated: some endpoints return hundreds of rows, and a log line
+        // is not the place for a whole result set. Handlers that return
+        // personal data project it down before it ever reaches here (see the
+        // DTOs in server/crm-routes.ts) — this is the backstop, not the fix.
+        const body = JSON.stringify(capturedJsonResponse);
+        logLine += ` :: ${body.length > 500 ? `${body.slice(0, 500)}… (${body.length} bytes)` : body}`;
       }
 
       log(logLine);
@@ -122,6 +128,11 @@ app.use((req, res, next) => {
     startLeadAlertCron();
   } catch (err) {
     console.error("[lead-alerts] failed to start cron:", err);
+  }
+  try {
+    startCrmSyncCron();
+  } catch (err) {
+    console.error("[crm-sync] failed to start cron:", err);
   }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

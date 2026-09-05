@@ -456,6 +456,15 @@ export async function registerRoutes(
     console.error("[booking] failed to register scheduling routes:", e);
   }
 
+  // CRM mirror — /api/admin/crm/*, backing the /admin/crm page. Admin-only:
+  // this is the whole Follow Up Boss contact database.
+  try {
+    const { registerCrmRoutes } = await import("./crm-routes");
+    registerCrmRoutes(app, { requireAuth });
+  } catch (e) {
+    console.error("[crm] failed to register CRM routes:", e);
+  }
+
   // Home evaluation widget — POST /api/home-value proxies to Gnowise's AVM
   // API and captures a lead. See server/home-value.ts.
   try {
