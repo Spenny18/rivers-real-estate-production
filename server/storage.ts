@@ -3025,6 +3025,32 @@ export class DatabaseStorage implements IStorage {
   upsertCrmStages(rows: Array<Record<string, any>>) {
     return this.upsertByFubId(crmStages, rows);
   }
+  /**
+   * Replace the deal-stage set outright, in one transaction.
+   *
+   * Upserting is wrong for this table: a stage retired in Follow Up Boss would
+   * linger as a permanently empty column on the pipeline board, and the rows
+   * an earlier version wrote here from /v1/stages — people stages, from a
+   * different id space, which no deal can ever match — would never clear.
+   *
+   * Deleting only what the incoming set does not mention keeps the ids of
+   * stages that survive, so the deals pointing at them stay attached.
+   */
+  replaceCrmStages(rows: Array<Record<string, any>>): { inserted: number; updated: number; removed: number } {
+    let removed = 0;
+    let result = { inserted: 0, updated: 0 };
+    const txn = sqlite.transaction(() => {
+      result = this.upsertByFubId(crmStages, rows);
+      const keep = new Set(rows.map((r) => String(r.fubId)));
+      for (const existing of db.select().from(crmStages).all()) {
+        if (keep.has(String(existing.fubId))) continue;
+        db.delete(crmStages).where(eq(crmStages.fubId, existing.fubId)).run();
+        removed++;
+      }
+    });
+    txn();
+    return { ...result, removed };
+  }
   upsertCrmDeals(rows: Array<Record<string, any>>) {
     return this.upsertByFubId(crmDeals, rows);
   }

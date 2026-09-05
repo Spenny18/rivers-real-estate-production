@@ -208,9 +208,32 @@ export function nextPageParams(
   return { offset: nextOffset, limit: current.limit };
 }
 
+/**
+ * Build the `next` cursor for "everything after record N".
+ *
+ * Follow Up Boss's paging cursors are base64 JSON: the nextLink on a live
+ * response reads `next=eyJzaW5jZUlkIjo1OTk0fQ`, which decodes to
+ * {"sinceId":5994} — the id after the last record on that page. Collection
+ * endpoints page ascending by id, so minting the same cursor from the highest
+ * id already mirrored asks for exactly the records that arrived since.
+ *
+ * That is read off observed responses, not documentation, so every caller
+ * treats it as a request that may be rejected: syncResource retries the whole
+ * resource without it on a 4xx rather than letting a rejected cursor look like
+ * an outage.
+ */
+export function sinceIdCursor(lastId: string | number): string {
+  return Buffer.from(JSON.stringify({ sinceId: Number(lastId) })).toString("base64url");
+}
+
 export interface PageOptions {
   /** Extra query params, e.g. an incremental `updatedAfter` filter. */
   params?: Record<string, string | number | undefined>;
+  /**
+   * Start from this `next` cursor instead of offset 0. Offset is then omitted
+   * entirely — sending both invites the API to honour the wrong one.
+   */
+  startCursor?: string;
   /** Page size. FUB caps this; 100 is the conventional maximum. */
   limit?: number;
   /**
@@ -256,11 +279,9 @@ export async function fubGetAll(
   const pauseMs = opts.pauseMs ?? 250;
 
   const records: any[] = [];
-  let params: Record<string, string | number | undefined> = {
-    ...(opts.params ?? {}),
-    offset: 0,
-    limit,
-  };
+  let params: Record<string, string | number | undefined> = opts.startCursor
+    ? { ...(opts.params ?? {}), next: opts.startCursor, limit }
+    : { ...(opts.params ?? {}), offset: 0, limit };
   let sampleBody: any;
   let pages = 0;
   let truncated = false;
@@ -283,6 +304,12 @@ export async function fubGetAll(
 
     const batch = extractCollection(r.data, collectionKey);
     records.push(...batch);
+
+    // A page with no records is the end, whatever the envelope says. Follow Up
+    // Boss puts a `next` cursor in _metadata on every response, so trusting the
+    // cursor alone would walk the full page budget fetching nothing — which is
+    // exactly what an incremental run that is already up to date returns.
+    if (batch.length === 0) break;
 
     const next = nextPageParams(r.data, {
       offset: Number(params.offset ?? 0),
