@@ -3146,11 +3146,24 @@ export class DatabaseStorage implements IStorage {
     return db.update(crmSyncRuns).set(patch as any).where(eq(crmSyncRuns.id, id)).returning().get();
   }
   /** The most recent run per resource — what the admin status panel shows. */
-  latestCrmSyncRuns(): CrmSyncRun[] {
+  /**
+   * The newest run per resource.
+   *
+   * `activeResources` filters out resources that are no longer synced at all.
+   * Without it a retired resource keeps showing its final run forever, and if
+   * that run failed — which is exactly why a resource gets retired — the panel
+   * reports a permanent error for something nothing is even attempting. That
+   * is what textMessages did after it moved to per-contact fetching: its last
+   * scheduled run was the 400 that prompted the move, and no later run could
+   * ever replace it.
+   */
+  latestCrmSyncRuns(activeResources?: string[]): CrmSyncRun[] {
+    const active = activeResources ? new Set(activeResources) : null;
     const all = db.select().from(crmSyncRuns).orderBy(desc(crmSyncRuns.id)).all();
     const seen = new Set<string>();
     const out: CrmSyncRun[] = [];
     for (const r of all) {
+      if (active && !active.has(r.resource)) continue;
       if (seen.has(r.resource)) continue;
       seen.add(r.resource);
       out.push(r);
@@ -3167,14 +3180,27 @@ export class DatabaseStorage implements IStorage {
       .get();
     return row?.cursor ?? null;
   }
-  pruneCrmSyncRuns(keepPerResource = 20): void {
+  /**
+   * Trim run history to the last `keepPerResource` per resource.
+   *
+   * A resource absent from `activeResources` is no longer synced, so its rows
+   * go entirely rather than being trimmed — filtering them out of the display
+   * alone would leave dead rows accumulating in the table.
+   */
+  pruneCrmSyncRuns(keepPerResource = 20, activeResources?: string[]): void {
+    const active = activeResources ? new Set(activeResources) : null;
     const byResource = new Map<string, number[]>();
+    const retired: number[] = [];
     for (const r of db.select().from(crmSyncRuns).orderBy(desc(crmSyncRuns.id)).all()) {
+      if (active && !active.has(r.resource)) {
+        retired.push(r.id);
+        continue;
+      }
       const list = byResource.get(r.resource) ?? [];
       list.push(r.id);
       byResource.set(r.resource, list);
     }
-    const stale: number[] = [];
+    const stale: number[] = [...retired];
     for (const ids of Array.from(byResource.values())) stale.push(...ids.slice(keepPerResource));
     if (stale.length > 0) {
       db.delete(crmSyncRuns).where(inArray(crmSyncRuns.id, stale)).run();

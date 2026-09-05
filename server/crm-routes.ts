@@ -6,7 +6,13 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { storage } from "./storage";
 import { fubConfigured, probe, testConnection } from "./fub-client";
-import { RESOURCE_SPECS, currentSyncJob, startSyncJob, syncTextsForContact } from "./fub-sync";
+import {
+  RESOURCE_SPECS,
+  SYNCED_RESOURCES,
+  currentSyncJob,
+  startSyncJob,
+  syncTextsForContact,
+} from "./fub-sync";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
 
@@ -152,7 +158,7 @@ function dealStageBoard(
  */
 function mappingWarnings(): Array<{ resource: string; fields: string[] }> {
   const out: Array<{ resource: string; fields: string[] }> = [];
-  for (const run of storage.latestCrmSyncRuns()) {
+  for (const run of storage.latestCrmSyncRuns(SYNCED_RESOURCES)) {
     if (run.status === "skipped" || run.fetched === 0) continue;
     try {
       const rates = JSON.parse(run.nullRates) as Record<string, number>;
@@ -211,7 +217,7 @@ export function registerCrmRoutes(app: Express, deps: { requireAuth: Middleware 
         events: storage.listCrmActivities({ kind: "event", limit: 1000 }).length,
       },
       openTasks: storage.listCrmOpenTasks(10).map(dtoActivity),
-      syncRuns: storage.latestCrmSyncRuns().map(dtoSyncRun),
+      syncRuns: storage.latestCrmSyncRuns(SYNCED_RESOURCES).map(dtoSyncRun),
       mappingWarnings: mappingWarnings(),
       resources: RESOURCE_SPECS.map((s) => ({
         resource: s.resource,
@@ -359,6 +365,6 @@ export function registerCrmRoutes(app: Express, deps: { requireAuth: Middleware 
   });
 
   app.get("/api/admin/crm/sync-runs", requireAuth, (_req, res) => {
-    res.json(storage.latestCrmSyncRuns().map(dtoSyncRun));
+    res.json(storage.latestCrmSyncRuns(SYNCED_RESOURCES).map(dtoSyncRun));
   });
 }
