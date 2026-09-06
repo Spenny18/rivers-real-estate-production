@@ -70,6 +70,7 @@ const AdminNeighbourhoodsPage = lazy(() => import("@/pages/admin-neighbourhoods"
 const AdminSeoPage = lazy(() => import("@/pages/admin-seo"));
 const AdminSchedulingPage = lazy(() => import("@/pages/admin-scheduling"));
 const AdminCrmPage = lazy(() => import("@/pages/admin-crm"));
+const AdminMarketPage = lazy(() => import("@/pages/admin-market"));
 
 // Consumer portal (/account/*) pages
 const AccountLoginPage = lazy(() => import("@/pages/account-login"));
@@ -186,6 +187,10 @@ function AppRouter() {
       <Route
         path="/admin/crm"
         component={() => <ProtectedRoute component={AdminCrmPage} />}
+      />
+      <Route
+        path="/admin/market"
+        component={() => <ProtectedRoute component={AdminMarketPage} />}
       />
       <Route
         path="/admin/marketing"

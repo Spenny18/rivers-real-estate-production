@@ -654,6 +654,35 @@ sqlite.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_crm_sync_runs_resource ON crm_sync_runs(resource, id DESC);
 
+  -- Monthly market statistics, as published by the real estate board.
+  --
+  -- One row per period per property type. Citywide figures (active listings,
+  -- sales, days on market) sit on the pseudo-type 'all'; benchmark prices sit
+  -- on the four real types. Every metric is nullable because a month is
+  -- assembled a figure at a time, and a half-entered month should render with
+  -- gaps rather than refuse to render.
+  CREATE TABLE IF NOT EXISTS market_stats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    period TEXT NOT NULL,          -- YYYY-MM
+    property_type TEXT NOT NULL,   -- detached | semi_detached | row | apartment | all
+    benchmark_price INTEGER,
+    sales INTEGER,
+    active_listings INTEGER,
+    avg_dom INTEGER,
+    updated_at TEXT NOT NULL,
+    UNIQUE(period, property_type)
+  );
+  CREATE INDEX IF NOT EXISTS idx_market_stats_period ON market_stats(period);
+
+  -- The board's written commentary for a month, quoted in the newsletter above
+  -- the graphic. Separate from the figures because it is prose, entered once.
+  CREATE TABLE IF NOT EXISTS market_commentary (
+    period TEXT PRIMARY KEY,
+    headline TEXT,
+    body TEXT,
+    updated_at TEXT NOT NULL
+  );
+
   -- Follow Up Boss configuration, stored whole rather than modelled.
   --
   -- Action plans, smart lists, custom field definitions, lead-routing groups
@@ -3117,6 +3146,121 @@ export class DatabaseStorage implements IStorage {
           .prepare("SELECT fub_id FROM crm_contacts ORDER BY CAST(fub_id AS INTEGER)")
           .all();
     return (rows as Array<{ fub_id: string }>).map((r) => r.fub_id);
+  }
+
+  // ---- Monthly market statistics ------------------------------------------
+
+  /** Every stored figure for the given periods. */
+  listMarketStats(periods: string[]): Array<{
+    period: string;
+    propertyType: string;
+    benchmarkPrice: number | null;
+    sales: number | null;
+    activeListings: number | null;
+    avgDom: number | null;
+  }> {
+    if (periods.length === 0) return [];
+    const holes = periods.map(() => "?").join(",");
+    const rows = sqlite
+      .prepare(
+        `SELECT period, property_type, benchmark_price, sales, active_listings, avg_dom
+         FROM market_stats WHERE period IN (${holes})`,
+      )
+      .all(...periods) as Array<Record<string, any>>;
+    return rows.map((r) => ({
+      period: r.period,
+      propertyType: r.property_type,
+      benchmarkPrice: r.benchmark_price,
+      sales: r.sales,
+      activeListings: r.active_listings,
+      avgDom: r.avg_dom,
+    }));
+  }
+
+  /**
+   * Write one period's figures.
+   *
+   * Merges rather than replaces: a caller sending only a benchmark price must
+   * not blank the sales count entered a minute earlier, which is exactly what
+   * a form that submits one section at a time would otherwise do.
+   */
+  upsertMarketStats(
+    period: string,
+    entries: Array<{
+      propertyType: string;
+      benchmarkPrice?: number | null;
+      sales?: number | null;
+      activeListings?: number | null;
+      avgDom?: number | null;
+    }>,
+  ): number {
+    const now = new Date().toISOString();
+    const txn = sqlite.transaction(() => {
+      for (const e of entries) {
+        sqlite
+          .prepare(
+            `INSERT INTO market_stats (period, property_type, benchmark_price, sales, active_listings, avg_dom, updated_at)
+             VALUES (?,?,?,?,?,?,?)
+             ON CONFLICT(period, property_type) DO UPDATE SET
+               benchmark_price = COALESCE(excluded.benchmark_price, market_stats.benchmark_price),
+               sales           = COALESCE(excluded.sales,           market_stats.sales),
+               active_listings = COALESCE(excluded.active_listings, market_stats.active_listings),
+               avg_dom         = COALESCE(excluded.avg_dom,         market_stats.avg_dom),
+               updated_at      = excluded.updated_at`,
+          )
+          .run(
+            period,
+            e.propertyType,
+            e.benchmarkPrice ?? null,
+            e.sales ?? null,
+            e.activeListings ?? null,
+            e.avgDom ?? null,
+            now,
+          );
+      }
+    });
+    txn();
+    return entries.length;
+  }
+
+  /** Clear one figure — the only way to undo a typo, since upserts merge. */
+  clearMarketStat(period: string, propertyType: string, field: string): void {
+    const allowed: Record<string, string> = {
+      benchmarkPrice: "benchmark_price",
+      sales: "sales",
+      activeListings: "active_listings",
+      avgDom: "avg_dom",
+    };
+    const column = allowed[field];
+    if (!column) throw new Error(`Unknown market stat field: ${field}`);
+    sqlite
+      .prepare(`UPDATE market_stats SET ${column} = NULL, updated_at = ? WHERE period = ? AND property_type = ?`)
+      .run(new Date().toISOString(), period, propertyType);
+  }
+
+  /** Periods with at least one figure, newest first. */
+  listMarketPeriods(): string[] {
+    return (
+      sqlite.prepare("SELECT DISTINCT period FROM market_stats ORDER BY period DESC").all() as Array<{
+        period: string;
+      }>
+    ).map((r) => r.period);
+  }
+
+  getMarketCommentary(period: string): string | null {
+    const row = sqlite.prepare("SELECT body FROM market_commentary WHERE period = ?").get(period) as
+      | { body: string | null }
+      | undefined;
+    return row?.body ?? null;
+  }
+
+  setMarketCommentary(period: string, headline: string | null, body: string | null): void {
+    sqlite
+      .prepare(
+        `INSERT INTO market_commentary (period, headline, body, updated_at) VALUES (?,?,?,?)
+         ON CONFLICT(period) DO UPDATE SET headline = excluded.headline, body = excluded.body, updated_at = excluded.updated_at`,
+      )
+      .run(period, headline, body, new Date().toISOString());
   }
 
   /** Store a Follow Up Boss configuration resource exactly as it came back. */

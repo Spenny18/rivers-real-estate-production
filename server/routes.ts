@@ -461,6 +461,9 @@ export async function registerRoutes(
   try {
     const { registerCrmRoutes } = await import("./crm-routes");
     registerCrmRoutes(app, { requireAuth });
+
+    const { registerMarketRoutes } = await import("./market-routes");
+    registerMarketRoutes(app, { requireAuth });
   } catch (e) {
     console.error("[crm] failed to register CRM routes:", e);
   }
