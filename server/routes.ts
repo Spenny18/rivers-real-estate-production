@@ -600,6 +600,29 @@ export async function registerRoutes(
     changefreq?: string;
   };
 
+  // <lastmod> must be a W3C Datetime. Date-only (YYYY-MM-DD) is valid, but
+  // once a time-of-day is present the timezone designator is mandatory —
+  // "2025-12-09T10:45:27" is malformed and Google discards it. Our stored
+  // timestamps are mixed: rows written by the app are proper ISO strings
+  // ending in Z, while rows carried over from the WordPress migration have
+  // no zone at all (31 of 37 blog posts at the time of writing). Passing the
+  // column through raw therefore threw away the very lastmod signal the
+  // split-sitemap rework above exists to provide.
+  //
+  // Pass through anything that already carries a zone; otherwise fall back to
+  // the date, which is unambiguous. Appending "Z" to a zone-less WordPress
+  // timestamp would assert UTC for what was almost certainly Mountain time —
+  // a wrong answer where the date alone is a correct one.
+  const w3cLastmod = (raw: unknown): string | undefined => {
+    if (typeof raw !== "string") return undefined;
+    const v = raw.trim();
+    if (!v) return undefined;
+    // Already zoned: ...Z or ...+hh:mm / ...-hh:mm (not the date's hyphens).
+    if (/(?:Z|[+-]\d{2}:?\d{2})$/.test(v)) return v;
+    const date = /^(\d{4}-\d{2}-\d{2})/.exec(v);
+    return date ? date[1] : undefined;
+  };
+
   const renderUrlset = (urls: SitemapUrl[]): string =>
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
     `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
@@ -631,6 +654,7 @@ export async function registerRoutes(
       `${origin}/sitemap-blog.xml`,
       `${origin}/sitemap-neighbourhoods.xml`,
       `${origin}/sitemap-condos.xml`,
+      `${origin}/sitemap-listings.xml`,
     ];
     if (INCLUDE_MLS_SITEMAP) children.push(`${origin}/sitemap-mls.xml`);
 
@@ -661,6 +685,27 @@ export async function registerRoutes(
       { loc: `${origin}/home-evaluation`, priority: "0.7", changefreq: "monthly" },
       { loc: `${origin}/work-with`, priority: "0.6", changefreq: "monthly" },
       { loc: `${origin}/assignments`, priority: "0.8", changefreq: "weekly" },
+      { loc: `${origin}/book`, priority: "0.6", changefreq: "monthly" },
+      // Active booking pages (/book/:slug). Each is a real, self-canonical
+      // page with its own copy and BreadcrumbList — they were indexable but
+      // absent from every sitemap, so Google was never told they exist.
+      // Inactive event types 404 (see server/seo-inject.ts), so filter here.
+      ...(() => {
+        try {
+          return storage
+            .listBookingEventTypes()
+            .filter((et) => et.active)
+            .map((et) => ({
+              loc: `${origin}/book/${et.slug}`,
+              lastmod: w3cLastmod((et as any).updatedAt),
+              priority: "0.6",
+              changefreq: "monthly" as const,
+            }));
+        } catch (e) {
+          console.error("[sitemap] booking event types:", e);
+          return [];
+        }
+      })(),
       ...[
         "luxury-properties",
         "first-time-home-sellers",
@@ -690,7 +735,7 @@ export async function registerRoutes(
         if ((p as any).status === "draft") continue;
         urls.push({
           loc: `${origin}/blog/${p.slug}`,
-          lastmod: (p as any).publishedAt || undefined,
+          lastmod: w3cLastmod((p as any).publishedAt),
           priority: "0.8",
           changefreq: "monthly",
         });
@@ -740,6 +785,30 @@ export async function registerRoutes(
     res.send(renderUrlset(urls));
   });
 
+  // Spencer's own listings (/p/:slug) — distinct from the MLS feed above.
+  // These are a handful of hand-built pages carrying RealEstateListing
+  // schema, and they were in no sitemap at all. Sold listings are included
+  // deliberately: they stay indexable and self-canonical either way, and
+  // sold-comp searches are real traffic.
+  app.get("/sitemap-listings.xml", (_req, res) => {
+    const origin = publicOrigin();
+    const urls: SitemapUrl[] = [];
+    try {
+      for (const l of storage.listListings()) {
+        urls.push({
+          loc: `${origin}/p/${l.slug}`,
+          lastmod: w3cLastmod((l as any).createdAt),
+          priority: l.status === "sold" ? "0.5" : "0.8",
+          changefreq: "weekly",
+        });
+      }
+    } catch (e) {
+      console.error("[sitemap] listings:", e);
+    }
+    res.set("Content-Type", "application/xml; charset=utf-8");
+    res.send(renderUrlset(urls));
+  });
+
   // MLS listings — only served when SITEMAP_INCLUDE_MLS=1. Uses the most
   // recent meaningful timestamp (priceChangedAt > listDate > createdAt) so
   // Google's lastmod signal reflects real changes, not sync churn.
@@ -757,7 +826,7 @@ export async function registerRoutes(
       for (const l of items as any[]) {
         urls.push({
           loc: `${origin}/mls/${l.seoSlug || storage.getMlsSeoSlug(l)}`,
-          lastmod: l.priceChangedAt || l.listDate || l.createdAt || undefined,
+          lastmod: w3cLastmod(l.priceChangedAt || l.listDate || l.createdAt),
           priority: "0.5",
           changefreq: "weekly",
         });
