@@ -770,21 +770,64 @@ export async function registerRoutes(
   });
 
   // ---------- SEO: robots.txt ----------
+  // Two rules govern what belongs in here. Both were being broken, and
+  // Search Console reported the result as "Blocked by robots.txt".
+  //
+  // 1. Never robots-block a URL you want *deindexed*. A blocked URL is
+  //    never fetched, so Google never sees the `noindex` we serve for it —
+  //    it just sits in the report as blocked, and can still be indexed
+  //    URL-only from inbound links. /admin and /account were disallowed
+  //    here even though the global header links to /account/login and the
+  //    global footer links to /admin (client/src/components/public-layout.tsx),
+  //    so Google rediscovered them from every single page on the site.
+  //    Both prefixes already serve `noindex,nofollow` from
+  //    server/seo-inject.ts, which is the mechanism that actually keeps
+  //    them out of the index — so let them be crawled and let the meta tag
+  //    do its job.
+  //
+  // 2. Don't blanket-block /api/ — part of it is page content. Listing
+  //    photos are proxied through /api/mls/:id/photo/:idx, and that URL is
+  //    the og:image, the schema.org `image` in the RealEstateListing
+  //    JSON-LD, and the <img src> of every listing card and gallery frame
+  //    in the server-rendered HTML. `Disallow: /api/` made every listing
+  //    photo on the site uncrawlable. The public read-only JSON endpoints
+  //    are what the client-rendered views fetch to fill themselves in, so
+  //    they need to be reachable too.
+  //
+  // Google and Bing resolve conflicting rules by longest match, so the
+  // specific `Allow:` lines below win over `Disallow: /api/`. Anything
+  // authenticated or mutating stays blocked.
+  const ROBOTS_API_RULES =
+    `\n` +
+    `# Public, read-only endpoints. Listing photos are proxied through\n` +
+    `# /api/mls/:id/photo/:idx and are referenced as og:image and as the\n` +
+    `# schema.org image on every listing page, so they must be crawlable.\n` +
+    `Allow: /api/public/\n` +
+    `Allow: /api/mls/\n` +
+    `Allow: /api/listings/by-slug/\n` +
+    `Allow: /api/booking/event-types\n` +
+    `\n` +
+    `# Everything else under /api/ is authenticated, mutating, or both.\n` +
+    `Disallow: /api/\n` +
+    `Disallow: /api/admin/\n` +
+    `Disallow: /api/account/\n` +
+    `Disallow: /api/auth/\n`;
+
   app.get("/robots.txt", (_req, res) => {
     const origin = publicOrigin();
-    res.set("Content-Type", "text/plain");
+    res.set("Content-Type", "text/plain; charset=utf-8");
     res.send(
       `User-agent: OAI-SearchBot\n` +
         `Allow: /\n` +
+        ROBOTS_API_RULES +
         `\n` +
         `User-agent: GPTBot\n` +
         `Allow: /\n` +
+        ROBOTS_API_RULES +
         `\n` +
         `User-agent: *\n` +
         `Allow: /\n` +
-        `Disallow: /admin\n` +
-        `Disallow: /api/\n` +
-        `Disallow: /account\n` +
+        ROBOTS_API_RULES +
         `\n` +
         `Sitemap: ${origin}/sitemap.xml\n`,
     );
