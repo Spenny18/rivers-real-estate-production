@@ -6,11 +6,14 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { storage } from "./storage";
 import { fubConfigured, probe, testConnection } from "./fub-client";
+import { canSendEmail, sendGmail } from "./gmail";
 import {
   RESOURCE_SPECS,
   SYNCED_RESOURCES,
   currentSyncJob,
   startSyncJob,
+  preflightRecordings,
+  snapshotConfig,
   startTextBackfillJob,
   syncTextsForContact,
 } from "./fub-sync";
@@ -277,6 +280,74 @@ export function registerCrmRoutes(app: Express, deps: { requireAuth: Middleware 
     });
   });
 
+  /**
+   * Email a contact from their record.
+   *
+   * Sends through Spencer's own Google Workspace mailbox rather than the app's
+   * transactional sender, so it lands in his Sent folder, threads when the
+   * client replies, and is picked up by Follow Up Boss's mailbox sync — which
+   * means it comes back through the ordinary CRM mirror with nothing needing
+   * to be told about it. See server/gmail.ts.
+   */
+  app.post("/api/admin/crm/contacts/:fubId/email", requireAuth, async (req, res) => {
+    const fubId = String((req.params as any).fubId ?? "");
+    const contact = storage.getCrmContact(fubId);
+    if (!contact) return res.status(404).json({ message: "Contact not found" });
+    if (!contact.email) {
+      return res.status(400).json({ message: "This contact has no email address." });
+    }
+
+    const subject = String(req.body?.subject ?? "").trim();
+    const text = String(req.body?.body ?? "").trim();
+    if (!subject) return res.status(400).json({ message: "Give the email a subject." });
+    if (!text) return res.status(400).json({ message: "The message is empty." });
+
+    const userId = (req as any).authUserId;
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+    const sent = await sendGmail(userId, {
+      to: contact.email,
+      subject,
+      text,
+      threadId: typeof req.body?.threadId === "string" ? req.body.threadId : undefined,
+      inReplyTo: typeof req.body?.inReplyTo === "string" ? req.body.inReplyTo : undefined,
+    });
+    if (!sent.ok) return res.status(502).json({ message: sent.error ?? "Send failed" });
+
+    // Record it locally straight away. Follow Up Boss will mirror the same
+    // message on its next mailbox sync, and the uid is keyed on Gmail's own
+    // message id so that arrival updates this row rather than duplicating it.
+    const now = new Date().toISOString();
+    storage.upsertCrmActivities([
+      {
+        uid: `email:gmail:${sent.messageId}`,
+        kind: "email",
+        fubId: null,
+        contactFubId: fubId,
+        title: subject,
+        body: text.slice(0, 4000),
+        direction: "outbound",
+        outcome: null,
+        durationSeconds: null,
+        occurredAt: now,
+        dueAt: null,
+        completed: false,
+        assignedTo: null,
+        raw: JSON.stringify({ gmailMessageId: sent.messageId, gmailThreadId: sent.threadId }),
+        syncedAt: now,
+      },
+    ]);
+
+    res.json({ ok: true, messageId: sent.messageId, threadId: sent.threadId });
+  });
+
+  /** Whether the Google connection can currently send email. */
+  app.get("/api/admin/crm/email-status", requireAuth, (req, res) => {
+    const userId = (req as any).authUserId;
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    res.json(canSendEmail(userId));
+  });
+
   app.get("/api/admin/crm/deals", requireAuth, (req, res) => {
     res.json(
       storage
@@ -398,6 +469,47 @@ export function registerCrmRoutes(app: Express, deps: { requireAuth: Middleware 
         "resolving when the account closes. Downloading is a one-time job that " +
         "has to happen before cancelling.",
     });
+  });
+
+  /**
+   * Measure before downloading anything.
+   *
+   * The size estimate on the inventory is derived from call duration at an
+   * assumed bitrate, and being wrong about the format changes it fourfold.
+   * This reads the real length off a handful of recordings and checks it
+   * against the free space on the volume — because filling the disk under a
+   * running app stops SQLite writing and takes the site down.
+   */
+  app.post("/api/admin/crm/recordings/preflight", requireAuth, async (_req, res) => {
+    try {
+      res.json(await preflightRecordings());
+    } catch (e: any) {
+      res.status(500).json({ message: e?.message ?? "Preflight failed" });
+    }
+  });
+
+  /**
+   * Capture the settings: action plans, smart lists, custom field definitions,
+   * lead-routing groups and the account record. None of it is rendered here;
+   * all of it disappears with the subscription.
+   */
+  app.post("/api/admin/crm/snapshot-config", requireAuth, async (_req, res) => {
+    if (!fubConfigured()) {
+      return res.status(400).json({ message: "FUB_API_KEY not set on server" });
+    }
+    try {
+      res.json({ results: await snapshotConfig(), stored: storage.listCrmConfig() });
+    } catch (e: any) {
+      res.status(500).json({ message: e?.message ?? "Snapshot failed" });
+    }
+  });
+
+  app.get("/api/admin/crm/config", requireAuth, (req, res) => {
+    const resource = qs(req, "resource");
+    if (!resource) return res.json({ stored: storage.listCrmConfig() });
+    const records = storage.getCrmConfig(resource);
+    if (!records) return res.status(404).json({ message: "Not captured yet" });
+    res.json({ resource, records });
   });
 
   app.get("/api/admin/crm/sync-runs", requireAuth, (_req, res) => {

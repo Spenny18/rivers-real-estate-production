@@ -24,6 +24,7 @@ import {
   CalendarClock,
   CheckCircle2,
   CircleAlert,
+  FileText,
   Loader2,
   Mail,
   MessageSquare,
@@ -31,6 +32,7 @@ import {
   RefreshCw,
   Copy,
   Search,
+  Send,
   Stethoscope,
   TrendingUp,
   TriangleAlert,
@@ -226,6 +228,8 @@ const KIND_ICON: Record<string, typeof Phone> = {
   call: Phone,
   text: MessageSquare,
   event: Activity,
+  note: FileText,
+  email: Mail,
   task: CheckCircle2,
   appointment: CalendarClock,
 };
@@ -365,6 +369,36 @@ export default function AdminCrmPage() {
     },
     onError: (e) =>
       toast({ title: "Sync failed to start", description: apiErrorMessage(e), variant: "destructive" }),
+  });
+
+  // Email goes out through Spencer's own Google mailbox, so it threads with
+  // replies and comes back through Follow Up Boss's mailbox sync. A connection
+  // made before this existed lacks the send scope, which is worth saying up
+  // front rather than at the moment someone presses Send.
+  const { data: emailStatus } = useQuery<{ ok: boolean; reason?: string }>({
+    queryKey: ["/api/admin/crm/email-status"],
+  });
+  const [composeOpen, setComposeOpen] = useState(false);
+  const [subject, setSubject] = useState("");
+  const [emailBody, setEmailBody] = useState("");
+
+  const sendEmail = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/admin/crm/contacts/${openContact}/email`, {
+        subject,
+        body: emailBody,
+      });
+      return (await res.json()) as { messageId: string };
+    },
+    onSuccess: () => {
+      setComposeOpen(false);
+      setSubject("");
+      setEmailBody("");
+      qc.invalidateQueries({ queryKey: [`/api/admin/crm/contacts/${openContact}`] });
+      toast({ title: "Sent", description: "It's in your Gmail Sent folder and this contact's history." });
+    },
+    onError: (e) =>
+      toast({ title: "Couldn't send", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
   // Reads the live API and reports the field names it actually returns, so the
@@ -1156,6 +1190,84 @@ export default function AdminCrmPage() {
           </DialogHeader>
           {detail && (
             <div className="space-y-5">
+              {/* ---- Compose ----
+                  Sends from Spencer's own mailbox, so a reply threads against
+                  it and Follow Up Boss mirrors it straight back. */}
+              {detail.contact.email && (
+                <div className="rounded-sm border border-border p-3.5">
+                  {composeOpen ? (
+                    <div className="space-y-2.5">
+                      <div className="text-[12px] text-muted-foreground">
+                        To <span className="text-foreground">{detail.contact.email}</span>
+                      </div>
+                      <Input
+                        value={subject}
+                        onChange={(e) => setSubject(e.target.value)}
+                        placeholder="Subject"
+                        data-testid="input-email-subject"
+                        className="rounded-sm"
+                      />
+                      <textarea
+                        value={emailBody}
+                        onChange={(e) => setEmailBody(e.target.value)}
+                        placeholder="Write your message…"
+                        rows={7}
+                        data-testid="input-email-body"
+                        className="w-full text-[14px] leading-relaxed rounded-sm border border-border bg-transparent p-3 resize-y"
+                      />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() => sendEmail.mutate()}
+                          disabled={sendEmail.isPending || !subject.trim() || !emailBody.trim()}
+                          data-testid="button-send-email"
+                          className="rounded-sm text-[11px] font-display tracking-[0.14em]"
+                        >
+                          {sendEmail.isPending ? (
+                            <>
+                              <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" /> SENDING…
+                            </>
+                          ) : (
+                            <>
+                              <Send className="h-3.5 w-3.5 mr-2" /> SEND
+                            </>
+                          )}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setComposeOpen(false)}
+                          className="rounded-sm text-[11px]"
+                        >
+                          CANCEL
+                        </Button>
+                        <span className="text-[11.5px] text-muted-foreground">
+                          Sends from your Gmail, so replies come back to you normally.
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap items-center gap-3">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setComposeOpen(true)}
+                        disabled={!emailStatus?.ok}
+                        data-testid="button-compose-email"
+                        className="rounded-sm text-[11px] font-display tracking-[0.14em]"
+                      >
+                        <Send className="h-3.5 w-3.5 mr-2" /> EMAIL
+                      </Button>
+                      {emailStatus && !emailStatus.ok && (
+                        <span className="text-[12px] text-muted-foreground leading-relaxed">
+                          {emailStatus.reason}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="flex flex-wrap gap-x-5 gap-y-1 text-[13px] text-muted-foreground">
                 {detail.contact.email && (
                   <a href={`mailto:${detail.contact.email}`} className="inline-flex items-center gap-1.5 hover:text-foreground">
