@@ -6,6 +6,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { storage } from "./storage";
 import { fubConfigured, probe, testConnection } from "./fub-client";
+import { canSendEmail, sendGmail } from "./gmail";
 import {
   RESOURCE_SPECS,
   SYNCED_RESOURCES,
@@ -277,6 +278,74 @@ export function registerCrmRoutes(app: Express, deps: { requireAuth: Middleware 
       // empty drawer despite having mirrored deals.
       deals: storage.listCrmDeals({ contactFubId: fubId, limit: 200 }).map(dtoDeal),
     });
+  });
+
+  /**
+   * Email a contact from their record.
+   *
+   * Sends through Spencer's own Google Workspace mailbox rather than the app's
+   * transactional sender, so it lands in his Sent folder, threads when the
+   * client replies, and is picked up by Follow Up Boss's mailbox sync — which
+   * means it comes back through the ordinary CRM mirror with nothing needing
+   * to be told about it. See server/gmail.ts.
+   */
+  app.post("/api/admin/crm/contacts/:fubId/email", requireAuth, async (req, res) => {
+    const fubId = String((req.params as any).fubId ?? "");
+    const contact = storage.getCrmContact(fubId);
+    if (!contact) return res.status(404).json({ message: "Contact not found" });
+    if (!contact.email) {
+      return res.status(400).json({ message: "This contact has no email address." });
+    }
+
+    const subject = String(req.body?.subject ?? "").trim();
+    const text = String(req.body?.body ?? "").trim();
+    if (!subject) return res.status(400).json({ message: "Give the email a subject." });
+    if (!text) return res.status(400).json({ message: "The message is empty." });
+
+    const userId = (req as any).authUserId;
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+
+    const sent = await sendGmail(userId, {
+      to: contact.email,
+      subject,
+      text,
+      threadId: typeof req.body?.threadId === "string" ? req.body.threadId : undefined,
+      inReplyTo: typeof req.body?.inReplyTo === "string" ? req.body.inReplyTo : undefined,
+    });
+    if (!sent.ok) return res.status(502).json({ message: sent.error ?? "Send failed" });
+
+    // Record it locally straight away. Follow Up Boss will mirror the same
+    // message on its next mailbox sync, and the uid is keyed on Gmail's own
+    // message id so that arrival updates this row rather than duplicating it.
+    const now = new Date().toISOString();
+    storage.upsertCrmActivities([
+      {
+        uid: `email:gmail:${sent.messageId}`,
+        kind: "email",
+        fubId: null,
+        contactFubId: fubId,
+        title: subject,
+        body: text.slice(0, 4000),
+        direction: "outbound",
+        outcome: null,
+        durationSeconds: null,
+        occurredAt: now,
+        dueAt: null,
+        completed: false,
+        assignedTo: null,
+        raw: JSON.stringify({ gmailMessageId: sent.messageId, gmailThreadId: sent.threadId }),
+        syncedAt: now,
+      },
+    ]);
+
+    res.json({ ok: true, messageId: sent.messageId, threadId: sent.threadId });
+  });
+
+  /** Whether the Google connection can currently send email. */
+  app.get("/api/admin/crm/email-status", requireAuth, (req, res) => {
+    const userId = (req as any).authUserId;
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    res.json(canSendEmail(userId));
   });
 
   app.get("/api/admin/crm/deals", requireAuth, (req, res) => {

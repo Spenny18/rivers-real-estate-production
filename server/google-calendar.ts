@@ -32,9 +32,17 @@ import { googleRedirectUri } from "./origin";
 // offered over top of something already on the calendar. Adding a scope means
 // reconnecting Google once from /admin/scheduling — until then free/busy
 // simply returns nothing and only in-app bookings are treated as busy.
+// gmail.send lets the CRM send email as Spencer from his own mailbox, so it
+// lands in Sent, threads with replies, and comes back through Follow Up Boss's
+// mailbox sync — see server/gmail.ts for why that matters more than it sounds.
+// It is a Google "restricted" scope, which would normally require a
+// verification review; setting the OAuth consent screen to Internal (available
+// because riversrealestate.ca is Workspace) exempts it, and also stops refresh
+// tokens expiring every seven days.
 const SCOPE = [
   "https://www.googleapis.com/auth/calendar.events",
   "https://www.googleapis.com/auth/calendar.freebusy",
+  "https://www.googleapis.com/auth/gmail.send",
 ].join(" ");
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
