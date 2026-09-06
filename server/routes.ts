@@ -2653,6 +2653,23 @@ export async function registerRoutes(
     }
   });
 
+  // GET /api/admin/mls-sync/sold-probe (auth) — ask the RETS feed whether it
+  // will hand over sold listings, and under what status value and field names.
+  //
+  // The active sync queries StandardStatus=|A. A market report needs closed
+  // sales with a price and a date, and none of that is knowable from here:
+  // boards differ on the status value, on whether ClosePrice is selectable,
+  // and on whether the licence includes sold data at all. Read-only — metadata
+  // plus single-row searches.
+  app.get("/api/admin/mls-sync/sold-probe", requireAuth, async (_req, res) => {
+    try {
+      const { probeSoldListings } = await import("./rets-sold-probe");
+      res.json(await probeSoldListings());
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message ?? "Probe failed" });
+    }
+  });
+
   // POST /api/admin/mls-sync/reset (auth) — drop & recreate mls_listings table
   // (used to recover from "database disk image is malformed" after a publish
   // restored a corrupt SQLite snapshot; sync immediately starts after rebuild).
