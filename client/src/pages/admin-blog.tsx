@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+import { ImageField } from "@/components/image-field";
 
 interface AdminBlogPost {
   id: number;
@@ -294,24 +295,14 @@ export default function AdminBlogPage() {
 
                 <div>
                   <Label className="text-xs font-display tracking-[0.18em] text-muted-foreground inline-flex items-center gap-1.5">
-                    <ImageIcon className="w-3 h-3" strokeWidth={1.8} /> HERO IMAGE URL
+                    <ImageIcon className="w-3 h-3" strokeWidth={1.8} /> HERO IMAGE
                   </Label>
-                  <Input
-                    value={draft.heroImage || ""}
-                    onChange={(e) => setDraft({ ...draft, heroImage: e.target.value })}
-                    className="mt-1 h-10"
-                    placeholder="https://… (full URL to a JPG/PNG/WebP)"
-                  />
-                  {draft.heroImage && (
-                    <div className="mt-3 aspect-[5/2] rounded-sm overflow-hidden border border-border bg-secondary">
-                      <img
-                        src={draft.heroImage}
-                        alt="Hero preview"
-                        className="w-full h-full object-cover"
-                        onError={(e) => ((e.target as HTMLImageElement).style.opacity = "0.3")}
-                      />
-                    </div>
-                  )}
+                  <div className="mt-1">
+                    <ImageField
+                      value={draft.heroImage || ""}
+                      onChange={(v) => setDraft({ ...draft, heroImage: v })}
+                    />
+                  </div>
                 </div>
 
                 <div>
