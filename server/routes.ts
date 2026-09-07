@@ -2113,9 +2113,10 @@ export async function registerRoutes(
     return out;
   };
 
+  // Summaries. admin-condos already fetches the selected building by slug,
+  // so the list never needed the prose it was carrying.
   app.get("/api/admin/condos", requireAuth, (_req, res) => {
-    const rows = storage.listCondoBuildings();
-    res.json(rows.map(adminCondoToJson));
+    res.json(storage.listCondoSummaries());
   });
 
   app.get("/api/admin/condos/:slug", requireAuth, (req, res) => {
@@ -2622,8 +2623,11 @@ export async function registerRoutes(
     return requireAuth(req, res, next);
   }
 
+  // Summaries. The list shows title/status/date; the editor fetches the full
+  // post by slug when one is selected. Shipping bodies here was ~877KB per
+  // load of /admin/blog — 95% of it the article text, none of it displayed.
   app.get("/api/admin/blog", requireAuth, (_req, res) => {
-    res.json(storage.listBlogPosts());
+    res.json(storage.listBlogSummaries());
   });
   app.get("/api/admin/blog/:slug", requireAuth, (req, res) => {
     const p = storage.getBlogBySlug(req.params.slug);
@@ -2751,8 +2755,11 @@ export async function registerRoutes(
     if (typeof s !== "string") return s ?? fallback;
     try { return JSON.parse(s); } catch { return fallback; }
   }
+  // Summaries — see listNeighbourhoodSummaries. No neighbourhoodToJson here:
+  // the fields it parses are exactly the ones this no longer returns. The
+  // per-slug route below still returns the full, parsed record.
   app.get("/api/admin/neighbourhoods", requireAuth, (_req, res) => {
-    res.json(storage.listNeighbourhoods().map(neighbourhoodToJson));
+    res.json(storage.listNeighbourhoodSummaries());
   });
   app.get("/api/admin/neighbourhoods/:slug", requireAuth, (req, res) => {
     const n = storage.getNeighbourhoodBySlug(req.params.slug);

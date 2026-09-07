@@ -1,7 +1,7 @@
 // /admin/neighbourhoods — self-serve CMS for the editorial neighbourhood
 // pages. Master-detail layout matching /admin/condos. Editorial paragraphs
 // are stored as JSON arrays and edited as blank-line-separated text.
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Save, Image as ImageIcon } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
@@ -129,10 +129,13 @@ export default function AdminNeighbourhoodsPage() {
     if (!selectedSlug && hoods.length > 0) setSelectedSlug(hoods[0].slug);
   }, [hoods, selectedSlug]);
 
-  const selected = useMemo(
-    () => hoods.find((h) => h.slug === selectedSlug) ?? null,
-    [hoods, selectedSlug],
-  );
+  // Summaries in the list, full record for the editor — the long-form copy is
+  // around 80% of a neighbourhood row and none of it appears in the sidebar.
+  // Seeding the draft from a summary would blank those fields on save.
+  const { data: selected } = useQuery<AdminNeighbourhood>({
+    queryKey: ["/api/admin/neighbourhoods", selectedSlug],
+    enabled: !!selectedSlug,
+  });
 
   useEffect(() => {
     setDraft(selected ? { ...selected } : null);

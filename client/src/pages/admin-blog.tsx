@@ -2,7 +2,7 @@
 // list of all posts on the left, edit form on the right. Saves persist to
 // the database; public /blog re-fetches on next view. Same auth + shell as
 // the other admin pages.
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Save, Image as ImageIcon } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
@@ -55,10 +55,15 @@ export default function AdminBlogPage() {
     if (!selectedSlug && posts.length > 0) setSelectedSlug(posts[0].slug);
   }, [posts, selectedSlug]);
 
-  const selected = useMemo(
-    () => posts.find((p) => p.slug === selectedSlug) ?? null,
-    [posts, selectedSlug],
-  );
+  // The list carries summaries only — it deliberately does not include the
+  // article body, which is 95% of the payload and is not shown in the list.
+  // Fetch the selected post in full so the editor has something to edit;
+  // seeding the draft from a summary would open an empty body box and a save
+  // would then write that emptiness back over the article.
+  const { data: selected } = useQuery<AdminBlogPost>({
+    queryKey: ["/api/admin/blog", selectedSlug],
+    enabled: !!selectedSlug,
+  });
 
   // Reset the draft whenever the selected post changes (server is the source
   // of truth — unsaved local changes are intentionally dropped on switch).

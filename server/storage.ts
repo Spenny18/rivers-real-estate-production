@@ -1011,6 +1011,19 @@ export const db = drizzle(sqlite);
 /** A blog post as listings return it — everything but the article body. */
 export type BlogPostSummary = Omit<BlogPost, "body">;
 
+/** List-view shapes: identity and metadata, without the long-form copy. */
+export type NeighbourhoodSummary = Pick<
+  Neighbourhood,
+  "slug" | "name" | "tagline" | "quadrant" | "zone" | "heroImage" | "heroCredit"
+  | "centerLat" | "centerLng" | "avgPrice" | "activeCount" | "sortOrder"
+>;
+export type CondoSummary = Pick<
+  CondoBuilding,
+  "slug" | "name" | "tagline" | "address" | "neighbourhoodSlug" | "neighbourhood"
+  | "quadrant" | "units" | "stories" | "builtIn" | "developer" | "lat" | "lng"
+  | "heroImage" | "sortOrder" | "featured"
+>;
+
 export type PublicListing = Omit<ListingRow, "features" | "gallery"> & {
   features: string[];
   gallery: string[];
@@ -1875,6 +1888,61 @@ export class DatabaseStorage implements IStorage {
   // ---- Blog posts ---------------------------------------------------------
   listBlogPosts(): BlogPost[] {
     return db.select().from(blogPosts).orderBy(desc(blogPosts.publishedAt)).all();
+  }
+
+  /**
+   * A neighbourhood without its editorial prose.
+   *
+   * The long-form copy — story, the per-section blocks, schools, borders,
+   * the condo list — is around 80% of the row, and the admin list view shows
+   * a name and a zone. The editor fetches the full record by slug when a
+   * neighbourhood is selected, which is what admin-condos already did.
+   */
+  listNeighbourhoodSummaries(): NeighbourhoodSummary[] {
+    return db
+      .select({
+        slug: neighbourhoods.slug,
+        name: neighbourhoods.name,
+        tagline: neighbourhoods.tagline,
+        quadrant: neighbourhoods.quadrant,
+        zone: neighbourhoods.zone,
+        heroImage: neighbourhoods.heroImage,
+        heroCredit: neighbourhoods.heroCredit,
+        centerLat: neighbourhoods.centerLat,
+        centerLng: neighbourhoods.centerLng,
+        avgPrice: neighbourhoods.avgPrice,
+        activeCount: neighbourhoods.activeCount,
+        sortOrder: neighbourhoods.sortOrder,
+      })
+      .from(neighbourhoods)
+      .orderBy(asc(neighbourhoods.sortOrder), asc(neighbourhoods.name))
+      .all();
+  }
+
+  /** A condo building without its editorial prose — same reasoning. */
+  listCondoSummaries(): CondoSummary[] {
+    return db
+      .select({
+        slug: condoBuildings.slug,
+        name: condoBuildings.name,
+        tagline: condoBuildings.tagline,
+        address: condoBuildings.address,
+        neighbourhoodSlug: condoBuildings.neighbourhoodSlug,
+        neighbourhood: condoBuildings.neighbourhood,
+        quadrant: condoBuildings.quadrant,
+        units: condoBuildings.units,
+        stories: condoBuildings.stories,
+        builtIn: condoBuildings.builtIn,
+        developer: condoBuildings.developer,
+        lat: condoBuildings.lat,
+        lng: condoBuildings.lng,
+        heroImage: condoBuildings.heroImage,
+        sortOrder: condoBuildings.sortOrder,
+        featured: condoBuildings.featured,
+      })
+      .from(condoBuildings)
+      .orderBy(asc(condoBuildings.sortOrder), asc(condoBuildings.name))
+      .all();
   }
 
   /**
