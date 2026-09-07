@@ -3260,6 +3260,30 @@ export async function registerRoutes(
   let seoReportCache: { at: number; data: unknown } | null = null;
   const SEO_REPORT_TTL_MS = 10 * 60 * 1000;
 
+  // ---- Legacy WordPress images ----
+  // GET reports what still points at the old host; POST does the copy.
+  // POST defaults to a dry run: it reaches out to a third-party host and
+  // rewrites content rows, so writing has to be asked for explicitly.
+  app.get("/api/admin/seo/legacy-images", requireAuth, async (_req, res) => {
+    const { findLegacyRows } = await import("./legacy-images");
+    const rows = findLegacyRows();
+    res.json({ ok: true, count: rows.length, rows });
+  });
+
+  app.post("/api/admin/seo/legacy-images", requireAuth, async (req, res) => {
+    const { migrateLegacyImages } = await import("./legacy-images");
+    try {
+      const report = await migrateLegacyImages({
+        uploadsDir: ensureUploadsDir("legacy"),
+        dryRun: req.body?.dryRun !== false,
+      });
+      res.json(report);
+    } catch (e: any) {
+      console.error("[legacy-images] migration failed:", e);
+      res.status(500).json({ ok: false, error: e?.message ?? "Migration failed" });
+    }
+  });
+
   // ---- Search Console: sitemap submission ----
   // Read-only status plus a manual "submit now". The automatic submit runs
   // once after each deploy (see server/search-console.ts); this is for
