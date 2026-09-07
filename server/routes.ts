@@ -3273,6 +3273,43 @@ export async function registerRoutes(
   // ?refresh=1 forces a rebuild after content edits.
   let seoReportCache: { at: number; data: unknown } | null = null;
   const SEO_REPORT_TTL_MS = 10 * 60 * 1000;
+  // A build in flight, if any. The crawl visits ~160 of our own routes and
+  // every one is an SSR render, so on the production machine it takes far
+  // longer than a request should be held open — long enough that the proxy
+  // gave up and answered 502, which is why this tab rendered nothing. The
+  // report is now built off the request path: the endpoint answers straight
+  // away with whatever it has and reports that a build is running.
+  //
+  // Holding the promise also collapses concurrent requests onto one crawl.
+  // Pressing Rescan repeatedly used to start a new 160-page crawl each time,
+  // which is how this page took the public site down earlier.
+  let seoReportBuild: Promise<unknown> | null = null;
+  let seoReportError: string | null = null;
+
+  function startSeoReportBuild(): Promise<unknown> {
+    if (seoReportBuild) return seoReportBuild;
+    seoReportError = null;
+    seoReportBuild = (async () => {
+      const { buildSeoReport } = await import("./seo-keywords");
+      const overrides: Record<string, string> = {};
+      for (const t of storage.listSeoKeywordTargets()) overrides[t.path] = t.focusKeyword;
+      // Crawl ourselves over loopback so the analysis sees exactly what a
+      // crawler sees, including SSR metadata and the real anchor graph.
+      const port = process.env.PORT || "5000";
+      const data = await buildSeoReport({ baseUrl: `http://127.0.0.1:${port}`, overrides });
+      seoReportCache = { at: Date.now(), data };
+      return data;
+    })()
+      .catch((err: any) => {
+        seoReportError = err?.message ?? "Failed to build SEO report";
+        console.error("[seo-keywords] build failed:", seoReportError);
+        return null;
+      })
+      .finally(() => {
+        seoReportBuild = null;
+      });
+    return seoReportBuild;
+  }
 
   // ---- Legacy WordPress images ----
   // GET reports what still points at the old host; POST does the copy.
@@ -3328,27 +3365,32 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/admin/seo/keywords", requireAuth, async (req, res) => {
-    try {
-      const refresh = req.query.refresh === "1";
-      if (!refresh && seoReportCache && Date.now() - seoReportCache.at < SEO_REPORT_TTL_MS) {
-        return res.json({ ok: true, cached: true, ...(seoReportCache.data as object) });
-      }
-      const { buildSeoReport } = await import("./seo-keywords");
-      const overrides: Record<string, string> = {};
-      for (const t of storage.listSeoKeywordTargets()) overrides[t.path] = t.focusKeyword;
+  // Answers immediately, always. Returns the cached report when there is one,
+  // and kicks off a rebuild in the background when it is stale or ?refresh=1
+  // was asked for. `building: true` tells the client to poll; the first ever
+  // load has no report to show and says so rather than hanging.
+  app.get("/api/admin/seo/keywords", requireAuth, (req, res) => {
+    const refresh = req.query.refresh === "1";
+    const fresh =
+      seoReportCache && Date.now() - seoReportCache.at < SEO_REPORT_TTL_MS;
 
-      // Crawl ourselves over loopback so the analysis sees exactly what a
-      // crawler sees, including SSR metadata and the real anchor graph.
-      const port = process.env.PORT || "5000";
-      const baseUrl = `http://127.0.0.1:${port}`;
-      const data = await buildSeoReport({ baseUrl, overrides });
-      seoReportCache = { at: Date.now(), data };
-      res.json({ ok: true, cached: false, ...data });
-    } catch (err: any) {
-      console.error("[seo-keywords] build failed:", err?.message ?? err);
-      res.status(500).json({ ok: false, message: err?.message ?? "Failed to build SEO report" });
+    if (refresh || !fresh) startSeoReportBuild();
+
+    if (seoReportCache) {
+      return res.json({
+        ok: true,
+        cached: true,
+        building: !!seoReportBuild,
+        staleAt: seoReportCache.at,
+        ...(seoReportCache.data as object),
+      });
     }
+    // Nothing built yet. Not an error — the crawl is under way.
+    res.json({
+      ok: false,
+      building: !!seoReportBuild,
+      message: seoReportError ?? "Building the first report — this takes a minute.",
+    });
   });
 
   app.put("/api/admin/seo/keywords", requireAuth, (req, res) => {
