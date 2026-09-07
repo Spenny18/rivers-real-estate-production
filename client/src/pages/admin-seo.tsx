@@ -7,7 +7,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  RefreshCw, Search, AlertTriangle, Link2, Unlink, Target, ExternalLink, Save, X,
+  RefreshCw, Search, AlertTriangle, Link2, Unlink, Target, ExternalLink, Save, X, UploadCloud,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
@@ -43,6 +43,131 @@ const GRADE_STYLES: Record<string, string> = {
   fair: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30",
   weak: "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/30",
 };
+
+interface SitemapEntry {
+  path: string;
+  lastSubmitted?: string;
+  lastDownloaded?: string;
+  isPending?: boolean;
+  warnings?: number;
+  errors?: number;
+}
+interface ScStatus {
+  ok?: boolean;
+  connected?: boolean;
+  siteUrl?: string;
+  sitemaps?: SitemapEntry[];
+  lastSubmittedAt?: string;
+  reason?: string;
+  error?: string;
+}
+
+const fmtDate = (iso?: string) =>
+  iso ? new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "never";
+
+/**
+ * Sitemap submission to Search Console.
+ *
+ * The submit also runs automatically 60s after every deploy (see
+ * server/search-console.ts). This card exists so the state is visible and so a
+ * submit can be forced without waiting to ship — previously the only way to
+ * run one was a fetch() pasted into the browser console.
+ *
+ * lastDownloaded is the number that actually matters: lastSubmitted only says
+ * we asked, while lastDownloaded says Google went and re-read the file.
+ */
+function SitemapCard() {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery<ScStatus>({
+    queryKey: ["/api/admin/seo/search-console"],
+    queryFn: async () => {
+      const r = await fetch("/api/admin/seo/search-console", { credentials: "include" });
+      if (!r.ok && r.status !== 400) throw new Error("Failed to load Search Console status");
+      return r.json();
+    },
+    staleTime: 60 * 1000,
+  });
+
+  const submit = useMutation({
+    mutationFn: async () => {
+      const r = await fetch("/api/admin/seo/search-console/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+        credentials: "include",
+      });
+      const json = await r.json();
+      if (!json.ok) throw new Error(json.error ?? json.reason ?? "Submit failed");
+      return json;
+    },
+    onSuccess: (r: any) => {
+      toast({
+        title: "Sitemap submitted",
+        description: `${r.submitted} → ${r.siteUrl}. Google re-reads it on its own schedule, usually within a day.`,
+      });
+      qc.invalidateQueries({ queryKey: ["/api/admin/seo/search-console"] });
+    },
+    onError: (e: any) =>
+      toast({ title: "Submit failed", description: String(e?.message ?? e), variant: "destructive" }),
+  });
+
+  const sm = data?.sitemaps?.[0];
+  const blocked = data?.reason ?? data?.error;
+
+  return (
+    <section className="border border-border bg-card p-5">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="font-display text-[11px] tracking-[0.16em] text-muted-foreground mb-1.5">
+            SITEMAP · SEARCH CONSOLE
+          </div>
+          {isLoading ? (
+            <Skeleton className="h-5 w-72" />
+          ) : blocked ? (
+            <p className="text-[13px] text-amber-700 dark:text-amber-400 flex items-start gap-2 max-w-xl leading-relaxed">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              {blocked}
+            </p>
+          ) : (
+            <>
+              <p className="text-sm text-foreground">
+                Connected to <span className="font-mono text-[13px]">{data?.siteUrl}</span>. Submitted
+                automatically after each deploy.
+              </p>
+              {sm ? (
+                <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground tabular-nums">
+                  <span>Last submitted <span className="text-foreground">{fmtDate(sm.lastSubmitted)}</span></span>
+                  <span>Last read by Google <span className="text-foreground">{fmtDate(sm.lastDownloaded)}</span></span>
+                  {sm.isPending && <span className="text-amber-600 dark:text-amber-400">queued</span>}
+                  <span className={sm.errors ? "text-rose-600 dark:text-rose-400" : ""}>
+                    {sm.errors ?? 0} error{sm.errors === 1 ? "" : "s"}
+                  </span>
+                  <span className={sm.warnings ? "text-amber-600 dark:text-amber-400" : ""}>
+                    {sm.warnings ?? 0} warning{sm.warnings === 1 ? "" : "s"}
+                  </span>
+                </div>
+              ) : (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Google is holding no sitemap for this property yet. Submit one to start.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+        <Button
+          onClick={() => submit.mutate()}
+          disabled={submit.isPending || !!blocked}
+          className="gap-2 rounded-sm font-display text-[11px] tracking-[0.18em] shrink-0"
+          data-testid="button-sitemap-submit"
+        >
+          <UploadCloud className={`w-3.5 h-3.5 ${submit.isPending ? "animate-pulse" : ""}`} />
+          SUBMIT SITEMAP
+        </Button>
+      </div>
+    </section>
+  );
+}
 
 function Stat({ label, value, tone }: { label: string; value: string | number; tone?: string }) {
   return (
@@ -165,6 +290,8 @@ export default function AdminSeoPage() {
           </div>
         ) : (
           <>
+            <SitemapCard />
+
             {/* Summary */}
             <section>
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">

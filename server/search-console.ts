@@ -85,6 +85,22 @@ export async function resolveSiteUrl(
     return { error: "This Google account has no Search Console properties." };
   }
 
+  // GSC_SITE_URL already names the property for server/seo-stats.ts, which
+  // reads Search Analytics through a service account. Honour it here too so
+  // the two modules can never disagree about which property this deploy
+  // means — we still look it up in the list, because we need its permission
+  // level and because a typo should say so rather than 404 at submit time.
+  const configured = process.env.GSC_SITE_URL?.trim();
+  if (configured) {
+    const hit = entries.find((e) => e.siteUrl === configured);
+    if (hit) return { siteUrl: hit.siteUrl, permissionLevel: hit.permissionLevel };
+    return {
+      error:
+        `GSC_SITE_URL is set to "${configured}" but this Google account cannot see that ` +
+        `property. Available: ${entries.map((e) => e.siteUrl).join(", ")}`,
+    };
+  }
+
   const host = new URL(origin).host; // e.g. riversrealestate.ca
   const bareHost = host.replace(/^www\./, "");
 
