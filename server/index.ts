@@ -134,6 +134,12 @@ app.use((req, res, next) => {
   } catch (err) {
     console.error("[crm-sync] failed to start cron:", err);
   }
+  try {
+    const { scheduleSitemapSubmit } = await import("./search-console");
+    scheduleSitemapSubmit();
+  } catch (err) {
+    console.error("[search-console] failed to schedule sitemap submit:", err);
+  }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
