@@ -9,6 +9,8 @@ import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { storage, stripUser } from "./storage";
+import { sqlite } from "./storage";
+import { SqliteSessionStore, persistentSessionSecret } from "./session-store";
 import { seedDatabase } from "./seed";
 import { signUpSchema, signInSchema, inquirySchema } from "@shared/schema";
 import { runSync } from "./rets-sync";
@@ -290,24 +292,52 @@ declare module "express-session" {
 // Bearer-token store (used because the deploy proxy strips Set-Cookie headers,
 // so the iframe-hosted app cannot use real cookie sessions). Tokens live in
 // memory and clear on server restart — acceptable for a single-tenant demo app.
-const bearerTokens = new Map<string, { userId: number; createdAt: number }>();
 const TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
+// Bearer tokens live in SQLite, not a Map. The 30-day TTL above never used to
+// apply: the Map was process memory, so every deploy threw the tokens away and
+// signed the admin out — occasionally mid-edit, with unsaved work in the page
+// editor. See server/session-store.ts, which fixes the cookie half.
 function issueToken(userId: number): string {
   const token = randomBytes(24).toString("base64url");
-  bearerTokens.set(token, { userId, createdAt: Date.now() });
+  sqlite
+    .prepare("INSERT INTO admin_tokens (token, user_id, created_at) VALUES (?, ?, ?)")
+    .run(token, userId, new Date().toISOString());
+  // Opportunistic cleanup — expired rows are dead weight, and sign-in is a
+  // rare enough event to be a good moment for it.
+  try {
+    sqlite
+      .prepare("DELETE FROM admin_tokens WHERE created_at <= ?")
+      .run(new Date(Date.now() - TOKEN_TTL_MS).toISOString());
+  } catch {
+    /* cleanup is best-effort; never fail a sign-in over it */
+  }
   return token;
+}
+
+function lookupToken(token: string): number | null {
+  try {
+    const row = sqlite
+      .prepare("SELECT user_id, created_at FROM admin_tokens WHERE token = ?")
+      .get(token) as { user_id: number; created_at: string } | undefined;
+    if (!row) return null;
+    if (Date.now() - new Date(row.created_at).getTime() >= TOKEN_TTL_MS) {
+      sqlite.prepare("DELETE FROM admin_tokens WHERE token = ?").run(token);
+      return null;
+    }
+    return row.user_id;
+  } catch (e: any) {
+    console.error("[auth] token lookup failed:", e?.message ?? e);
+    return null;
+  }
 }
 
 function resolveUserId(req: Request): number | null {
   // Prefer Authorization: Bearer <token>
   const auth = req.headers.authorization;
   if (auth && auth.startsWith("Bearer ")) {
-    const token = auth.slice(7);
-    const entry = bearerTokens.get(token);
-    if (entry && Date.now() - entry.createdAt < TOKEN_TTL_MS) {
-      return entry.userId;
-    }
+    const userId = lookupToken(auth.slice(7));
+    if (userId !== null) return userId;
   }
   // Fall back to session cookie (works in dev / direct origin)
   if (req.session?.userId) return req.session.userId;
@@ -1014,20 +1044,24 @@ export async function registerRoutes(
   const isProd = process.env.NODE_ENV === "production";
   if (isProd) app.set("trust proxy", 1);
 
-  // Resolve session secret. In production we REFUSE to start without one
-  // so a forgeable hardcoded fallback can't ship to a live URL.
-  let sessionSecret = process.env.SESSION_SECRET;
-  if (!sessionSecret) {
-    if (isProd) {
-      // Generate a random per-process secret. Sessions reset on restart,
-      // but they cannot be forged.
-      sessionSecret = randomBytes(48).toString("base64url");
+  // Resolve session secret. A hardcoded fallback must never ship to a live
+  // URL, so production either takes SESSION_SECRET from the environment or
+  // generates one — but that generated secret is now persisted, because a
+  // fresh secret per process invalidates every cookie on restart and would
+  // quietly undo the persistent store below.
+  let sessionSecret: string;
+  if (isProd) {
+    const resolved = persistentSessionSecret(() => randomBytes(48).toString("base64url"));
+    sessionSecret = resolved.secret;
+    if (resolved.source !== "env") {
       console.warn(
-        "[auth] SESSION_SECRET not set \u2014 using ephemeral random secret. Sessions reset on restart.",
+        `[auth] SESSION_SECRET not set — using a ${resolved.source} secret from the database. ` +
+          "Sessions survive restarts, but set it with `fly secrets set SESSION_SECRET=...` so it " +
+          "also survives the volume being rebuilt.",
       );
-    } else {
-      sessionSecret = "rivers-dev-only-secret";
     }
+  } else {
+    sessionSecret = process.env.SESSION_SECRET || "rivers-dev-only-secret";
   }
 
   app.use(
@@ -1036,6 +1070,7 @@ export async function registerRoutes(
       // start with __Host-. Use that prefix in production so the session
       // cookie survives the proxy.
       name: isProd ? "__Host-rivers-sid" : "rivers.sid",
+      store: new SqliteSessionStore(),
       secret: sessionSecret,
       resave: false,
       saveUninitialized: false,
@@ -1075,7 +1110,11 @@ export async function registerRoutes(
     // Invalidate Bearer token if present
     const auth = req.headers.authorization;
     if (auth?.startsWith("Bearer ")) {
-      bearerTokens.delete(auth.slice(7));
+      try {
+        sqlite.prepare("DELETE FROM admin_tokens WHERE token = ?").run(auth.slice(7));
+      } catch (e: any) {
+        console.error("[auth] token revoke failed:", e?.message ?? e);
+      }
     }
     req.session?.destroy?.(() => {
       res.json({ ok: true });

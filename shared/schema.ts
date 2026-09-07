@@ -606,6 +606,43 @@ export const accountSessions = sqliteTable("account_sessions", {
 export type AccountSession = typeof accountSessions.$inferSelect;
 export type InsertAccountSession = typeof accountSessions.$inferInsert;
 
+// admin_sessions — express-session storage for the back-office login.
+//
+// Previously express-session ran on its default in-memory store and the
+// bearer tokens below lived in a plain Map, so every deploy silently signed
+// the admin out mid-edit. Both now live in SQLite on the Fly volume, which
+// is the only reason a restart no longer costs a session.
+export const adminSessions = sqliteTable("admin_sessions", {
+  sid: text("sid").primaryKey(),
+  data: text("data").notNull(),
+  expiresAt: text("expires_at").notNull(),
+});
+
+export type AdminSession = typeof adminSessions.$inferSelect;
+
+// admin_tokens — bearer tokens issued at sign-in, for clients that cannot
+// rely on the session cookie (the app is served cross-origin in places).
+export const adminTokens = sqliteTable("admin_tokens", {
+  token: text("token").primaryKey(),
+  userId: integer("user_id").notNull(),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+});
+
+export type AdminToken = typeof adminTokens.$inferSelect;
+
+// app_secrets — server-generated secrets that must outlive a restart.
+// Only used when the matching env var is absent: a secret set through
+// `fly secrets` always wins, and is the better place for it.
+export const appSecrets = sqliteTable("app_secrets", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+});
+
 // account_magic_tokens — one-time login links emailed to the user.
 export const accountMagicTokens = sqliteTable("account_magic_tokens", {
   id: text("id").primaryKey(),
