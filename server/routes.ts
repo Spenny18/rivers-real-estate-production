@@ -2516,9 +2516,16 @@ export async function registerRoutes(
   });
 
   // GET /api/public/blog — only published posts (drafts hidden from public).
+  //
+  // Summaries, not full posts. The index renders cards from excerpt/title/hero
+  // and never touches the body; the article page fetches its own post by slug.
+  // Shipping bodies here meant every visitor to /blog downloaded all 37
+  // articles in full — and because /blog is SSR-prefetched, that JSON was
+  // embedded in the HTML as well, so it went out twice in one response. It was
+  // never indexable either way: inside a <script> tag it is not page copy.
   app.get("/api/public/blog", (_req, res) => {
-    const all = storage.listBlogPosts();
-    res.json(all.filter((p: any) => (p.status ?? "published") === "published"));
+    const all = storage.listBlogSummaries();
+    res.json(all.filter((p) => (p.status ?? "published") === "published"));
   });
 
   // GET /api/public/blog/:slug — 404 on drafts so they don't leak.
