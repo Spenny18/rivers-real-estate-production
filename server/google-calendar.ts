@@ -39,10 +39,14 @@ import { googleRedirectUri } from "./origin";
 // verification review; setting the OAuth consent screen to Internal (available
 // because riversrealestate.ca is Workspace) exempts it, and also stops refresh
 // tokens expiring every seven days.
+// webmasters lets the app submit the sitemap to Search Console after a deploy
+// and read back what Google made of it — see server/search-console.ts. It also
+// needs the "Google Search Console API" enabled in the Cloud project.
 const SCOPE = [
   "https://www.googleapis.com/auth/calendar.events",
   "https://www.googleapis.com/auth/calendar.freebusy",
   "https://www.googleapis.com/auth/gmail.send",
+  "https://www.googleapis.com/auth/webmasters",
 ].join(" ");
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";

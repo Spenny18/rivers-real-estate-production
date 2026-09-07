@@ -3221,6 +3221,36 @@ export async function registerRoutes(
   let seoReportCache: { at: number; data: unknown } | null = null;
   const SEO_REPORT_TTL_MS = 10 * 60 * 1000;
 
+  // ---- Search Console: sitemap submission ----
+  // Read-only status plus a manual "submit now". The automatic submit runs
+  // once after each deploy (see server/search-console.ts); this is for
+  // confirming it works and for forcing a resubmit inside the daily debounce.
+  app.get("/api/admin/seo/search-console", requireAuth, async (req, res) => {
+    const userId = (req as any).authUserId as number;
+    const { canUseSearchConsole, lastSubmission, listSitemaps } = await import("./search-console");
+    const guard = canUseSearchConsole(userId);
+    if (!guard.ok) {
+      return res.json({ ok: false, connected: false, reason: guard.reason, ...lastSubmission(userId) });
+    }
+    try {
+      const status = await listSitemaps(userId);
+      res.json({ connected: true, ...lastSubmission(userId), ...status });
+    } catch (e: any) {
+      res.status(502).json({ ok: false, connected: true, error: e?.message ?? "Search Console unavailable" });
+    }
+  });
+
+  app.post("/api/admin/seo/search-console/submit", requireAuth, async (req, res) => {
+    const userId = (req as any).authUserId as number;
+    const { submitSitemap } = await import("./search-console");
+    try {
+      const r = await submitSitemap(userId, { force: req.body?.force !== false });
+      res.status(r.ok ? 200 : 400).json(r);
+    } catch (e: any) {
+      res.status(502).json({ ok: false, error: e?.message ?? "Search Console unavailable" });
+    }
+  });
+
   app.get("/api/admin/seo/keywords", requireAuth, async (req, res) => {
     try {
       const refresh = req.query.refresh === "1";

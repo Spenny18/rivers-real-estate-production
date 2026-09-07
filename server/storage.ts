@@ -2242,6 +2242,21 @@ export class DatabaseStorage implements IStorage {
       .slice(0, limit);
   }
   // ---- User integrations (OAuth tokens) --------------------------------
+  /**
+   * First active integration for a provider, regardless of user.
+   *
+   * Background jobs (the post-deploy sitemap submit) have no request context
+   * and so no userId, but this is a single-operator deployment: whoever
+   * connected Google is the account to act as.
+   */
+  findActiveIntegration(provider: string): UserIntegration | undefined {
+    return db
+      .select()
+      .from(userIntegrations)
+      .where(and(eq(userIntegrations.provider, provider), eq(userIntegrations.active, true))!)
+      .get();
+  }
+
   getUserIntegration(userId: number, provider: string): UserIntegration | undefined {
     return db
       .select()
