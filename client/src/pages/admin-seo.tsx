@@ -8,6 +8,7 @@ import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   RefreshCw, Search, AlertTriangle, Link2, Unlink, Target, ExternalLink, Save, X, UploadCloud,
+  ImageDown,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
@@ -169,6 +170,124 @@ function SitemapCard() {
   );
 }
 
+interface LegacyResult { table: string; slug: string; from: string; to?: string; status: string; error?: string }
+interface LegacyReport {
+  ok: boolean; dryRun: boolean; scanned: number; migrated: number; failed: number; skipped: number;
+  results: LegacyResult[];
+}
+
+/**
+ * Hero images still served by the old WordPress host.
+ *
+ * These are the og:image, the schema.org image and the hero on the page, so
+ * the day luxuryhomescalgary.ca stops answering they all break at once. The
+ * migration copies each file onto our own volume and repoints the row.
+ *
+ * Preview first, deliberately: the run fetches from a third-party host and
+ * rewrites content rows, and a retired WordPress commonly answers 200 with a
+ * parking page — which the server rejects, but which is much easier to reason
+ * about after seeing the list.
+ */
+function LegacyImagesCard() {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [report, setReport] = useState<LegacyReport | null>(null);
+
+  const { data } = useQuery<{ ok: boolean; count: number }>({
+    queryKey: ["/api/admin/seo/legacy-images"],
+    queryFn: async () => {
+      const r = await fetch("/api/admin/seo/legacy-images", { credentials: "include" });
+      if (!r.ok) throw new Error("Failed to load legacy image status");
+      return r.json();
+    },
+    staleTime: 60 * 1000,
+  });
+
+  const run = useMutation({
+    mutationFn: async (dryRun: boolean) => {
+      const r = await fetch("/api/admin/seo/legacy-images", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dryRun }),
+        credentials: "include",
+      });
+      return (await r.json()) as LegacyReport;
+    },
+    onSuccess: (rep) => {
+      setReport(rep);
+      if (rep.dryRun) {
+        toast({ title: `${rep.scanned} image${rep.scanned === 1 ? "" : "s"} would be copied`, description: "Nothing changed yet — press Migrate to run it." });
+      } else if (rep.ok) {
+        toast({ title: `Migrated ${rep.migrated}`, description: "Rows now point at /uploads/legacy/ on our own storage." });
+      } else {
+        toast({
+          title: `${rep.migrated} migrated, ${rep.failed} failed`,
+          description: "Rows that failed were left pointing at the old host.",
+          variant: "destructive",
+        });
+      }
+      qc.invalidateQueries({ queryKey: ["/api/admin/seo/legacy-images"] });
+    },
+    onError: (e: any) => toast({ title: "Migration failed", description: String(e?.message ?? e), variant: "destructive" }),
+  });
+
+  const count = data?.count ?? 0;
+  if (data && count === 0 && !report) return null; // nothing to do — stay out of the way
+
+  return (
+    <section className="border border-border bg-card p-5">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="font-display text-[11px] tracking-[0.16em] text-muted-foreground mb-1.5">
+            LEGACY WORDPRESS IMAGES
+          </div>
+          <p className="text-sm text-foreground max-w-2xl leading-relaxed">
+            {count} hero image{count === 1 ? "" : "s"} {count === 1 ? "is" : "are"} still served by
+            luxuryhomescalgary.ca. They are the social preview and the schema image as well as the
+            hero, so they all break together if that host goes away. Copy them onto our own storage.
+          </p>
+          {report && (
+            <div className="mt-3 text-xs text-muted-foreground tabular-nums flex flex-wrap gap-x-5 gap-y-1">
+              <span>{report.dryRun ? "Preview" : "Run"}: {report.scanned} scanned</span>
+              <span className="text-foreground">{report.migrated} {report.dryRun ? "would copy" : "copied"}</span>
+              {report.failed > 0 && <span className="text-rose-600 dark:text-rose-400">{report.failed} failed</span>}
+            </div>
+          )}
+          {report?.results?.some((r) => r.status === "failed") && (
+            <ul className="mt-2 text-xs text-rose-600 dark:text-rose-400 space-y-0.5 max-h-40 overflow-auto">
+              {report.results.filter((r) => r.status === "failed").slice(0, 12).map((r) => (
+                <li key={`${r.table}-${r.slug}`} className="font-mono">
+                  {r.table}/{r.slug} — {r.error}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div className="flex gap-2 shrink-0">
+          <Button
+            variant="ghost"
+            onClick={() => run.mutate(true)}
+            disabled={run.isPending}
+            className="rounded-sm font-display text-[11px] tracking-[0.18em]"
+            data-testid="button-legacy-preview"
+          >
+            PREVIEW
+          </Button>
+          <Button
+            onClick={() => run.mutate(false)}
+            disabled={run.isPending || count === 0}
+            className="gap-2 rounded-sm font-display text-[11px] tracking-[0.18em]"
+            data-testid="button-legacy-migrate"
+          >
+            <ImageDown className={`w-3.5 h-3.5 ${run.isPending ? "animate-pulse" : ""}`} />
+            MIGRATE
+          </Button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function Stat({ label, value, tone }: { label: string; value: string | number; tone?: string }) {
   return (
     <div className="border border-border bg-card p-4">
@@ -291,6 +410,7 @@ export default function AdminSeoPage() {
         ) : (
           <>
             <SitemapCard />
+            <LegacyImagesCard />
 
             {/* Summary */}
             <section>
