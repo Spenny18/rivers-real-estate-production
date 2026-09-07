@@ -80,18 +80,37 @@ app.use((req, res, next) => {
     return originalResJson.apply(res, [bodyJson, ...args]);
   };
 
+  // Above this, the body is described by size alone and never serialised.
+  // 2KB is far more than the 500 characters a log line actually shows.
+  const MAX_LOGGED_BODY_BYTES = 2048;
+
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        // Truncated: some endpoints return hundreds of rows, and a log line
-        // is not the place for a whole result set. Handlers that return
-        // personal data project it down before it ever reaches here (see the
-        // DTOs in server/crm-routes.ts) — this is the backstop, not the fix.
-        const body = JSON.stringify(capturedJsonResponse);
-        logLine += ` :: ${body.length > 500 ? `${body.slice(0, 500)}… (${body.length} bytes)` : body}`;
+      if (capturedJsonResponse !== undefined) {
+        // Ask Content-Length how big the body is instead of serialising it to
+        // find out. The previous version called JSON.stringify() on the whole
+        // response and only then sliced the string to 500 characters, so
+        // printing half a line of /api/admin/blog meant serialising 877KB —
+        // synchronously, on the one thread that also has to answer /healthz
+        // within five seconds. On a shared CPU that is a real contributor to
+        // the health check flapping and the machine being pulled out of
+        // rotation. Express has already computed this number; use it.
+        const declared = Number(res.get("content-length"));
+        const size = Number.isFinite(declared) ? declared : null;
+        if (size !== null && size <= MAX_LOGGED_BODY_BYTES) {
+          const body = JSON.stringify(capturedJsonResponse);
+          logLine += ` :: ${body.length > 500 ? `${body.slice(0, 500)}…` : body}`;
+        } else {
+          // Unknown length means a streamed or chunked body — still not worth
+          // serialising blind just to describe it.
+          logLine += ` :: (${size ?? "unknown"} bytes, body omitted)`;
+        }
       }
+      // Drop the reference either way: on a large response this is the whole
+      // result set, and nothing should hold it past the request.
+      capturedJsonResponse = undefined;
 
       log(logLine);
     }
