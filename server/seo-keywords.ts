@@ -286,13 +286,43 @@ async function fetchRoute(base: string, path: string): Promise<CrawledPage> {
   }
 }
 
-async function crawl(base: string, paths: string[], concurrency = 8): Promise<CrawledPage[]> {
+/**
+ * Crawl our own routes over loopback.
+ *
+ * Concurrency is deliberately low. This is the app requesting 160 of its own
+ * pages, so both ends land on the same single-threaded event loop, and every
+ * one of those requests is a full SSR render. At the previous setting of 8 it
+ * saturated the shared CPU for the length of the crawl: /healthz has a
+ * five-second timeout, missed it, and Fly pulled the machine out of rotation —
+ * a Rescan press took the public site down for as long as the crawl ran.
+ *
+ * Two in flight leaves the loop room to answer health checks and real traffic
+ * between renders. The crawl takes longer; the site stays up while it does,
+ * which is the trade worth making for a button only the admin presses. Tune
+ * with SEO_CRAWL_CONCURRENCY if the machine ever gets a dedicated CPU.
+ */
+const CRAWL_CONCURRENCY = Math.max(
+  1,
+  Number(process.env.SEO_CRAWL_CONCURRENCY) || 2,
+);
+/** Breathing room between requests, so a worker never monopolises the loop. */
+const CRAWL_PAUSE_MS = 25;
+
+async function crawl(
+  base: string,
+  paths: string[],
+  concurrency = CRAWL_CONCURRENCY,
+): Promise<CrawledPage[]> {
   const out: CrawledPage[] = [];
   let i = 0;
   const workers = Array.from({ length: Math.min(concurrency, paths.length) }, async () => {
     while (i < paths.length) {
       const idx = i++;
       out.push(await fetchRoute(base, paths[idx]));
+      // Yield: an SSR render is synchronous work on the shared event loop, and
+      // this hands it back between pages rather than queueing the next one
+      // immediately behind the last.
+      await new Promise((r) => setTimeout(r, CRAWL_PAUSE_MS));
     }
   });
   await Promise.all(workers);

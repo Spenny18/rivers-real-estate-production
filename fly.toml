@@ -35,10 +35,25 @@ primary_region = "sjc"
   min_machines_running = 1
   processes = ["app"]
 
+  # /healthz is `res.send("ok")`, registered ahead of the logging middleware,
+  # so it costs nothing to serve. When it misses its deadline that is never
+  # the endpoint being slow — it is the single event loop being busy, most
+  # often with SSR renders.
+  #
+  # The old 5s timeout was tight enough that an admin pressing Rescan (which
+  # crawls 160 of our own routes, each a full SSR render) could fail the check
+  # and have this machine pulled out of rotation. With min_machines_running = 1
+  # there is nothing to fail over TO, so being marked unhealthy does not move
+  # traffic somewhere better — it just stops serving. A strict check on a
+  # single-machine deploy trades availability for nothing.
+  #
+  # 10s timeout and a 30s grace period leave room for a burst without going
+  # dark. A genuinely dead app is still caught inside ~40s, which is the right
+  # side of the trade when the alternative is self-inflicted downtime.
   [[http_service.checks]]
     interval = "30s"
-    timeout = "5s"
-    grace_period = "10s"
+    timeout = "10s"
+    grace_period = "30s"
     method = "GET"
     path = "/healthz"
 
