@@ -170,6 +170,155 @@ function SitemapCard() {
   );
 }
 
+interface SitemapChild {
+  path: string; status: number; contentType: string | null; ms: number; bytes: number;
+  urls: number; error?: string;
+}
+interface SitemapHealth {
+  ok: boolean; cached: boolean; checkedAt: string; origin: string;
+  config: {
+    publicOrigin: string; includeMlsSitemap: boolean; sitemapIncludeMlsEnv: string | null;
+    ssrCacheTtlMs: number; nodeEnv: string | null; autosubmitDisabled: boolean;
+  };
+  index: { path: string; status: number; contentType: string | null; ms: number; bytes: number; children: number; error?: string | null };
+  children: SitemapChild[];
+  totalUrls: number;
+  robots: { status: number; sitemap: string | null; matchesOrigin: boolean };
+}
+
+/**
+ * What Google gets when it fetches the sitemap, read from inside the running
+ * deploy.
+ *
+ * Diagnosing a "Couldn't fetch" in Search Console previously meant asking
+ * someone to run `fly ssh` for three config values — a request that trades
+ * infrastructure credentials for information a page can simply show. Every row
+ * here is a real loopback fetch of the served response, so it reports what is
+ * actually being served rather than what the code should produce.
+ */
+function SitemapHealthCard() {
+  const { data, isLoading, isFetching, refetch } = useQuery<SitemapHealth>({
+    queryKey: ["/api/admin/seo/sitemap-health"],
+    queryFn: async () => {
+      const r = await fetch("/api/admin/seo/sitemap-health", { credentials: "include" });
+      if (!r.ok) throw new Error("Failed to load sitemap health");
+      return r.json();
+    },
+    staleTime: 30 * 1000,
+  });
+
+  const bad = (c: { status: number }) => c.status !== 200;
+  const problems = data
+    ? [
+        ...(data.index.status !== 200 ? [`The sitemap index returned ${data.index.status || "no response"}.`] : []),
+        ...data.children.filter(bad).map((c) => `${c.path} returned ${c.status || "no response"}.`),
+        ...(data.robots.status !== 200 ? ["robots.txt is not being served."] : []),
+        ...(data.robots.sitemap && !data.robots.matchesOrigin
+          ? [`robots.txt points Google at ${data.robots.sitemap}, which is not this deploy's sitemap.`]
+          : []),
+        ...(!data.robots.sitemap && data.robots.status === 200
+          ? ["robots.txt has no Sitemap: line."]
+          : []),
+      ]
+    : [];
+
+  return (
+    <section className="border border-border bg-card p-5" data-testid="card-sitemap-health">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="font-display text-[11px] tracking-[0.16em] text-muted-foreground mb-1.5">
+            SITEMAP · WHAT WE SERVE
+          </div>
+          {isLoading ? (
+            <Skeleton className="h-5 w-72" />
+          ) : !data ? (
+            <p className="text-[13px] text-muted-foreground">Could not read sitemap health.</p>
+          ) : problems.length ? (
+            <div className="text-[13px] text-rose-700 dark:text-rose-400 space-y-1 max-w-xl leading-relaxed">
+              {problems.map((p) => (
+                <p key={p} className="flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                  {p}
+                </p>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-foreground">
+              Serving <span className="tabular-nums font-medium">{data.totalUrls}</span> URLs across{" "}
+              {data.children.length} sitemaps, all returning 200. If Search Console still says
+              "Couldn't fetch", the problem is between Google and the host, not the sitemap.
+            </p>
+          )}
+        </div>
+        <Button
+          variant="outline"
+          onClick={() => refetch()}
+          disabled={isFetching}
+          className="gap-2 rounded-sm font-display text-[11px] tracking-[0.18em] shrink-0"
+          data-testid="button-sitemap-health-refresh"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} />
+          RE-CHECK
+        </Button>
+      </div>
+
+      {data && (
+        <>
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full text-xs tabular-nums">
+              <thead>
+                <tr className="text-muted-foreground text-left">
+                  <th className="font-normal pb-1.5 pr-4">Sitemap</th>
+                  <th className="font-normal pb-1.5 pr-4">Status</th>
+                  <th className="font-normal pb-1.5 pr-4 text-right">URLs</th>
+                  <th className="font-normal pb-1.5 pr-4 text-right">Size</th>
+                  <th className="font-normal pb-1.5 text-right">Time</th>
+                </tr>
+              </thead>
+              <tbody className="text-foreground">
+                <tr className="border-t border-border/60">
+                  <td className="py-1.5 pr-4 font-mono text-[11px]">{data.index.path}</td>
+                  <td className={`py-1.5 pr-4 ${data.index.status === 200 ? "" : "text-rose-600 dark:text-rose-400"}`}>
+                    {data.index.status || "—"}
+                  </td>
+                  <td className="py-1.5 pr-4 text-right text-muted-foreground">{data.index.children} maps</td>
+                  <td className="py-1.5 pr-4 text-right text-muted-foreground">{data.index.bytes}b</td>
+                  <td className="py-1.5 text-right text-muted-foreground">{data.index.ms}ms</td>
+                </tr>
+                {data.children.map((c) => (
+                  <tr key={c.path} className="border-t border-border/60">
+                    <td className="py-1.5 pr-4 font-mono text-[11px]">{c.path}</td>
+                    <td className={`py-1.5 pr-4 ${c.status === 200 ? "" : "text-rose-600 dark:text-rose-400"}`}>
+                      {c.status || "—"}
+                    </td>
+                    <td className="py-1.5 pr-4 text-right">{c.urls}</td>
+                    <td className="py-1.5 pr-4 text-right text-muted-foreground">{c.bytes}b</td>
+                    <td className="py-1.5 text-right text-muted-foreground">{c.ms}ms</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground">
+            <span>Origin <span className="text-foreground font-mono text-[11px]">{data.config.publicOrigin}</span></span>
+            <span>
+              MLS sitemap{" "}
+              <span className="text-foreground">
+                {data.config.includeMlsSitemap ? "on" : "off"}
+              </span>
+              {data.config.includeMlsSitemap && " — up to 5,000 listing URLs competing for crawl budget"}
+            </span>
+            <span>Auto-submit <span className="text-foreground">{data.config.autosubmitDisabled ? "off" : "on"}</span></span>
+            <span>robots.txt <span className="text-foreground">{data.robots.matchesOrigin ? "consistent" : "mismatched"}</span></span>
+            <span>SSR cache <span className="text-foreground">{Math.round(data.config.ssrCacheTtlMs / 1000)}s</span></span>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 interface LegacyResult { table: string; slug: string; from: string; to?: string; status: string; error?: string }
 interface LegacyReport {
   ok: boolean; dryRun: boolean; scanned: number; migrated: number; failed: number; skipped: number;
@@ -410,6 +559,15 @@ export default function AdminSeoPage() {
       }
     >
       <div className="p-6 lg:p-8 space-y-8">
+        {/* These three stand on their own. They used to render only once the
+            keyword report had built, which meant the sitemap submit button and
+            the legacy-image migration disappeared for exactly as long as the
+            crawl was running — or permanently, if it failed. Nothing here
+            depends on that report. */}
+        <SitemapCard />
+        <SitemapHealthCard />
+        <LegacyImagesCard />
+
         {isLoading ? (
           <div className="space-y-4">
             <Skeleton className="h-24 w-full" /><Skeleton className="h-64 w-full" />
@@ -425,9 +583,6 @@ export default function AdminSeoPage() {
           </div>
         ) : (
           <>
-            <SitemapCard />
-            <LegacyImagesCard />
-
             {/* Summary */}
             <section>
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
