@@ -120,7 +120,7 @@ function openDb(): InstanceType<typeof Database> {
     return new Database(path);
   }
 }
-const sqlite = openDb();
+export const sqlite = openDb();
 sqlite.pragma("journal_mode = WAL");
 
 // Create tables (idempotent — for SQLite without migrations)
@@ -409,6 +409,26 @@ sqlite.exec(`
     created_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_account_sessions_user ON account_sessions(account_user_id);
+
+  CREATE TABLE IF NOT EXISTS admin_sessions (
+    sid TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires ON admin_sessions(expires_at);
+
+  CREATE TABLE IF NOT EXISTS admin_tokens (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_admin_tokens_user ON admin_tokens(user_id);
+
+  CREATE TABLE IF NOT EXISTS app_secrets (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
 
   CREATE TABLE IF NOT EXISTS account_magic_tokens (
     id TEXT PRIMARY KEY,
