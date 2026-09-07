@@ -1008,6 +1008,9 @@ try {
 export const db = drizzle(sqlite);
 
 // Convert raw row → public-shape (parse JSON arrays)
+/** A blog post as listings return it — everything but the article body. */
+export type BlogPostSummary = Omit<BlogPost, "body">;
+
 export type PublicListing = Omit<ListingRow, "features" | "gallery"> & {
   features: string[];
   gallery: string[];
@@ -1872,6 +1875,37 @@ export class DatabaseStorage implements IStorage {
   // ---- Blog posts ---------------------------------------------------------
   listBlogPosts(): BlogPost[] {
     return db.select().from(blogPosts).orderBy(desc(blogPosts.publishedAt)).all();
+  }
+
+  /**
+   * Every post except its body.
+   *
+   * `body` is the full article markdown and dwarfs everything else: across 37
+   * posts it is around 94% of the payload, so a listing that ships it sends
+   * hundreds of kilobytes to render a page of cards. Naming the columns keeps
+   * the text out of SQLite's read, out of the process, and off the wire —
+   * selecting everything and deleting the field afterwards would only save
+   * the last of those three.
+   */
+  listBlogSummaries(): BlogPostSummary[] {
+    return db
+      .select({
+        id: blogPosts.id,
+        slug: blogPosts.slug,
+        title: blogPosts.title,
+        excerpt: blogPosts.excerpt,
+        category: blogPosts.category,
+        heroImage: blogPosts.heroImage,
+        heroImageAlt: blogPosts.heroImageAlt,
+        authorName: blogPosts.authorName,
+        authorAvatar: blogPosts.authorAvatar,
+        readMinutes: blogPosts.readMinutes,
+        status: blogPosts.status,
+        publishedAt: blogPosts.publishedAt,
+      })
+      .from(blogPosts)
+      .orderBy(desc(blogPosts.publishedAt))
+      .all();
   }
   getBlogBySlug(slug: string): BlogPost | undefined {
     return db.select().from(blogPosts).where(eq(blogPosts.slug, slug)).get();
