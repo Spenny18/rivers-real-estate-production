@@ -3311,6 +3311,124 @@ export async function registerRoutes(
     return seoReportBuild;
   }
 
+
+  // ---- Sitemap health ----
+  // What Google sees when it fetches the sitemap, answered from inside the
+  // running app rather than from a shell.
+  //
+  // This exists because diagnosing "Couldn't fetch" in Search Console meant
+  // asking whether SITEMAP_INCLUDE_MLS was set, what PUBLIC_ORIGIN resolved
+  // to, and whether each child sitemap actually served — none of which was
+  // visible without `fly ssh`. Handing out infrastructure credentials to read
+  // three config values is a bad trade; showing them in the admin is not.
+  //
+  // Each sitemap is fetched over loopback, the same way the SEO crawler
+  // does, so this reports the real served response — status, content type,
+  // size and URL count — not what the code is expected to produce.
+  let sitemapHealthCache: { at: number; data: unknown } | null = null;
+  const SITEMAP_HEALTH_TTL_MS = 30 * 1000;
+
+  app.get("/api/admin/seo/sitemap-health", requireAuth, async (_req, res) => {
+    if (sitemapHealthCache && Date.now() - sitemapHealthCache.at < SITEMAP_HEALTH_TTL_MS) {
+      return res.json({ ...(sitemapHealthCache.data as object), cached: true });
+    }
+
+    const origin = publicOrigin();
+    const port = process.env.PORT || "5000";
+    const base = `http://127.0.0.1:${port}`;
+
+    // Sequential, not parallel: six DB-backed renders at once is exactly the
+    // burst that starves a single shared CPU, and this is a diagnostic — it
+    // has no business competing with visitor traffic.
+    const probe = async (path: string) => {
+      const t0 = Date.now();
+      try {
+        const r = await fetch(`${base}${path}`, { signal: AbortSignal.timeout(15_000) });
+        const body = await r.text();
+        return {
+          path,
+          status: r.status,
+          contentType: (r.headers.get("content-type") ?? "").split(";")[0] || null,
+          ms: Date.now() - t0,
+          bytes: Buffer.byteLength(body),
+          locs: (body.match(/<loc>/g) ?? []).length,
+          body,
+        };
+      } catch (e: any) {
+        return {
+          path,
+          status: 0,
+          contentType: null,
+          ms: Date.now() - t0,
+          bytes: 0,
+          locs: 0,
+          body: "",
+          error: String(e?.message ?? e).slice(0, 160),
+        };
+      }
+    };
+
+    const index = await probe("/sitemap.xml");
+
+    // Read the child list off the index itself rather than hardcoding it, so
+    // this stays honest if the MLS sitemap is switched on.
+    const childPaths: string[] = [];
+    const locRe = /<loc>([^<]+)<\/loc>/g;
+    for (let m = locRe.exec(index.body); m; m = locRe.exec(index.body)) {
+      try {
+        childPaths.push(new URL(m[1]).pathname);
+      } catch {
+        // A <loc> we cannot parse is worth seeing, not worth throwing over.
+      }
+    }
+
+    const children: any[] = [];
+    for (const p of childPaths) {
+      const { body, locs, ...rest } = await probe(p);
+      children.push({ ...rest, urls: locs });
+    }
+
+    // Does robots.txt point at the same sitemap this deploy serves? A
+    // mismatch here is silent and sends Google to the wrong host.
+    const robots = await probe("/robots.txt");
+    const robotsSitemap =
+      /^\s*Sitemap:\s*(\S+)\s*$/im.exec(robots.body)?.[1] ?? null;
+
+    const data = {
+      ok: index.status === 200,
+      cached: false,
+      checkedAt: new Date().toISOString(),
+      origin,
+      config: {
+        publicOrigin: origin,
+        includeMlsSitemap: INCLUDE_MLS_SITEMAP,
+        sitemapIncludeMlsEnv: process.env.SITEMAP_INCLUDE_MLS ?? null,
+        ssrCacheTtlMs: parseInt(process.env.SSR_CACHE_TTL_MS || "300000", 10),
+        nodeEnv: process.env.NODE_ENV ?? null,
+        autosubmitDisabled: process.env.SEARCH_CONSOLE_AUTOSUBMIT === "0",
+      },
+      index: {
+        path: index.path,
+        status: index.status,
+        contentType: index.contentType,
+        ms: index.ms,
+        bytes: index.bytes,
+        children: childPaths.length,
+        error: (index as any).error ?? null,
+      },
+      children,
+      totalUrls: children.reduce((n, c) => n + (c.urls || 0), 0),
+      robots: {
+        status: robots.status,
+        sitemap: robotsSitemap,
+        matchesOrigin: robotsSitemap === `${origin}/sitemap.xml`,
+      },
+    };
+
+    sitemapHealthCache = { at: Date.now(), data };
+    res.json(data);
+  });
+
   // ---- Legacy WordPress images ----
   // GET reports what still points at the old host; POST does the copy.
   // POST defaults to a dry run: it reaches out to a third-party host and
