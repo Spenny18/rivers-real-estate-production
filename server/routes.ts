@@ -91,13 +91,32 @@ type PoiResultPayload = {
   transit: PoiBucket[];
 };
 type FetchPoisResult =
-  | { ok: true; payload: PoiResultPayload; cached: boolean }
-  | { ok: false; error: string; lastStatus: number | null };
+  | { ok: true; payload: PoiResultPayload; cached: boolean; stale?: boolean }
+  // `pending` means a background fetch is running and the caller should ask
+  // again shortly — distinct from a genuine failure, which carries an error.
+  | { ok: false; error: string | null; pending?: boolean; lastStatus: number | null };
 
 const POI_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const POI_FAILURE_TTL_MS = 5 * 60 * 1000;
-const POI_TOTAL_TIMEOUT_MS = 5_000;
-const POI_MIRROR_TIMEOUT_MS = 1_500;
+// Overpass budgets. These are generous on purpose: a public Overpass instance
+// queues requests and a 1km multi-clause query genuinely takes seconds, so
+// anything tighter simply never succeeds.
+//
+// They were 5s total / 1.5s per mirror, with the query itself asking Overpass
+// for a 3s server-side budget — a client abort shorter than the server timeout
+// it had just requested, which cannot succeed even in the best case. That is
+// why every "What's nearby" panel had been empty since 2026-08-17.
+//
+// Waiting this long is only acceptable because it no longer happens on a
+// request: fetchPoisForPoint answers from cache and refreshes in the
+// background. Never restore a blocking version of this with these numbers.
+const POI_TOTAL_TIMEOUT_MS = 30_000;
+const POI_MIRROR_TIMEOUT_MS = 12_000;
+// A hard ceiling on Overpass fetches in flight at once. Each listing and each
+// neighbourhood is its own cache key, so a crawler walking the site could
+// otherwise open one upstream request per page.
+const POI_MAX_CONCURRENT = 2;
+let poiInFlight = 0;
 const poiRequests = new Map<string, Promise<FetchPoisResult>>();
 const poiFailures = new Map<string, number>();
 
@@ -129,16 +148,55 @@ async function fetchPoisForPoint(
     }
     return { ok: false, error: "Amenities temporarily unavailable", lastStatus: null };
   }
-  const inFlight = poiRequests.get(cacheId);
-  if (inFlight) return inFlight;
 
-  const request = fetchPoisUncached(lat, lng, radius, cacheId, cached);
-  poiRequests.set(cacheId, request);
-  try {
-    return await request;
-  } finally {
-    poiRequests.delete(cacheId);
+  // Past here we need Overpass, which is slow and not ours. Kick the fetch off
+  // in the background and answer immediately — with the stale cache if we have
+  // one, otherwise with `pending` so the page can say "loading" and ask again.
+  //
+  // Blocking here was the other half of the bug: it forced the timeouts down
+  // to a length no Overpass query could satisfy, to protect a request that
+  // should never have been waiting in the first place.
+  startPoiFetch(lat, lng, radius, cacheId, cached);
+
+  if (cached) {
+    try {
+      return { ok: true, payload: JSON.parse(cached.payload), cached: true, stale: true };
+    } catch {}
   }
+  return { ok: false, error: null, pending: true, lastStatus: null };
+}
+
+/**
+ * Begin (or join) a background Overpass fetch for this point.
+ *
+ * Returns nothing: callers are not meant to wait on it. The promise is held in
+ * poiRequests purely so concurrent callers collapse onto one upstream request
+ * rather than each starting their own.
+ */
+function startPoiFetch(
+  lat: number,
+  lng: number,
+  radius: number,
+  cacheId: string,
+  cached: ReturnType<typeof storage.getPoisCacheById>,
+): void {
+  if (poiRequests.has(cacheId)) return;
+  // At capacity: do nothing. The next poll starts it, which is better than
+  // building an unbounded queue of work nobody is waiting for any more.
+  if (poiInFlight >= POI_MAX_CONCURRENT) return;
+
+  poiInFlight++;
+  const request = fetchPoisUncached(lat, lng, radius, cacheId, cached)
+    .catch((e: any) => {
+      console.error("[pois] background fetch failed:", e?.message ?? e);
+      poiFailures.set(cacheId, Date.now() + POI_FAILURE_TTL_MS);
+      return { ok: false as const, error: String(e?.message ?? e), lastStatus: null };
+    })
+    .finally(() => {
+      poiInFlight--;
+      poiRequests.delete(cacheId);
+    });
+  poiRequests.set(cacheId, request);
 }
 
 async function fetchPoisUncached(
@@ -149,7 +207,7 @@ async function fetchPoisUncached(
   staleCache: ReturnType<typeof storage.getPoisCacheById>,
 ): Promise<FetchPoisResult> {
 
-  const ql = `[out:json][timeout:3];
+  const ql = `[out:json][timeout:25];
 (
   node[amenity~"^(school|college|university|kindergarten)$"](around:${radius},${lat},${lng});
   way[amenity~"^(school|college|university|kindergarten)$"](around:${radius},${lat},${lng});
@@ -2926,10 +2984,17 @@ export async function registerRoutes(
           radius,
           schools: [], restaurants: [], parks: [], transit: [],
           cached: false,
+          pending: !!result.pending,
           error: result.error,
         });
       }
-      res.json({ ...result.payload, center: { lat, lng }, radius, cached: result.cached });
+      res.json({
+        ...result.payload,
+        center: { lat, lng },
+        radius,
+        cached: result.cached,
+        stale: !!result.stale,
+      });
     } catch (err: any) {
       console.error("[pois] error:", err?.message ?? err);
       res.json({
@@ -2966,10 +3031,17 @@ export async function registerRoutes(
           radius,
           schools: [], restaurants: [], parks: [], transit: [],
           cached: false,
+          pending: !!result.pending,
           error: result.error,
         });
       }
-      res.json({ ...result.payload, center: { lat, lng }, radius, cached: result.cached });
+      res.json({
+        ...result.payload,
+        center: { lat, lng },
+        radius,
+        cached: result.cached,
+        stale: !!result.stale,
+      });
     } catch (err: any) {
       console.error("[pois] condo error:", err?.message ?? err);
       res.json({
@@ -3011,10 +3083,17 @@ export async function registerRoutes(
           radius,
           schools: [], restaurants: [], parks: [], transit: [],
           cached: false,
+          pending: !!result.pending,
           error: result.error,
         });
       }
-      res.json({ ...result.payload, center: { lat, lng }, radius, cached: result.cached });
+      res.json({
+        ...result.payload,
+        center: { lat, lng },
+        radius,
+        cached: result.cached,
+        stale: !!result.stale,
+      });
     } catch (err: any) {
       console.error("[pois] neighbourhood error:", err?.message ?? err);
       res.json({

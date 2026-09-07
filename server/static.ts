@@ -20,7 +20,37 @@ export function serveStatic(app: Express) {
   // og:url, and no JSON-LD. With index disabled, "/" falls through to the
   // wildcard handler below and gets the same SEO treatment as every other
   // route.
-  app.use(express.static(distPath, { index: false }));
+  // Cache headers. These were absent entirely, which is how a browser ends up
+  // running last week's JavaScript against this week's API.
+  //
+  // Without a Cache-Control header a browser is free to apply heuristic
+  // freshness, so the SPA shell could be served from cache long after a
+  // deploy. The shell names content-hashed bundles, and a deploy replaces
+  // those files — so a stale shell asks for asset URLs that no longer exist
+  // and the page 404s on its own JavaScript. That is the "stale CSS hash"
+  // 404 and the admin still showing a removed toast string.
+  //
+  // Two rules, opposite directions:
+  //   /assets/* — Vite content-hashes these, so a given URL's bytes never
+  //     change. Cache them for a year and immutable, which also removes a
+  //     revalidation round-trip per asset on every navigation.
+  //   everything else, and the HTML shell below — must revalidate. ETag
+  //     makes that a 304 in the common case, so it costs a header exchange,
+  //     not a re-download.
+  const assetsDir = path.join(distPath, "assets") + path.sep;
+  app.use(
+    express.static(distPath, {
+      index: false,
+      setHeaders(res, filePath) {
+        res.setHeader(
+          "Cache-Control",
+          filePath.startsWith(assetsDir)
+            ? "public, max-age=31536000, immutable"
+            : "public, max-age=0, must-revalidate",
+        );
+      },
+    }),
+  );
 
   const indexPath = path.resolve(distPath, "index.html");
   // Read once at boot; SEO injection runs on every request against this
@@ -76,7 +106,10 @@ export function serveStatic(app: Express) {
         canonical: `${publicOrigin()}${rawPath}`,
         noindex: true,
       });
-      res.set("Content-Type", "text/html; charset=utf-8").send(fallbackHtml);
+      res
+        .set("Content-Type", "text/html; charset=utf-8")
+        .set("Cache-Control", "no-cache")
+        .send(fallbackHtml);
       return;
     }
     const html = injectMetaIntoHtml(indexTemplate, meta);
@@ -86,6 +119,11 @@ export function serveStatic(app: Express) {
       // admin previewing an edited draft shouldn't wait out the TTL.
       cacheable: !meta.noindex,
     });
-    res.set("Content-Type", "text/html; charset=utf-8").send(rendered ?? html);
+    res
+      .set("Content-Type", "text/html; charset=utf-8")
+      // no-cache = may store, must revalidate. The shell has to be allowed to
+      // change on deploy; ETag keeps the check cheap.
+      .set("Cache-Control", "no-cache")
+      .send(rendered ?? html);
   });
 }

@@ -57,7 +57,11 @@ type PoisPayload = {
   parks: Poi[];
   transit: Poi[];
   cached?: boolean;
-  error?: string;
+  /** A background Overpass fetch is running; ask again shortly. */
+  pending?: boolean;
+  /** Showing a previous result while a refresh runs. */
+  stale?: boolean;
+  error?: string | null;
 };
 
 const POI_CATEGORIES = [
@@ -148,6 +152,9 @@ function NeighbourhoodPoisInner({
   const [active, setActive] = useState<CatId>("all");
   const [selectedPoi, setSelectedPoi] = useState<Poi | null>(null);
 
+  // Overpass is fetched in the background on the server, so the first view of
+  // a location answers `pending` with empty lists. Poll until it lands rather
+  // than leaving the panel looking permanently empty.
   const { data, isLoading } = useQuery<PoisPayload>({
     queryKey: ["pois", cacheKey],
     queryFn: async () => {
@@ -156,6 +163,7 @@ function NeighbourhoodPoisInner({
       return r.json();
     },
     staleTime: 1000 * 60 * 60,
+    refetchInterval: (q) => ((q.state.data as PoisPayload | undefined)?.pending ? 3000 : false),
   });
 
   const visible = useMemo(() => {
@@ -443,7 +451,15 @@ function NeighbourhoodPoisInner({
         <div className="lg:col-span-2 rounded-sm border border-border bg-card max-h-[460px] overflow-auto">
           {list.length === 0 && !isLoading && (
             <div className="px-5 py-10 text-center text-sm text-muted-foreground">
-              No places found in this category nearby.
+              {/* "None nearby" is a claim about the world. Only make it when we
+                  actually heard back — otherwise the panel asserts there are no
+                  schools near a neighbourhood whose school is visible on the
+                  map behind it. */}
+              {data?.pending
+                ? "Looking up nearby places…"
+                : data?.error
+                  ? "Nearby places couldn't be loaded just now. They come from OpenStreetMap, which is occasionally unavailable — this usually fixes itself."
+                  : "No places found in this category nearby."}
             </div>
           )}
           <ul className="divide-y divide-border">
