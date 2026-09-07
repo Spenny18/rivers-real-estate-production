@@ -29,6 +29,29 @@ const BRAND_TAGLINE = "Spencer Rivers — Luxury Homes Calgary";
 // are brand surface.
 const DEFAULT_IMAGE = `${ORIGIN}/img/og-default.jpg`;
 
+/**
+ * Absolutise a stored image path for use in og:image, twitter:image and
+ * schema.org `image`.
+ *
+ * All three require an absolute URL. Hero images arrive from the CMS in both
+ * shapes — WordPress-era rows hold full URLs, while anything uploaded or
+ * seeded locally holds a site-relative path like "/condo-heroes/vetro.png" —
+ * and passing the column through raw emitted the relative form verbatim.
+ * Facebook, LinkedIn, X, Slack and iMessage cannot resolve that, so those
+ * pages shared with no image at all: 60 of 170 pages (every condo and
+ * neighbourhood with a local hero, plus 11 blog posts). The files were
+ * always there and served fine — only the URL form was wrong.
+ */
+const absoluteUrl = (u: unknown): string | undefined => {
+  if (typeof u !== "string") return undefined;
+  const v = u.trim();
+  if (!v) return undefined;
+  if (/^https?:\/\//i.test(v)) return v;
+  // Protocol-relative ("//cdn.example/x.jpg") — keep the host, pick a scheme.
+  if (v.startsWith("//")) return `https:${v}`;
+  return `${ORIGIN}${v.startsWith("/") ? "" : "/"}${v}`;
+};
+
 export interface SeoMeta {
   title: string;
   description: string;
@@ -474,7 +497,7 @@ export function metaForPath(path: string): SeoMeta | null {
         };
       }
       const blogUrl = `${ORIGIN}/blog/${slug}`;
-      const heroImage = post.heroImage || DEFAULT_IMAGE;
+      const heroImage = absoluteUrl(post.heroImage) || DEFAULT_IMAGE;
       return {
         title: `${post.title} — ${SITE_NAME}`,
         description:
@@ -533,7 +556,7 @@ export function metaForPath(path: string): SeoMeta | null {
         title: `${n.name} Homes for Sale - Luxury Homes Calgary`,
         description: `Browse luxury homes for sale in ${n.name}, Calgary. Active MLS listings, neighbourhood guide, schools, and lifestyle.`,
         canonical: nUrl,
-        ogImage: n.heroImage || DEFAULT_IMAGE,
+        ogImage: absoluteUrl(n.heroImage) || DEFAULT_IMAGE,
         jsonLd: [
           {
             // Same @id the areaServed stubs use for marquee communities —
@@ -543,7 +566,7 @@ export function metaForPath(path: string): SeoMeta | null {
             name: `${n.name}, Calgary`,
             description: n.tagline || `${n.name} neighbourhood in Calgary, Alberta.`,
             url: nUrl,
-            image: n.heroImage || DEFAULT_IMAGE,
+            image: absoluteUrl(n.heroImage) || DEFAULT_IMAGE,
             ...(n.centerLat && n.centerLng
               ? { geo: { "@type": "GeoCoordinates", latitude: n.centerLat, longitude: n.centerLng } }
               : {}),
@@ -577,7 +600,7 @@ export function metaForPath(path: string): SeoMeta | null {
         title: `${c.name} Condos Calgary - Luxury Homes Calgary`,
         description: `Find the latest condos for sale in ${c.name} in ${c.neighbourhood}. Get access to MLS Listings up to 48 hours before Realtor.ca!`,
         canonical: cUrl,
-        ogImage: c.heroImage || DEFAULT_IMAGE,
+        ogImage: absoluteUrl(c.heroImage) || DEFAULT_IMAGE,
         jsonLd: [
           {
             "@type": "Place",
@@ -585,7 +608,7 @@ export function metaForPath(path: string): SeoMeta | null {
             name: c.name,
             description: c.tagline || undefined,
             url: cUrl,
-            image: c.heroImage || undefined,
+            image: absoluteUrl(c.heroImage),
             address: {
               "@type": "PostalAddress",
               streetAddress: c.address,
@@ -614,11 +637,7 @@ export function metaForPath(path: string): SeoMeta | null {
       if (!l) return null;
       const lUrl = `${ORIGIN}/mls/${storage.getMlsSeoSlug(l)}`;
       const addr = l.fullAddress || "Calgary";
-      const heroImg = l.heroImage
-        ? l.heroImage.startsWith("http")
-          ? l.heroImage
-          : `${ORIGIN}${l.heroImage}`
-        : undefined;
+      const heroImg = absoluteUrl(l.heroImage);
       // Must match client/src/pages/mls-detail.tsx <SeoHead> strings —
       // including the description strip/fallback — so JS-executing and
       // non-JS crawlers see identical metadata.
@@ -684,7 +703,7 @@ export function metaForPath(path: string): SeoMeta | null {
           .filter(Boolean)
           .join(" · ") || `Calgary listing represented by Spencer Rivers.`,
         canonical: pUrl,
-        ogImage: l.heroImage || (Array.isArray(l.photos) && l.photos[0]) || undefined,
+        ogImage: absoluteUrl(l.heroImage) || absoluteUrl(Array.isArray(l.photos) ? l.photos[0] : undefined),
         jsonLd: [
           listingSchema({
             url: pUrl,
@@ -697,7 +716,7 @@ export function metaForPath(path: string): SeoMeta | null {
             baths: l.baths,
             sqft: l.sqft,
             yearBuilt: l.yearBuilt,
-            image: l.heroImage,
+            image: absoluteUrl(l.heroImage),
             price: l.price,
             active: l.status === "active",
             subType: l.type,

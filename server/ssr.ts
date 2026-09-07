@@ -10,7 +10,10 @@
  * scratch.
  *
  * Deliberately NOT server-rendered:
- *   - /mls (map-first interactive search; noindexed content, huge tree)
+ *   - /mls (map-first interactive search; huge tree). Note this one is a
+ *     tradeoff, not a freebie: /mls IS in the sitemap and is indexable, so
+ *     non-JS crawlers see an empty page for it.
+ *   - /book/manage/* (one person's private booking, noindex)
  *   - /admin/*, /account/* (private, noindex)
  *   - anything unknown (404 shell, as before)
  *
@@ -66,6 +69,16 @@ export function queriesForPath(path: string): unknown[][] | null {
   if (p.startsWith("/mls/")) return [["/api/public/mls", p.slice("/mls/".length)]];
   if (p.startsWith("/p/"))
     return [["/api/listings/by-slug", p.slice("/p/".length)]];
+  // Booking pages. /book/manage/<uid> is one person's private booking —
+  // noindex, and its data is keyed to a uid we must not prefetch, so it
+  // stays client-rendered. The index and the per-event-type pages are
+  // ordinary public pages: they are in the sitemap and are exactly the kind
+  // of content the non-JS AI crawlers we invite in robots.txt come for, so
+  // they need a real body, not the empty shell they were serving.
+  if (p === "/book") return [["/api/booking/event-types"]];
+  if (p.startsWith("/book/manage/")) return null;
+  if (p.startsWith("/book/"))
+    return [[`/api/booking/event-types/${p.slice("/book/".length)}`]];
   if (
     p === "/about" ||
     p === "/contact" ||
