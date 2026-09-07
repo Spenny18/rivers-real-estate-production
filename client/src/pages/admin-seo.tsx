@@ -32,7 +32,7 @@ interface PageAnalysis {
   issues: string[];
 }
 interface SeoReport {
-  ok: boolean; cached: boolean; generatedAt: string; pageCount: number; crawlMs: number;
+  ok: boolean; cached: boolean; building?: boolean; message?: string; staleAt?: number; generatedAt: string; pageCount: number; crawlMs: number;
   gsc: { ok: boolean; message?: string; rows: number };
   summary: { avgScore: number; strong: number; fair: number; weak: number; conflicts: number; orphans: number; missingKeyword: number };
   clusters: { id: string; label: string; pillar: string; headKeyword: string; intent: string; pages: number; avgScore: number; conflicts: number }[];
@@ -318,8 +318,13 @@ export default function AdminSeoPage() {
   const [open, setOpen] = useState<string | null>(null);
   const [draftKeyword, setDraftKeyword] = useState("");
 
+  // The crawl runs in the background on the server, so poll while it does.
+  // It used to be built inside the request, which on the production machine
+  // outlasted the proxy's patience — the tab rendered nothing because the
+  // response never arrived.
   const { data, isLoading, isFetching } = useQuery<SeoReport>({
     queryKey: ["/api/admin/seo/keywords"],
+    refetchInterval: (q) => ((q.state.data as SeoReport | undefined)?.building ? 4000 : false),
     queryFn: async () => {
       const r = await fetch("/api/admin/seo/keywords", { credentials: "include" });
       if (!r.ok) throw new Error("Failed to load SEO report");
@@ -335,8 +340,14 @@ export default function AdminSeoPage() {
       return r.json();
     },
     onSuccess: (fresh) => {
+      // The rebuild is now asynchronous: this response is the previous report
+      // plus building:true, and the poll above swaps in the new one when the
+      // crawl lands. Reporting "complete" here would be a lie.
       qc.setQueryData(["/api/admin/seo/keywords"], fresh);
-      toast({ title: "Rescan complete", description: `${fresh.pageCount} pages crawled in ${(fresh.crawlMs / 1000).toFixed(1)}s.` });
+      toast({
+        title: "Rescan started",
+        description: "Crawling the site in the background — the numbers update when it finishes.",
+      });
     },
     onError: (e: any) => toast({ title: "Rescan failed", description: String(e?.message ?? e), variant: "destructive" }),
   });
@@ -404,8 +415,13 @@ export default function AdminSeoPage() {
             <Skeleton className="h-24 w-full" /><Skeleton className="h-64 w-full" />
           </div>
         ) : !data?.ok ? (
-          <div className="border border-border p-8 text-muted-foreground">
-            Could not build the SEO report. Try Rescan.
+          <div className="border border-border p-8 text-muted-foreground flex items-center gap-3">
+            {data?.building && <RefreshCw className="w-4 h-4 animate-spin shrink-0" />}
+            <span>
+              {data?.building
+                ? "Building the first report — crawling every page takes a minute. This refreshes itself."
+                : (data?.message ?? "Could not build the SEO report. Try Rescan.")}
+            </span>
           </div>
         ) : (
           <>
@@ -423,6 +439,11 @@ export default function AdminSeoPage() {
                 <Stat label="Orphan pages" value={data.summary.orphans} tone={data.summary.orphans ? "text-amber-600 dark:text-amber-400" : ""} />
               </div>
               <p className="text-xs text-muted-foreground mt-3">
+                {data.building && (
+                  <span className="text-amber-600 dark:text-amber-400">
+                    Rescanning in the background — showing the previous report ·{" "}
+                  </span>
+                )}
                 Crawled {data.pageCount} routes in {(data.crawlMs / 1000).toFixed(1)}s ·{" "}
                 {data.gsc.ok
                   ? `Search Console connected (${data.gsc.rows} page/query rows)`
