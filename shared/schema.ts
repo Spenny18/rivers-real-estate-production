@@ -433,6 +433,46 @@ export const mlsPriceHistory = sqliteTable("mls_price_history", {
 export type MlsPriceHistory = typeof mlsPriceHistory.$inferSelect;
 export type InsertMlsPriceHistory = typeof mlsPriceHistory.$inferInsert;
 
+// ---- MLS history (sold and off-market listings) ---------------------------
+// Every listing the feed reports as no longer active: Sold (S), Expired (X),
+// Withdrawn (W), Terminated (T). The active sync only ever asks for
+// StandardStatus A, so without this table a sale is just a listing that
+// vanished. Sales with prices are what a market report is made of; the
+// off-market rows are what make month-end inventory reconstructible — a
+// listing was on the market in a given month if it was listed by the end of
+// that month and had not yet left it.
+export const mlsHistory = sqliteTable("mls_history", {
+  id: text("id").primaryKey(), // Pillar 9 ListingId
+  status: text("status").notNull(), // S | X | W | T
+  listPrice: integer("list_price"),
+  closePrice: integer("close_price"), // sales only
+  closeDate: text("close_date"), // YYYY-MM-DD, sales only
+  listDate: text("list_date"), // ListingContractDate, YYYY-MM-DD
+  // The day the listing left the market: closeDate for a sale, the status
+  // change for everything else. Drives inventory reconstruction.
+  offMarketDate: text("off_market_date"),
+  daysOnMarket: integer("days_on_market"),
+  propertyType: text("property_type"),
+  propertySubType: text("property_sub_type"),
+  city: text("city"),
+  postalCode: text("postal_code"),
+  subdivision: text("subdivision"),
+  district: text("district"),
+  fullAddress: text("full_address"),
+  lat: real("lat"),
+  lng: real("lng"),
+  beds: integer("beds"),
+  baths: real("baths"),
+  sqft: integer("sqft"),
+  yearBuilt: integer("year_built"),
+  statusChangedAt: text("status_changed_at"),
+  modifiedAt: text("modified_at"),
+  syncedAt: text("synced_at").notNull(),
+});
+
+export type MlsHistory = typeof mlsHistory.$inferSelect;
+export type InsertMlsHistory = typeof mlsHistory.$inferInsert;
+
 // ---- User integrations (OAuth tokens for Google, etc.) ------------------
 export const userIntegrations = sqliteTable("user_integrations", {
   id: integer("id").primaryKey({ autoIncrement: true }),

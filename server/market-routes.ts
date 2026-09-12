@@ -16,6 +16,7 @@ import {
   renderInfographic,
   sameMonthLastYear,
 } from "./market-report";
+import { CLASS_LABEL, PROPERTY_CLASSES, listScopes, series, type ClassFilter } from "./market-stats";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
 
@@ -41,6 +42,45 @@ function num(v: unknown): number | null | undefined {
 
 export function registerMarketRoutes(app: Express, deps: { requireAuth: Middleware }) {
   const { requireAuth } = deps;
+
+  // ---- Computed statistics (from the feed) ----------------------------------
+  // Registered ahead of /:period so "scopes" and "series" are not read as
+  // month names.
+
+  /** Cities and subdivisions that have sales in the history table. */
+  app.get("/api/admin/market/scopes", requireAuth, (_req, res) => {
+    res.json(listScopes());
+  });
+
+  /**
+   * Monthly series for one scope and property class.
+   *
+   *   ?kind=subdivision&name=Springbank%20Hill&cls=detached&months=13
+   *   ?kind=city&name=Calgary&cls=all&months=25
+   */
+  app.get("/api/admin/market/series", requireAuth, (req, res) => {
+    const kind = String(req.query.kind ?? "city");
+    const name = String(req.query.name ?? "").trim();
+    const cls = String(req.query.cls ?? "all");
+    const months = Math.max(1, Math.min(121, Number(req.query.months ?? 13) || 13));
+    const city = req.query.city ? String(req.query.city).trim() : undefined;
+    const end = req.query.end ? String(req.query.end) : undefined;
+
+    if (kind !== "city" && kind !== "subdivision") return res.status(400).json({ message: "kind must be city or subdivision" });
+    if (!name) return res.status(400).json({ message: "name is required" });
+    if (cls !== "all" && !(PROPERTY_CLASSES as readonly string[]).includes(cls)) {
+      return res.status(400).json({ message: `cls must be one of ${[...PROPERTY_CLASSES, "all"].join(", ")}` });
+    }
+    if (end && !isValidPeriod(end)) return res.status(400).json({ message: "end must be YYYY-MM" });
+
+    const scope = { kind, name, city } as const;
+    res.json({
+      scope,
+      cls,
+      label: CLASS_LABEL[cls as ClassFilter],
+      months: series(scope, cls as ClassFilter, months, end),
+    });
+  });
 
   /** The assembled report for a period, with its comparison months. */
   app.get("/api/admin/market/:period", requireAuth, (req, res) => {
