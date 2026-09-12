@@ -228,6 +228,12 @@ export function redirectForPath(rawPath: string): string | null {
   // "/" itself never redirects.
   if (p === "/") return null;
 
+  // The app's own pages under a legacy prefix. "/newsletter" was a WordPress
+  // page and still 301s to /contact; "/newsletter/unsubscribe" is the link in
+  // every issue we send, and the subpath rule at the bottom would otherwise
+  // bounce it to the contact form.
+  if (p.startsWith("/newsletter/")) return null;
+
   if (EXACT[p]) return EXACT[p];
 
   const segs = p.slice(1).split("/");

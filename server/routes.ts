@@ -550,6 +550,13 @@ export async function registerRoutes(
     console.error("[crm] failed to register CRM routes:", e);
   }
 
+  try {
+    const { registerNewsletterRoutes } = await import("./newsletter-routes");
+    registerNewsletterRoutes(app, { requireAuth, rateLimit });
+  } catch (e) {
+    console.error("[newsletter] failed to register routes:", e);
+  }
+
   // Home evaluation widget — POST /api/home-value proxies to Gnowise's AVM
   // API and captures a lead. See server/home-value.ts.
   try {

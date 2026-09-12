@@ -95,6 +95,7 @@ import { assignMlsLegacySeoSlugs, assignMlsPreviousSeoSlugs, assignMlsSeoSlugs }
 // e.g. DB_PATH=/data/rivers.db.
 import fs from "node:fs";
 import nodePath from "node:path";
+import { randomBytes } from "node:crypto";
 import { pointInGeometry } from "./point-in-polygon";
 function openDb(): InstanceType<typeof Database> {
   const path = process.env.DB_PATH || "data.db";
@@ -767,6 +768,62 @@ sqlite.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_market_reports_period ON market_reports(period);
 
+  -- The monthly newsletter: who gets it, each month's issue, and what was sent.
+  --
+  -- Subscribers are their own list rather than a flag on crm_contacts, because
+  -- the CRM mirror is overwritten by every Follow Up Boss sync and a consent
+  -- record must not be. Status only ever moves away from "subscribed" by the
+  -- person's own action (the unsubscribe link), a bounce or complaint from
+  -- the mail provider, or Spencer in the admin — an import never re-subscribes
+  -- someone who left.
+  CREATE TABLE IF NOT EXISTS newsletter_subscribers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL UNIQUE,            -- lower-cased
+    first_name TEXT,
+    last_name TEXT,
+    status TEXT NOT NULL DEFAULT 'subscribed',  -- subscribed | unsubscribed | bounced | complained
+    source TEXT NOT NULL,                  -- realinfobox | crm | website | manual
+    consent_source TEXT,                   -- how consent was obtained, in words (CASL)
+    consent_at TEXT,
+    token TEXT NOT NULL UNIQUE,            -- in the unsubscribe link
+    status_changed_at TEXT,
+    status_reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_newsletter_subscribers_status ON newsletter_subscribers(status);
+
+  CREATE TABLE IF NOT EXISTS newsletter_issues (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    period TEXT NOT NULL,                  -- YYYY-MM the market section reports on
+    subject TEXT NOT NULL,
+    preheader TEXT,
+    content_json TEXT NOT NULL,            -- IssueContent: intro, news, events, article, neighbourhood
+    status TEXT NOT NULL DEFAULT 'draft',  -- draft | scheduled | sending | sent
+    scheduled_for TEXT,
+    sent_at TEXT,
+    recipients INTEGER NOT NULL DEFAULT 0,
+    delivered INTEGER NOT NULL DEFAULT 0,
+    failed INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_newsletter_issues_period ON newsletter_issues(period);
+
+  -- One row per recipient per issue, so a send cut off part-way resumes
+  -- where it stopped instead of mailing the first half of the list twice.
+  CREATE TABLE IF NOT EXISTS newsletter_sends (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    issue_id INTEGER NOT NULL,
+    subscriber_id INTEGER NOT NULL,
+    email TEXT NOT NULL,
+    status TEXT NOT NULL,                  -- sent | failed
+    resend_id TEXT,
+    error TEXT,
+    sent_at TEXT NOT NULL,
+    UNIQUE(issue_id, subscriber_id)
+  );
+
   -- Follow Up Boss configuration, stored whole rather than modelled.
   --
   -- Action plans, smart lists, custom field definitions, lead-routing groups
@@ -1245,6 +1302,47 @@ export function normalizeStreetName(raw: string | null | undefined): string {
   });
   return expanded.join(" ");
 }
+
+// ---- Newsletter row shapes ---------------------------------------------------------
+
+export interface NewsletterSubscriber {
+  id: number;
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+  status: "subscribed" | "unsubscribed" | "bounced" | "complained";
+  source: string;
+  consentSource: string | null;
+  consentAt: string | null;
+  token: string;
+  statusChangedAt: string | null;
+  statusReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NewsletterIssueRow {
+  id: number;
+  period: string;
+  subject: string;
+  preheader: string | null;
+  contentJson: string;
+  status: "draft" | "scheduled" | "sending" | "sent";
+  scheduledFor: string | null;
+  sentAt: string | null;
+  recipients: number;
+  delivered: number;
+  failed: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+const SUBSCRIBER_COLS = `id, email, first_name AS firstName, last_name AS lastName, status, source,
+  consent_source AS consentSource, consent_at AS consentAt, token, status_changed_at AS statusChangedAt,
+  status_reason AS statusReason, created_at AS createdAt, updated_at AS updatedAt`;
+
+const ISSUE_COLS = `id, period, subject, preheader, content_json AS contentJson, status, scheduled_for AS scheduledFor,
+  sent_at AS sentAt, recipients, delivered, failed, created_at AS createdAt, updated_at AS updatedAt`;
 
 export class DatabaseStorage implements IStorage {
   private mlsSlugCache: Map<string, string> | null = null;
@@ -2153,6 +2251,226 @@ export class DatabaseStorage implements IStorage {
       )
       .get() as { status: string } | undefined;
     return r?.status === "error";
+  }
+
+  // ---- Newsletter ------------------------------------------------------------------
+
+  /**
+   * Add people to the list. New addresses come in subscribed; an address
+   * already on the list keeps its status (so an unsubscribe survives a
+   * re-import) and only gains a name it was missing. Returns what happened.
+   */
+  upsertNewsletterSubscribers(
+    rows: Array<{ email: string; firstName?: string | null; lastName?: string | null; source: string; consentSource?: string | null; consentAt?: string | null }>,
+  ): { added: number; existing: number; invalid: number } {
+    const now = new Date().toISOString();
+    const insert = sqlite.prepare(
+      `INSERT INTO newsletter_subscribers (email, first_name, last_name, status, source, consent_source, consent_at, token, created_at, updated_at)
+       VALUES (@email, @firstName, @lastName, 'subscribed', @source, @consentSource, @consentAt, @token, @now, @now)
+       ON CONFLICT(email) DO UPDATE SET
+         first_name = COALESCE(NULLIF(newsletter_subscribers.first_name, ''), excluded.first_name),
+         last_name = COALESCE(NULLIF(newsletter_subscribers.last_name, ''), excluded.last_name),
+         updated_at = excluded.updated_at`,
+    );
+    const exists = sqlite.prepare(`SELECT 1 FROM newsletter_subscribers WHERE email = ?`);
+    let added = 0;
+    let existing = 0;
+    let invalid = 0;
+    const tx = sqlite.transaction(() => {
+      for (const r of rows) {
+        const email = String(r.email ?? "").trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
+          invalid++;
+          continue;
+        }
+        if (exists.get(email)) existing++;
+        else added++;
+        insert.run({
+          email,
+          firstName: r.firstName?.trim() || null,
+          lastName: r.lastName?.trim() || null,
+          source: r.source,
+          consentSource: r.consentSource ?? null,
+          consentAt: r.consentAt ?? null,
+          token: randomBytes(24).toString("hex"),
+          now,
+        });
+      }
+    });
+    tx();
+    return { added, existing, invalid };
+  }
+
+  listNewsletterSubscribers(opts: { q?: string; status?: string; limit?: number; offset?: number } = {}): NewsletterSubscriber[] {
+    const where: string[] = [];
+    const params: any[] = [];
+    if (opts.status) {
+      where.push(`status = ?`);
+      params.push(opts.status);
+    }
+    if (opts.q) {
+      where.push(`(email LIKE ? OR lower(coalesce(first_name,'') || ' ' || coalesce(last_name,'')) LIKE ?)`);
+      const like = `%${opts.q.toLowerCase()}%`;
+      params.push(like, like);
+    }
+    const sql = `SELECT ${SUBSCRIBER_COLS} FROM newsletter_subscribers
+                 ${where.length ? "WHERE " + where.join(" AND ") : ""}
+                 ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`;
+    params.push(Math.min(500, opts.limit ?? 100), opts.offset ?? 0);
+    return sqlite.prepare(sql).all(...params) as NewsletterSubscriber[];
+  }
+
+  countNewsletterSubscribers(): Record<string, number> {
+    const rows = sqlite.prepare(`SELECT status, COUNT(*) AS n FROM newsletter_subscribers GROUP BY status`).all() as Array<{ status: string; n: number }>;
+    const out: Record<string, number> = { subscribed: 0, unsubscribed: 0, bounced: 0, complained: 0 };
+    for (const r of rows) out[r.status] = r.n;
+    return out;
+  }
+
+  /** Everyone who should get the next issue. */
+  listNewsletterRecipients(): NewsletterSubscriber[] {
+    return sqlite
+      .prepare(`SELECT ${SUBSCRIBER_COLS} FROM newsletter_subscribers WHERE status = 'subscribed' ORDER BY id`)
+      .all() as NewsletterSubscriber[];
+  }
+
+  /** Every row, for the CSV export. */
+  allNewsletterSubscribers(): NewsletterSubscriber[] {
+    return sqlite.prepare(`SELECT ${SUBSCRIBER_COLS} FROM newsletter_subscribers ORDER BY id`).all() as NewsletterSubscriber[];
+  }
+
+  getNewsletterSubscriber(id: number): NewsletterSubscriber | undefined {
+    return sqlite.prepare(`SELECT ${SUBSCRIBER_COLS} FROM newsletter_subscribers WHERE id = ?`).get(id) as NewsletterSubscriber | undefined;
+  }
+
+  getNewsletterSubscriberByToken(token: string): NewsletterSubscriber | undefined {
+    if (!token) return undefined;
+    return sqlite.prepare(`SELECT ${SUBSCRIBER_COLS} FROM newsletter_subscribers WHERE token = ?`).get(token) as NewsletterSubscriber | undefined;
+  }
+
+  getNewsletterSubscriberByEmail(email: string): NewsletterSubscriber | undefined {
+    return sqlite
+      .prepare(`SELECT ${SUBSCRIBER_COLS} FROM newsletter_subscribers WHERE email = ?`)
+      .get(email.trim().toLowerCase()) as NewsletterSubscriber | undefined;
+  }
+
+  setNewsletterSubscriberStatus(id: number, status: NewsletterSubscriber["status"], reason: string | null): void {
+    const now = new Date().toISOString();
+    sqlite
+      .prepare(`UPDATE newsletter_subscribers SET status = ?, status_reason = ?, status_changed_at = ?, updated_at = ? WHERE id = ?`)
+      .run(status, reason, now, now, id);
+  }
+
+  updateNewsletterSubscriber(id: number, patch: { firstName?: string | null; lastName?: string | null }): void {
+    sqlite
+      .prepare(
+        `UPDATE newsletter_subscribers SET first_name = COALESCE(?, first_name), last_name = COALESCE(?, last_name), updated_at = ? WHERE id = ?`,
+      )
+      .run(patch.firstName === undefined ? null : patch.firstName, patch.lastName === undefined ? null : patch.lastName, new Date().toISOString(), id);
+  }
+
+  deleteNewsletterSubscriber(id: number): void {
+    sqlite.prepare(`DELETE FROM newsletter_subscribers WHERE id = ?`).run(id);
+  }
+
+  createNewsletterIssue(row: { period: string; subject: string; preheader?: string | null; contentJson: string }): number {
+    const now = new Date().toISOString();
+    const r = sqlite
+      .prepare(
+        `INSERT INTO newsletter_issues (period, subject, preheader, content_json, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'draft', ?, ?)`,
+      )
+      .run(row.period, row.subject, row.preheader ?? null, row.contentJson, now, now);
+    return Number(r.lastInsertRowid);
+  }
+
+  updateNewsletterIssue(
+    id: number,
+    patch: Partial<{ subject: string; preheader: string | null; contentJson: string; status: string; scheduledFor: string | null; sentAt: string | null; recipients: number; delivered: number; failed: number }>,
+  ): void {
+    const sets: string[] = [];
+    const params: any[] = [];
+    const map: Record<string, string> = {
+      subject: "subject",
+      preheader: "preheader",
+      contentJson: "content_json",
+      status: "status",
+      scheduledFor: "scheduled_for",
+      sentAt: "sent_at",
+      recipients: "recipients",
+      delivered: "delivered",
+      failed: "failed",
+    };
+    for (const [k, col] of Object.entries(map)) {
+      if ((patch as any)[k] !== undefined) {
+        sets.push(`${col} = ?`);
+        params.push((patch as any)[k]);
+      }
+    }
+    if (!sets.length) return;
+    sets.push(`updated_at = ?`);
+    params.push(new Date().toISOString(), id);
+    sqlite.prepare(`UPDATE newsletter_issues SET ${sets.join(", ")} WHERE id = ?`).run(...params);
+  }
+
+  getNewsletterIssue(id: number): NewsletterIssueRow | undefined {
+    return sqlite.prepare(`SELECT ${ISSUE_COLS} FROM newsletter_issues WHERE id = ?`).get(id) as NewsletterIssueRow | undefined;
+  }
+
+  listNewsletterIssues(): NewsletterIssueRow[] {
+    return sqlite.prepare(`SELECT ${ISSUE_COLS} FROM newsletter_issues ORDER BY period DESC, id DESC`).all() as NewsletterIssueRow[];
+  }
+
+  findNewsletterIssueByPeriod(period: string): NewsletterIssueRow | undefined {
+    return sqlite.prepare(`SELECT ${ISSUE_COLS} FROM newsletter_issues WHERE period = ? ORDER BY id DESC LIMIT 1`).get(period) as
+      | NewsletterIssueRow
+      | undefined;
+  }
+
+  /** Scheduled issues whose time has come. */
+  dueNewsletterIssues(nowIso: string): NewsletterIssueRow[] {
+    return sqlite
+      .prepare(`SELECT ${ISSUE_COLS} FROM newsletter_issues WHERE status = 'scheduled' AND scheduled_for IS NOT NULL AND scheduled_for <= ? ORDER BY scheduled_for`)
+      .all(nowIso) as NewsletterIssueRow[];
+  }
+
+  deleteNewsletterIssue(id: number): void {
+    sqlite.prepare(`DELETE FROM newsletter_sends WHERE issue_id = ?`).run(id);
+    sqlite.prepare(`DELETE FROM newsletter_issues WHERE id = ?`).run(id);
+  }
+
+  recordNewsletterSends(rows: Array<{ issueId: number; subscriberId: number; email: string; status: "sent" | "failed"; resendId?: string | null; error?: string | null }>): void {
+    const stmt = sqlite.prepare(
+      `INSERT INTO newsletter_sends (issue_id, subscriber_id, email, status, resend_id, error, sent_at)
+       VALUES (@issueId, @subscriberId, @email, @status, @resendId, @error, @sentAt)
+       ON CONFLICT(issue_id, subscriber_id) DO UPDATE SET
+         status = excluded.status, resend_id = excluded.resend_id, error = excluded.error, sent_at = excluded.sent_at`,
+    );
+    const now = new Date().toISOString();
+    const tx = sqlite.transaction(() => {
+      for (const r of rows) stmt.run({ ...r, resendId: r.resendId ?? null, error: r.error ?? null, sentAt: now });
+    });
+    tx();
+  }
+
+  /** Subscribers an issue has already reached, so a resumed send skips them. */
+  newsletterSentSubscriberIds(issueId: number): Set<number> {
+    const rows = sqlite.prepare(`SELECT subscriber_id AS id FROM newsletter_sends WHERE issue_id = ? AND status = 'sent'`).all(issueId) as Array<{ id: number }>;
+    return new Set(rows.map((r) => r.id));
+  }
+
+  newsletterSendStats(issueId: number): { sent: number; failed: number; failures: Array<{ email: string; error: string | null }> } {
+    const counts = sqlite
+      .prepare(`SELECT status, COUNT(*) AS n FROM newsletter_sends WHERE issue_id = ? GROUP BY status`)
+      .all(issueId) as Array<{ status: string; n: number }>;
+    const failures = sqlite
+      .prepare(`SELECT email, error FROM newsletter_sends WHERE issue_id = ? AND status = 'failed' ORDER BY id LIMIT 50`)
+      .all(issueId) as Array<{ email: string; error: string | null }>;
+    return {
+      sent: counts.find((c) => c.status === "sent")?.n ?? 0,
+      failed: counts.find((c) => c.status === "failed")?.n ?? 0,
+      failures,
+    };
   }
 
   /** What the history table holds, for the admin card and for bounding stats. */
@@ -3662,6 +3980,13 @@ export class DatabaseStorage implements IStorage {
       | { body: string | null }
       | undefined;
     return row?.body ?? null;
+  }
+
+  getMarketCommentaryFull(period: string): { headline: string | null; body: string | null } | null {
+    const row = sqlite.prepare("SELECT headline, body FROM market_commentary WHERE period = ?").get(period) as
+      | { headline: string | null; body: string | null }
+      | undefined;
+    return row ?? null;
   }
 
   setMarketCommentary(period: string, headline: string | null, body: string | null): void {
