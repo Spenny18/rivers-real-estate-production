@@ -38,13 +38,7 @@ const execFileAsync = promisify(execFile);
 // persistent volume mounted at /data, so files survive redeploys. In dev
 // we fall back to a local folder under client/public/ so the dev server
 // can serve them too.
-const UPLOADS_ROOT = process.env.UPLOADS_ROOT
-  || (process.env.NODE_ENV === "production" ? "/data/uploads" : path.resolve(process.cwd(), "client/public/uploads"));
-function ensureUploadsDir(sub: string): string {
-  const dir = path.join(UPLOADS_ROOT, sub);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  return dir;
-}
+import { UPLOADS_ROOT, ensureUploadsDir } from "./uploads";
 
 function parseJsonArr(s: string | null | undefined): any[] {
   if (!s) return [];

@@ -17,6 +17,8 @@ import {
   sameMonthLastYear,
 } from "./market-report";
 import { CLASS_LABEL, PROPERTY_CLASSES, listScopes, series, type ClassFilter } from "./market-stats";
+import { buildReportData, defaultReportPeriod, renderPage1, renderPage2, svgToPng } from "./market-report-render";
+import { generateAllPresets, generateReport, getBatchProgress, parseReportRequest, toStored } from "./market-report-store";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
 
@@ -80,6 +82,77 @@ export function registerMarketRoutes(app: Express, deps: { requireAuth: Middlewa
       label: CLASS_LABEL[cls as ClassFilter],
       months: series(scope, cls as ClassFilter, months, end),
     });
+  });
+
+  // ---- Community reports ------------------------------------------------------
+
+  /** The monthly set. */
+  app.get("/api/admin/market/reports/presets", requireAuth, (_req, res) => {
+    res.json({ presets: storage.listReportPresets() });
+  });
+
+  app.post("/api/admin/market/reports/presets", requireAuth, (req, res) => {
+    const parsed = parseReportRequest(req.body ?? {});
+    if ("error" in parsed) return res.status(400).json({ message: parsed.error });
+    storage.addReportPreset({ kind: parsed.kind, name: parsed.name, city: parsed.city ?? null, cls: parsed.cls });
+    res.json({ ok: true, presets: storage.listReportPresets() });
+  });
+
+  app.delete("/api/admin/market/reports/presets/:id", requireAuth, (req, res) => {
+    const id = Number((req.params as any).id);
+    if (!id) return res.status(400).json({ message: "invalid id" });
+    storage.deleteReportPreset(id);
+    res.json({ ok: true, presets: storage.listReportPresets() });
+  });
+
+  /** Generated reports, newest period first, optionally for one period. */
+  app.get("/api/admin/market/reports", requireAuth, (req, res) => {
+    const period = req.query.period ? String(req.query.period) : undefined;
+    if (period && !isValidPeriod(period)) return res.status(400).json({ message: "period must be YYYY-MM" });
+    res.json({
+      reports: storage.listMarketReports(period).map(toStored),
+      defaultPeriod: defaultReportPeriod(),
+      batch: getBatchProgress(),
+    });
+  });
+
+  /**
+   * One page as PNG, rendered on the fly and not kept — the admin preview.
+   * Served as an image so the page can show it with an authenticated fetch.
+   */
+  app.get("/api/admin/market/reports/preview", requireAuth, async (req, res) => {
+    const parsed = parseReportRequest(req.query as Record<string, unknown>);
+    if ("error" in parsed) return res.status(400).json({ message: parsed.error });
+    const page = Number(req.query.page) === 2 ? 2 : 1;
+    try {
+      const scope = { kind: parsed.kind, name: parsed.name, city: parsed.city ?? undefined } as const;
+      const data = buildReportData(scope, parsed.cls, parsed.period ?? defaultReportPeriod());
+      const svg = page === 1 ? renderPage1(data) : renderPage2(data);
+      res.type("png").send(svgToPng(svg, 1.5));
+    } catch (e: any) {
+      res.status(500).json({ message: e?.message ?? "Render failed" });
+    }
+  });
+
+  /** Render, save, and record one report. */
+  app.post("/api/admin/market/reports/generate", requireAuth, async (req, res) => {
+    const parsed = parseReportRequest(req.body ?? {});
+    if ("error" in parsed) return res.status(400).json({ message: parsed.error });
+    try {
+      res.json({ ok: true, report: await generateReport(parsed) });
+    } catch (e: any) {
+      res.status(500).json({ message: e?.message ?? "Generate failed" });
+    }
+  });
+
+  /** Every preset for a period, in the background; poll GET /reports for progress. */
+  app.post("/api/admin/market/reports/generate-all", requireAuth, (req, res) => {
+    const period = req.body?.period ? String(req.body.period) : defaultReportPeriod();
+    if (!isValidPeriod(period)) return res.status(400).json({ message: "period must be YYYY-MM" });
+    if (getBatchProgress().running) return res.status(409).json({ message: "A batch is already running." });
+    if (storage.listReportPresets().length === 0) return res.status(400).json({ message: "The monthly set is empty." });
+    generateAllPresets(period, false).catch((e) => console.error("[market-reports] batch failed:", e));
+    res.json({ ok: true, message: "Generating" });
   });
 
   /** The assembled report for a period, with its comparison months. */

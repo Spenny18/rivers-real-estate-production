@@ -738,6 +738,35 @@ sqlite.exec(`
     updated_at TEXT NOT NULL
   );
 
+  -- The community reports generated every month: which scope and property
+  -- class (the "monthly set"), and what was produced for each period.
+  CREATE TABLE IF NOT EXISTS market_report_presets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,            -- city | subdivision
+    name TEXT NOT NULL,
+    city TEXT,
+    cls TEXT NOT NULL,             -- detached | semi_detached | row | apartment | all
+    created_at TEXT NOT NULL,
+    UNIQUE(kind, name, city, cls)
+  );
+  CREATE TABLE IF NOT EXISTS market_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    period TEXT NOT NULL,          -- YYYY-MM reported on
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    city TEXT,
+    cls TEXT NOT NULL,
+    title TEXT NOT NULL,
+    subtitle TEXT NOT NULL,
+    pdf_path TEXT NOT NULL,        -- relative to the uploads root
+    png1_path TEXT NOT NULL,
+    png2_path TEXT NOT NULL,
+    stats_json TEXT NOT NULL,      -- the ReportData the pages were built from
+    generated_at TEXT NOT NULL,
+    UNIQUE(period, kind, name, city, cls)
+  );
+  CREATE INDEX IF NOT EXISTS idx_market_reports_period ON market_reports(period);
+
   -- Follow Up Boss configuration, stored whole rather than modelled.
   --
   -- Action plans, smart lists, custom field definitions, lead-routing groups
@@ -2021,6 +2050,77 @@ export class DatabaseStorage implements IStorage {
     });
     txn(rows);
     return rows.length;
+  }
+
+  // ---- Community market reports ---------------------------------------------
+
+  listReportPresets(): Array<{ id: number; kind: string; name: string; city: string | null; cls: string; createdAt: string }> {
+    return (
+      sqlite
+        .prepare(`SELECT id, kind, name, city, cls, created_at AS createdAt FROM market_report_presets ORDER BY name, cls`)
+        .all() as any[]
+    );
+  }
+
+  addReportPreset(p: { kind: string; name: string; city: string | null; cls: string }): number {
+    const r = sqlite
+      .prepare(
+        `INSERT INTO market_report_presets (kind, name, city, cls, created_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(kind, name, city, cls) DO NOTHING`,
+      )
+      .run(p.kind, p.name, p.city, p.cls, new Date().toISOString());
+    return Number(r.lastInsertRowid ?? 0);
+  }
+
+  deleteReportPreset(id: number): void {
+    sqlite.prepare(`DELETE FROM market_report_presets WHERE id = ?`).run(id);
+  }
+
+  upsertMarketReport(r: {
+    period: string;
+    kind: string;
+    name: string;
+    city: string | null;
+    cls: string;
+    title: string;
+    subtitle: string;
+    pdfPath: string;
+    png1Path: string;
+    png2Path: string;
+    statsJson: string;
+  }): number {
+    sqlite
+      .prepare(
+        `INSERT INTO market_reports (period, kind, name, city, cls, title, subtitle, pdf_path, png1_path, png2_path, stats_json, generated_at)
+         VALUES (@period, @kind, @name, @city, @cls, @title, @subtitle, @pdfPath, @png1Path, @png2Path, @statsJson, @generatedAt)
+         ON CONFLICT(period, kind, name, city, cls) DO UPDATE SET
+           title = excluded.title, subtitle = excluded.subtitle,
+           pdf_path = excluded.pdf_path, png1_path = excluded.png1_path, png2_path = excluded.png2_path,
+           stats_json = excluded.stats_json, generated_at = excluded.generated_at`,
+      )
+      .run({ ...r, generatedAt: new Date().toISOString() });
+    const row = sqlite
+      .prepare(`SELECT id FROM market_reports WHERE period = ? AND kind = ? AND name = ? AND city IS ? AND cls = ?`)
+      .get(r.period, r.kind, r.name, r.city, r.cls) as { id: number };
+    return row.id;
+  }
+
+  listMarketReports(period?: string): Array<Record<string, any>> {
+    const sql = `SELECT id, period, kind, name, city, cls, title, subtitle, pdf_path AS pdfPath, png1_path AS png1Path,
+                        png2_path AS png2Path, generated_at AS generatedAt
+                   FROM market_reports ${period ? "WHERE period = ?" : ""}
+                  ORDER BY period DESC, name, cls`;
+    return (period ? sqlite.prepare(sql).all(period) : sqlite.prepare(sql).all()) as any[];
+  }
+
+  getMarketReport(id: number): Record<string, any> | undefined {
+    return sqlite
+      .prepare(
+        `SELECT id, period, kind, name, city, cls, title, subtitle, pdf_path AS pdfPath, png1_path AS png1Path,
+                png2_path AS png2Path, stats_json AS statsJson, generated_at AS generatedAt
+           FROM market_reports WHERE id = ?`,
+      )
+      .get(id) as any;
   }
 
   /** What the history table holds, for the admin card and for bounding stats. */

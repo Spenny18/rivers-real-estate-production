@@ -234,6 +234,45 @@ export function series(scope: Scope, cls: ClassFilter, months: number, endPeriod
   return out;
 }
 
+// ---- Annual medians (the 10-year chart) ---------------------------------------
+
+export interface YearStats {
+  year: number;
+  sales: number;
+  /** Null when the year has no sales in the history held. */
+  medianSoldPrice: number | null;
+  /** True for the current, incomplete year. */
+  partial: boolean;
+}
+
+/** `years` calendar years ending with the current one. */
+export function annualMedians(scope: Scope, cls: ClassFilter, years: number, now = new Date()): YearStats[] {
+  const thisYear = Number(currentPeriod(now).slice(0, 4));
+  const firstYear = thisYear - (years - 1);
+  const where = `${scopeWhere(scope)} AND ${classWhere(cls)}`;
+  const rows = sqlite
+    .prepare(
+      `SELECT substr(close_date, 1, 4) AS y, close_price AS price
+         FROM mls_history
+        WHERE status = 'S' AND close_date >= @from AND close_price >= ${MIN_SANE_PRICE}
+          AND ${where}
+        ORDER BY y, price`,
+    )
+    .all(params(scope, cls, { from: `${firstYear}-01-01` })) as Array<{ y: string; price: number }>;
+  const byYear = new Map<number, number[]>();
+  for (const r of rows) {
+    const y = Number(r.y);
+    if (!byYear.has(y)) byYear.set(y, []);
+    byYear.get(y)!.push(r.price);
+  }
+  const out: YearStats[] = [];
+  for (let y = firstYear; y <= thisYear; y++) {
+    const prices = byYear.get(y) ?? [];
+    out.push({ year: y, sales: prices.length, medianSoldPrice: median(prices), partial: y === thisYear });
+  }
+  return out;
+}
+
 // ---- What scopes exist ------------------------------------------------------
 
 export interface ScopeOption {

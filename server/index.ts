@@ -150,6 +150,12 @@ app.use((req, res, next) => {
     console.error("[mls-history] failed to start cron:", err);
   }
   try {
+    const { startMarketReportCron } = await import("./market-report-store");
+    startMarketReportCron();
+  } catch (err) {
+    console.error("[market-reports] failed to start cron:", err);
+  }
+  try {
     startLeadAlertCron();
   } catch (err) {
     console.error("[lead-alerts] failed to start cron:", err);
