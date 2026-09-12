@@ -2123,6 +2123,23 @@ export class DatabaseStorage implements IStorage {
       .get(id) as any;
   }
 
+  /**
+   * History runs still marked "running" at boot were killed by a restart —
+   * a process that finishes always writes a final status. Mark them so, and
+   * report how many backfills were among them, since those need re-running.
+   */
+  reconcileInterruptedHistoryRuns(): number {
+    const stale = sqlite
+      .prepare(`SELECT id, source FROM mls_sync_runs WHERE status = 'running' AND source LIKE 'pillar9-history%'`)
+      .all() as Array<{ id: number; source: string }>;
+    for (const r of stale) {
+      sqlite
+        .prepare(`UPDATE mls_sync_runs SET status = 'error', finished_at = ?, error_message = ? WHERE id = ?`)
+        .run(new Date().toISOString(), "Interrupted by a server restart", r.id);
+    }
+    return stale.filter((r) => r.source === "pillar9-history-backfill").length;
+  }
+
   /** What the history table holds, for the admin card and for bounding stats. */
   mlsHistorySummary(): {
     rows: number;
