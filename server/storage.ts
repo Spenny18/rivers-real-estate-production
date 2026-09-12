@@ -2140,6 +2140,21 @@ export class DatabaseStorage implements IStorage {
     return stale.filter((r) => r.source === "pillar9-history-backfill").length;
   }
 
+  /**
+   * True when the most recent backfill ended with errors — a window or two
+   * the feed dropped mid-walk — and no clean backfill has run since. The table
+   * is then missing a month of some status and needs walking again.
+   */
+  lastHistoryBackfillFailed(): boolean {
+    const r = sqlite
+      .prepare(
+        `SELECT status FROM mls_sync_runs WHERE source = 'pillar9-history-backfill'
+          ORDER BY started_at DESC, id DESC LIMIT 1`,
+      )
+      .get() as { status: string } | undefined;
+    return r?.status === "error";
+  }
+
   /** What the history table holds, for the admin card and for bounding stats. */
   mlsHistorySummary(): {
     rows: number;
