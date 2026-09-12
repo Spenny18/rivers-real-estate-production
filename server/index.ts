@@ -144,6 +144,12 @@ app.use((req, res, next) => {
     console.error("[mls-sync] failed to start cron:", err);
   }
   try {
+    const { startHistorySyncCron } = await import("./rets-history-sync");
+    startHistorySyncCron();
+  } catch (err) {
+    console.error("[mls-history] failed to start cron:", err);
+  }
+  try {
     startLeadAlertCron();
   } catch (err) {
     console.error("[lead-alerts] failed to start cron:", err);

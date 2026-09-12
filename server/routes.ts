@@ -2896,6 +2896,27 @@ export async function registerRoutes(
     }
   });
 
+  // GET /api/admin/mls-sync/history (auth) — what the sold/off-market history
+  // table holds, and the progress of a run in flight.
+  app.get("/api/admin/mls-sync/history", requireAuth, async (_req, res) => {
+    const { getHistoryProgress } = await import("./rets-history-sync");
+    res.json({ summary: storage.mlsHistorySummary(), progress: getHistoryProgress() });
+  });
+
+  // POST /api/admin/mls-sync/history/run (auth) — { mode: "incremental" |
+  // "backfill", months? }. Fire-and-forget; poll the GET above for progress.
+  app.post("/api/admin/mls-sync/history/run", requireAuth, async (req, res) => {
+    const mode = req.body?.mode === "backfill" ? "backfill" : "incremental";
+    const months = Number(req.body?.months) || undefined;
+    const { runHistorySync, isHistorySyncRunning } = await import("./rets-history-sync");
+    if (isHistorySyncRunning()) return res.status(409).json({ ok: false, message: "A history sync is already running." });
+    if (process.env.RETS_SYNC_ENABLED !== "true") {
+      return res.status(400).json({ ok: false, message: "RETS_SYNC_ENABLED is not true on this deploy." });
+    }
+    runHistorySync({ mode, months }).catch((err) => console.error("[mls-history] manual run failed:", err));
+    res.json({ ok: true, message: mode === "backfill" ? "Backfill started" : "Sync started" });
+  });
+
   // POST /api/admin/mls-sync/reset (auth) — drop & recreate mls_listings table
   // (used to recover from "database disk image is malformed" after a publish
   // restored a corrupt SQLite snapshot; sync immediately starts after rebuild).

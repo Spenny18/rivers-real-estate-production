@@ -60,6 +60,7 @@ import type {
   InsertLeadAlert,
   MlsPriceHistory,
   InsertMlsPriceHistory,
+  InsertMlsHistory,
   UserIntegration,
   InsertUserIntegration,
   PageRow,
@@ -324,6 +325,40 @@ sqlite.exec(`
     ON mls_price_history(listing_id, changed_at);
   CREATE INDEX IF NOT EXISTS idx_mls_price_history_changed_at
     ON mls_price_history(changed_at);
+
+  -- Sold and off-market listings from the feed. See shared/schema.ts.
+  CREATE TABLE IF NOT EXISTS mls_history (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    list_price INTEGER,
+    close_price INTEGER,
+    close_date TEXT,
+    list_date TEXT,
+    off_market_date TEXT,
+    days_on_market INTEGER,
+    property_type TEXT,
+    property_sub_type TEXT,
+    city TEXT,
+    postal_code TEXT,
+    subdivision TEXT,
+    district TEXT,
+    full_address TEXT,
+    lat REAL,
+    lng REAL,
+    beds INTEGER,
+    baths REAL,
+    sqft INTEGER,
+    year_built INTEGER,
+    status_changed_at TEXT,
+    modified_at TEXT,
+    synced_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_mls_history_close ON mls_history(status, close_date);
+  CREATE INDEX IF NOT EXISTS idx_mls_history_off ON mls_history(off_market_date);
+  CREATE INDEX IF NOT EXISTS idx_mls_history_list ON mls_history(list_date);
+  CREATE INDEX IF NOT EXISTS idx_mls_history_subdivision ON mls_history(subdivision);
+  CREATE INDEX IF NOT EXISTS idx_mls_history_city ON mls_history(city);
+  CREATE INDEX IF NOT EXISTS idx_mls_listings_list_date ON mls_listings(list_date);
   CREATE TABLE IF NOT EXISTS condo_buildings (
     slug TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -1910,6 +1945,112 @@ export class DatabaseStorage implements IStorage {
   }
   getLatestSyncRun(): MlsSyncRun | undefined {
     return db.select().from(mlsSyncRuns).orderBy(desc(mlsSyncRuns.startedAt)).all()[0];
+  }
+
+  // ---- MLS history (sold + off-market listings) ---------------------------
+
+  /** Insert or replace a batch of history rows in one transaction. */
+  upsertMlsHistory(rows: InsertMlsHistory[]): number {
+    if (rows.length === 0) return 0;
+    const stmt = sqlite.prepare(`
+      INSERT INTO mls_history (
+        id, status, list_price, close_price, close_date, list_date, off_market_date,
+        days_on_market, property_type, property_sub_type, city, postal_code,
+        subdivision, district, full_address, lat, lng, beds, baths, sqft, year_built,
+        status_changed_at, modified_at, synced_at
+      ) VALUES (
+        @id, @status, @listPrice, @closePrice, @closeDate, @listDate, @offMarketDate,
+        @daysOnMarket, @propertyType, @propertySubType, @city, @postalCode,
+        @subdivision, @district, @fullAddress, @lat, @lng, @beds, @baths, @sqft, @yearBuilt,
+        @statusChangedAt, @modifiedAt, @syncedAt
+      )
+      ON CONFLICT(id) DO UPDATE SET
+        status = excluded.status,
+        list_price = excluded.list_price,
+        close_price = excluded.close_price,
+        close_date = excluded.close_date,
+        list_date = excluded.list_date,
+        off_market_date = excluded.off_market_date,
+        days_on_market = excluded.days_on_market,
+        property_type = excluded.property_type,
+        property_sub_type = excluded.property_sub_type,
+        city = excluded.city,
+        postal_code = excluded.postal_code,
+        subdivision = excluded.subdivision,
+        district = excluded.district,
+        full_address = excluded.full_address,
+        lat = excluded.lat,
+        lng = excluded.lng,
+        beds = excluded.beds,
+        baths = excluded.baths,
+        sqft = excluded.sqft,
+        year_built = excluded.year_built,
+        status_changed_at = excluded.status_changed_at,
+        modified_at = excluded.modified_at,
+        synced_at = excluded.synced_at
+    `);
+    const txn = sqlite.transaction((batch: InsertMlsHistory[]) => {
+      for (const r of batch) {
+        stmt.run({
+          id: r.id,
+          status: r.status,
+          listPrice: r.listPrice ?? null,
+          closePrice: r.closePrice ?? null,
+          closeDate: r.closeDate ?? null,
+          listDate: r.listDate ?? null,
+          offMarketDate: r.offMarketDate ?? null,
+          daysOnMarket: r.daysOnMarket ?? null,
+          propertyType: r.propertyType ?? null,
+          propertySubType: r.propertySubType ?? null,
+          city: r.city ?? null,
+          postalCode: r.postalCode ?? null,
+          subdivision: r.subdivision ?? null,
+          district: r.district ?? null,
+          fullAddress: r.fullAddress ?? null,
+          lat: r.lat ?? null,
+          lng: r.lng ?? null,
+          beds: r.beds ?? null,
+          baths: r.baths ?? null,
+          sqft: r.sqft ?? null,
+          yearBuilt: r.yearBuilt ?? null,
+          statusChangedAt: r.statusChangedAt ?? null,
+          modifiedAt: r.modifiedAt ?? null,
+          syncedAt: r.syncedAt,
+        });
+      }
+    });
+    txn(rows);
+    return rows.length;
+  }
+
+  /** What the history table holds, for the admin card and for bounding stats. */
+  mlsHistorySummary(): {
+    rows: number;
+    sold: number;
+    earliestClose: string | null;
+    latestClose: string | null;
+    earliestOffMarket: string | null;
+    lastSyncedAt: string | null;
+  } {
+    const r = sqlite
+      .prepare(
+        `SELECT COUNT(*) AS rows,
+                SUM(CASE WHEN status = 'S' THEN 1 ELSE 0 END) AS sold,
+                MIN(CASE WHEN status = 'S' THEN close_date END) AS earliest_close,
+                MAX(CASE WHEN status = 'S' THEN close_date END) AS latest_close,
+                MIN(off_market_date) AS earliest_off,
+                MAX(synced_at) AS last_synced
+         FROM mls_history`,
+      )
+      .get() as Record<string, any>;
+    return {
+      rows: Number(r?.rows ?? 0),
+      sold: Number(r?.sold ?? 0),
+      earliestClose: r?.earliest_close ?? null,
+      latestClose: r?.latest_close ?? null,
+      earliestOffMarket: r?.earliest_off ?? null,
+      lastSyncedAt: r?.last_synced ?? null,
+    };
   }
   listRecentSyncRuns(limit = 10): MlsSyncRun[] {
     return db.select().from(mlsSyncRuns).orderBy(desc(mlsSyncRuns.startedAt)).all().slice(0, limit);

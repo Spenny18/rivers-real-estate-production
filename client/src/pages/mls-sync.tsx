@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useMutation } from "@tanstack/react-query";
-import { Database, RefreshCw, CheckCircle2, AlertTriangle, Clock, Stethoscope } from "lucide-react";
+import { Database, RefreshCw, CheckCircle2, AlertTriangle, Clock, Stethoscope, History } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -41,12 +41,38 @@ interface SoldProbe {
   error?: string;
 }
 
+/** Shape of GET /api/admin/mls-sync/history — see server/rets-history-sync.ts. */
+interface HistoryState {
+  summary: {
+    rows: number;
+    sold: number;
+    earliestClose: string | null;
+    latestClose: string | null;
+    earliestOffMarket: string | null;
+    lastSyncedAt: string | null;
+  };
+  progress: {
+    running: boolean;
+    mode: "backfill" | "incremental" | null;
+    startedAt: string | null;
+    finishedAt: string | null;
+    windows: number;
+    windowsDone: number;
+    currentWindow: string | null;
+    fetched: number;
+    upserted: number;
+    errors: string[];
+    lastError: string | null;
+  };
+}
+
 type MlsSyncRun = {
   id: number;
   startedAt: string;
   finishedAt: string | null;
   status: "running" | "success" | "error" | "skipped";
-  source: "pillar9" | "seed";
+  // pillar9 | seed | pillar9-history | pillar9-history-backfill
+  source: string;
   fetched: number;
   upserted: number;
   removed: number;
@@ -125,6 +151,31 @@ export default function MlsSyncPage() {
         variant: "destructive",
       }),
   });
+
+  // The sold/off-market history table. Polled faster while a run is going so
+  // the backfill can be watched filling in.
+  const history = useQuery<HistoryState>({
+    queryKey: ["/api/admin/mls-sync/history"],
+    refetchInterval: (q) => (q.state.data?.progress.running ? 4_000 : 30_000),
+  });
+  const historyRun = useMutation({
+    mutationFn: async (body: { mode: "incremental" | "backfill"; months?: number }) =>
+      apiRequest("POST", "/api/admin/mls-sync/history/run", body),
+    onSuccess: (_r, body) => {
+      toast({
+        title: body.mode === "backfill" ? "Backfill started" : "History sync started",
+        description:
+          body.mode === "backfill"
+            ? "Walking the feed month by month. This takes a while; the card updates as it goes."
+            : "Re-reading the last 45 days of sales and status changes.",
+      });
+      setTimeout(() => queryClient.invalidateQueries({ queryKey: ["/api/admin/mls-sync/history"] }), 1000);
+    },
+    onError: (err: any) =>
+      toast({ title: "Could not start", description: err?.message ?? "Try again in a moment.", variant: "destructive" }),
+  });
+  const hist = history.data;
+  const histRunning = !!hist?.progress.running;
 
   const runs = data ?? [];
   const lastSuccess = runs.find((r) => r.status === "success");
@@ -208,6 +259,67 @@ export default function MlsSyncPage() {
             </CardContent>
           </Card>
         </div>
+
+        {/* Sold & off-market history — the numbers behind the market reports.
+            Separate from the active sync: different statuses, different
+            cadence, and a one-time backfill of everything the feed retains. */}
+        <Card>
+          <CardContent className="p-5">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <History className="w-4 h-4 text-foreground" />
+                  <span className="eyebrow text-muted-foreground">Sold &amp; off-market history</span>
+                </div>
+                <div className="font-serif text-xl" data-testid="text-history-summary">
+                  {hist
+                    ? hist.summary.sold > 0
+                      ? `${hist.summary.sold.toLocaleString()} sales · ${hist.summary.rows.toLocaleString()} rows`
+                      : "Empty — run the backfill"
+                    : "…"}
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  {hist?.summary.earliestClose
+                    ? `Closings from ${hist.summary.earliestClose} to ${hist.summary.latestClose} · inventory reconstructible from ${hist.summary.earliestOffMarket ?? "—"} · last synced ${fmtTime(hist.summary.lastSyncedAt)}`
+                    : "Sales, expiries, withdrawals and terminations from Pillar 9. Feeds the community market reports."}
+                </div>
+                {histRunning && hist && (
+                  <div className="text-xs mt-2" data-testid="text-history-progress">
+                    <span className="font-medium">{hist.progress.mode === "backfill" ? "Backfilling" : "Syncing"}</span>
+                    {" — "}
+                    {hist.progress.windowsDone}/{hist.progress.windows} windows · {hist.progress.fetched.toLocaleString()} rows
+                    {hist.progress.currentWindow ? ` · ${hist.progress.currentWindow}` : ""}
+                  </div>
+                )}
+                {!histRunning && hist?.progress.lastError && (
+                  <div className="text-xs text-destructive mt-2 line-clamp-2">{hist.progress.lastError}</div>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => historyRun.mutate({ mode: "incremental" })}
+                  disabled={historyRun.isPending || histRunning}
+                  className="rounded-sm font-display tracking-[0.16em] text-[11px]"
+                  data-testid="button-history-sync"
+                >
+                  <RefreshCw className={`w-4 h-4 mr-1.5 ${histRunning && hist?.progress.mode === "incremental" ? "animate-spin" : ""}`} />
+                  SYNC RECENT
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => historyRun.mutate({ mode: "backfill", months: 25 })}
+                  disabled={historyRun.isPending || histRunning}
+                  className="rounded-sm font-display tracking-[0.16em] text-[11px]"
+                  data-testid="button-history-backfill"
+                >
+                  <History className={`w-4 h-4 mr-1.5 ${histRunning && hist?.progress.mode === "backfill" ? "animate-spin" : ""}`} />
+                  BACKFILL 25 MONTHS
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Runs table */}
         <Card>
