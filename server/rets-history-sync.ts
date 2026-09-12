@@ -65,6 +65,7 @@ const SELECT_FIELDS = [
 
 const PAGE_SIZE = 500;
 const INCREMENTAL_DAYS = 45;
+const RETRY_PASS_DELAY_MS = 30_000;
 export const DEFAULT_BACKFILL_MONTHS = 25;
 
 // ---- Progress, visible to the admin while a run is going --------------------
@@ -291,6 +292,8 @@ export async function runHistorySync(opts: {
   months?: number;
   /** Injected for tests; production constructs from env. */
   client?: RetsClient;
+  /** Pause before the second pass over failed windows; tests set 0. */
+  retryDelayMs?: number;
 }): Promise<HistorySyncResult> {
   if (process.env.RETS_SYNC_ENABLED !== "true" && !opts.client) {
     return { status: "skipped", fetched: 0, upserted: 0 };
@@ -333,37 +336,59 @@ export async function runHistorySync(opts: {
   let fetched = 0;
   let upserted = 0;
 
+  // Windows that failed for something other than a grammar rejection — a
+  // dropped connection, a timeout the retries didn't outlast. Each one is a
+  // month of one status missing from the table, so they get a second pass at
+  // the end of the run, once whatever was wrong has had time to clear.
+  const failed: Array<{ status: OffMarketStatus; field: string; w: Window }> = [];
+
+  const walk = async (status: OffMarketStatus, field: string, w: Window, retrying: boolean): Promise<boolean> => {
+    progress.currentWindow = `${status} ${w.from}..${w.to}${retrying ? " (retry)" : ""}`;
+    try {
+      const r = await fetchWindow(client, status, field, w);
+      fetched += r.fetched;
+      upserted += r.upserted;
+      progress.fetched = fetched;
+      progress.upserted = upserted;
+      return true;
+    } catch (e: any) {
+      if (e instanceof RetsAuthError) throw e;
+      const msg = `${status} ${w.from}..${w.to}: ${String(e?.message ?? e).slice(0, 200)}`;
+      console.error(`[mls-history] window failed${retrying ? " again" : ""} — ${msg}`);
+      if (retrying) {
+        progress.errors.push(msg);
+        progress.lastError = msg;
+      } else {
+        failed.push({ status, field, w });
+      }
+      return false;
+    } finally {
+      if (!retrying) progress.windowsDone++;
+    }
+  };
+
   try {
     await client.login();
 
     for (const status of OFF_MARKET_STATUSES) {
       const field = dateField(status);
       for (const w of windows) {
-        progress.currentWindow = `${status} ${w.from}..${w.to}`;
-        try {
-          const r = await fetchWindow(client, status, field, w);
-          fetched += r.fetched;
-          upserted += r.upserted;
-          progress.fetched = fetched;
-          progress.upserted = upserted;
-          // If the only shape the feed accepts for this field is a lower bound,
-          // the first window — the oldest — has already fetched everything
-          // after it. Walking the remaining windows would re-fetch the same
-          // rows twenty-four more times.
-          if (lowerBoundOnly(field)) {
-            progress.windowsDone += windows.length - windows.indexOf(w) - 1;
-            break;
-          }
-        } catch (e: any) {
-          const msg = `${status} ${w.from}..${w.to}: ${String(e?.message ?? e).slice(0, 200)}`;
-          progress.errors.push(msg);
-          progress.lastError = msg;
-          console.error(`[mls-history] window failed — ${msg}`);
-          if (e instanceof RetsAuthError) throw e;
-        } finally {
-          progress.windowsDone++;
+        const ok = await walk(status, field, w, false);
+        // If the only shape the feed accepts for this field is a lower bound,
+        // the first window — the oldest — has already fetched everything
+        // after it. Walking the remaining windows would re-fetch the same
+        // rows twenty-four more times.
+        if (ok && lowerBoundOnly(field)) {
+          progress.windowsDone += windows.length - windows.indexOf(w) - 1;
+          break;
         }
       }
+    }
+
+    if (failed.length > 0) {
+      console.log(`[mls-history] ${failed.length} window(s) failed — second pass`);
+      await new Promise((r) => setTimeout(r, opts.retryDelayMs ?? RETRY_PASS_DELAY_MS));
+      for (const f of failed) await walk(f.status, f.field, f.w, true);
     }
 
     const status = progress.errors.length === 0 ? "success" : "error";
@@ -467,12 +492,17 @@ export function startHistorySyncCron() {
   // deploy fills itself without anyone having to press anything. So does a
   // backfill a redeploy cut off mid-walk: the run row it left behind still
   // says "running", which nothing else can leave behind, so that is the
-  // signal to start over rather than settle for a half-filled table.
+  // signal to start over rather than settle for a half-filled table. And so
+  // does a backfill that finished with a window it could not fetch: it left a
+  // month-sized hole, and every upsert is idempotent, so walking again is
+  // only time.
   setTimeout(() => {
     const summary = storage.mlsHistorySummary();
     const interrupted = storage.reconcileInterruptedHistoryRuns();
-    const mode = summary.rows === 0 || interrupted > 0 ? "backfill" : "incremental";
+    const holed = storage.lastHistoryBackfillFailed();
+    const mode = summary.rows === 0 || interrupted > 0 || holed ? "backfill" : "incremental";
     if (interrupted > 0) console.log(`[mls-history] ${interrupted} run(s) were cut off by a restart — backfilling again`);
+    else if (holed) console.log(`[mls-history] last backfill ended with failed windows — backfilling again`);
     runHistorySync({ mode }).catch((err) => console.error("[mls-history] uncaught:", err));
   }, 90_000);
   timer = setInterval(() => {
