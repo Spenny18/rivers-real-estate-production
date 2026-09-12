@@ -221,6 +221,13 @@ function shapesFor(field: string, w: Window): string[] {
 /** Index of the shape each field has been seen to accept, for this process. */
 const acceptedShape = new Map<string, number>();
 
+/** True once the feed has been seen to accept only the open-ended shape. */
+function lowerBoundOnly(field: string): boolean {
+  const i = acceptedShape.get(field);
+  if (i == null) return false;
+  return i === shapesFor(field, { from: "2000-01-01", to: "2000-01-31" }).length - 1;
+}
+
 function isSyntaxRejection(e: unknown): boolean {
   return /20206|Invalid Query Syntax|20203/i.test(String((e as any)?.message ?? e));
 }
@@ -300,6 +307,14 @@ export async function runHistorySync(opts: {
           upserted += r.upserted;
           progress.fetched = fetched;
           progress.upserted = upserted;
+          // If the only shape the feed accepts for this field is a lower bound,
+          // the first window — the oldest — has already fetched everything
+          // after it. Walking the remaining windows would re-fetch the same
+          // rows twenty-four more times.
+          if (lowerBoundOnly(field)) {
+            progress.windowsDone += windows.length - windows.indexOf(w) - 1;
+            break;
+          }
         } catch (e: any) {
           const msg = `${status} ${w.from}..${w.to}: ${String(e?.message ?? e).slice(0, 200)}`;
           progress.errors.push(msg);

@@ -157,7 +157,7 @@ export function buildReport(period: string): MarketReport {
     const present = at(period, t)?.benchmarkPrice ?? null;
     const lastMonth = at(prevM, t)?.benchmarkPrice ?? null;
     const lastYear = at(prevY, t)?.benchmarkPrice ?? null;
-    if (present == null) missing.push(`${TYPE_LABEL[t]} benchmark price for ${periodLabel(period)}`);
+    if (present == null) missing.push(`${TYPE_LABEL[t]} median sold price for ${periodLabel(period)}`);
     return {
       propertyType: t,
       label: TYPE_LABEL[t],
@@ -401,7 +401,7 @@ export function renderInfographic(report: MarketReport): string {
       : "") +
     `</td></tr>` +
     // Benchmark price
-    sectionHeading("Benchmark Sold Price") +
+    sectionHeading("Median Sold Price") +
     benchmarkRows +
     // Active & sold
     sectionHeading("Active & Sold Listings") +
@@ -417,9 +417,9 @@ export function renderInfographic(report: MarketReport): string {
     // reading a number should be able to see where it came from.
     `<tr><td style="background-color:#F4F4F4;padding:12px 16px;">` +
     `<div style="font-family:${SANS};font-size:10px;line-height:1.5;color:${META};">` +
-    `Figures for ${esc(report.periodLabel)} as published by the Calgary Real Estate Board. ` +
-    `Benchmark price is the board's Home Price Index — a modelled price for a typical home of that type, ` +
-    `not an average of sales. Believed reliable but not guaranteed; not intended to solicit properties already listed.` +
+    `Figures for ${esc(report.periodLabel)} computed by Rivers Real Estate from Pillar 9 MLS® System data. ` +
+    `Prices are the median of reported sales for the month and property type, not the CREB® benchmark. ` +
+    `Believed reliable but not guaranteed; not intended to solicit properties already listed.` +
     `</div></td></tr>` +
     `</table>`
   );
