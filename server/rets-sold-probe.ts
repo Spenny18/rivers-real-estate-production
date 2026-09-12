@@ -41,6 +41,20 @@ export interface SoldAttempt {
   error?: string;
 }
 
+/**
+ * How many sold rows the feed holds behind a close-date bound. This is what
+ * decides whether the 13-month and 10-year charts can be backfilled in one
+ * pass or have to accumulate month by month from today.
+ */
+export interface SoldHistoryWindow {
+  monthsBack: number;
+  since: string;
+  query: string;
+  /** Rows the feed reports for the window, or null when the query failed. */
+  total: number | null;
+  error?: string;
+}
+
 export interface SoldProbeResult {
   configured: boolean;
   loggedIn: boolean;
@@ -49,6 +63,8 @@ export interface SoldProbeResult {
   /** Which of the candidate sale fields the Property class actually defines. */
   saleFieldsInMetadata: string[];
   attempts: SoldAttempt[];
+  /** Filled in once a working sold query is found. */
+  history: SoldHistoryWindow[];
   verdict: string;
   error?: string;
 }
@@ -65,11 +81,45 @@ const SALE_FIELDS = [
 ];
 
 /**
- * Status values worth trying, most-likely first. The feed's own metadata is
- * read before this is used, so in practice the lookups list decides — these
- * are the fallback for a feed whose metadata is unhelpful.
+ * Status values worth trying, most-likely first. Only used when the feed's
+ * metadata declines to say what it calls sold — when it does say, guessing
+ * alongside it just produces a column of "Invalid Query Syntax" rejections
+ * that read as a licence problem when they are nothing of the kind.
  */
 const CANDIDATE_STATUSES = ["S", "Closed", "Sold", "C", "SLD"];
+
+/**
+ * The first run of this probe against Pillar 9 was misread because of two
+ * things fixed here:
+ *
+ *   - Dates went out as `20260614`. DMQL2 dates are ISO (`2026-06-14`), so
+ *     every date-bounded query was a syntax error regardless of status.
+ *   - The select list asked for every candidate sale field, and the one
+ *     query with a valid status and no date failed with "Invalid Select
+ *     Field(s)" naming the three this board doesn't define. That error means
+ *     the sold query itself was accepted — the server had parsed it and moved
+ *     on to validating columns — but the verdict counted it as a rejection.
+ *
+ * So the select is now built from what the metadata declares, and a
+ * select-field complaint is reported as what it is.
+ */
+function isoDaysAgo(days: number): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** First of the month, `monthsBack` months ago, as an ISO date. */
+function isoMonthsBack(monthsBack: number): string {
+  const d = new Date();
+  d.setUTCDate(1);
+  d.setUTCMonth(d.getUTCMonth() - monthsBack);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Calgary proper: the postal prefix the active sync already scopes to. */
+const CALGARY_POSTAL = "T2*";
+
+/** Windows to size for backfill: a year of charts, then two, five and ten. */
+const HISTORY_WINDOWS = [13, 25, 61, 121];
 
 function retsConfigured(): boolean {
   return !!(process.env.RETS_LOGIN_URL && process.env.RETS_USERNAME && process.env.RETS_PASSWORD);
@@ -126,6 +176,7 @@ export async function probeSoldListings(): Promise<SoldProbeResult> {
     statusLookups: [],
     saleFieldsInMetadata: [],
     attempts: [],
+    history: [],
     verdict: "",
   };
   if (!base.configured) {
@@ -157,25 +208,35 @@ export async function probeSoldListings(): Promise<SoldProbeResult> {
   base.statusLookups = await readStatusLookups(client);
   base.saleFieldsInMetadata = await readSaleFields(client);
 
-  // Prefer status values the feed itself declares; fall back to the guesses.
+  // Prefer status values the feed itself declares. Only when its metadata says
+  // nothing do the guesses get a turn.
   const declared = base.statusLookups
     .filter((l) => /sold|closed/i.test(`${l.value} ${l.longValue ?? ""} ${l.shortValue ?? ""}`))
     .map((l) => l.value);
-  const toTry = Array.from(new Set([...declared, ...CANDIDATE_STATUSES]));
+  const toTry = declared.length > 0 ? declared : CANDIDATE_STATUSES;
+
+  // Only ask for columns the feed defines. If the metadata read failed, fall
+  // back to the two fields without which there is no market report.
+  const saleSelect =
+    base.saleFieldsInMetadata.length > 0
+      ? base.saleFieldsInMetadata
+      : ["ClosePrice", "CloseDate"];
+  const select = [...saleSelect, "ListingId", "City", "PostalCode", "StandardStatus"].join(",");
 
   // One narrow, recent window: enough to prove access without asking the feed
   // for years of history during a diagnostic.
-  const since = new Date(Date.now() - 90 * 86_400_000).toISOString().slice(0, 10).replace(/-/g, "");
-  const select = [...SALE_FIELDS, "ListingId", "City", "PostalCode", "StandardStatus"].join(",");
+  const since = isoDaysAgo(90);
+
+  let working: { status: string; dateBound: boolean } | null = null;
 
   for (const status of toTry) {
     // Two shapes: with a close-date bound, and without. If the first fails but
     // the second works, the status is right and the date field is wrong, which
     // is a materially different fix.
-    for (const q of [
-      `(StandardStatus=|${status}),(CloseDate=${since}+)`,
-      `(StandardStatus=|${status}),(PostalCode=T2*)`,
-    ]) {
+    for (const [q, dateBound] of [
+      [`(StandardStatus=|${status}),(CloseDate=${since}+)`, true],
+      [`(StandardStatus=|${status}),(PostalCode=${CALGARY_POSTAL})`, false],
+    ] as const) {
       try {
         const r = await client.search({
           resource: "Property",
@@ -189,21 +250,18 @@ export async function probeSoldListings(): Promise<SoldProbeResult> {
         base.attempts.push({
           query: q,
           ok: true,
-          rows: r.rows.length,
+          rows: r.total > 0 ? r.total : r.rows.length,
           fields: row ? Object.keys(row) : [],
           // Values, not just names, for the sale fields only — a close price
           // and date are what decide whether a market report is possible, and
           // one row of them is not a data leak.
           saleFields: row
             ? Object.fromEntries(
-                SALE_FIELDS.map((f) => [f, row[f] != null ? String(row[f]) : null]),
+                saleSelect.map((f) => [f, row[f] != null ? String(row[f]) : null]),
               )
             : undefined,
         });
-        // A query that returned a row has answered the question.
-        if (r.rows.length > 0) {
-          return { ...base, verdict: verdictFor(base.attempts) };
-        }
+        if (r.rows.length > 0 && !working) working = { status, dateBound };
       } catch (e: any) {
         base.attempts.push({
           query: q,
@@ -213,23 +271,69 @@ export async function probeSoldListings(): Promise<SoldProbeResult> {
         });
       }
     }
+    if (working) break;
   }
 
-  return { ...base, verdict: verdictFor(base.attempts) };
+  // With a working status, size the history. Count-only in effect: Limit=1
+  // keeps the payload to one row while COUNT reports the whole window.
+  if (working?.dateBound) {
+    for (const monthsBack of HISTORY_WINDOWS) {
+      const from = isoMonthsBack(monthsBack);
+      const q = `(StandardStatus=|${working.status}),(PostalCode=${CALGARY_POSTAL}),(CloseDate=${from}+)`;
+      try {
+        const r = await client.search({
+          resource: "Property",
+          class: "Property",
+          query: q,
+          select: "ListingId,CloseDate",
+          limit: 1,
+          offset: 0,
+        });
+        base.history.push({ monthsBack, since: from, query: q, total: r.total });
+      } catch (e: any) {
+        base.history.push({
+          monthsBack,
+          since: from,
+          query: q,
+          total: null,
+          error: String(e?.message ?? e).slice(0, 200),
+        });
+      }
+    }
+  }
+
+  return { ...base, verdict: verdictFor(base.attempts, base.history) };
 }
 
-function verdictFor(attempts: SoldAttempt[]): string {
+function verdictFor(attempts: SoldAttempt[], history: SoldHistoryWindow[]): string {
   const withRows = attempts.find((a) => a.ok && a.rows > 0);
   if (withRows) {
     const price = withRows.saleFields?.ClosePrice;
     const date = withRows.saleFields?.CloseDate;
-    if (price && date) {
-      return `Sold data is available, with both a close price and a close date. The working query is ${withRows.query}`;
+    if (!price || !date) {
+      return (
+        `Sold records come back for ${withRows.query}, but ` +
+        `${!price ? "ClosePrice" : "CloseDate"} was empty on the sample — the sale figures may sit ` +
+        `under a different field name, or be withheld by the licence.`
+      );
     }
+    const sized = history.filter((h) => h.total != null);
+    const deepest = sized.length ? sized[sized.length - 1] : null;
+    const dated = attempts.find((a) => a.ok && a.rows > 0 && /CloseDate=/.test(a.query));
+    const reach = deepest
+      ? ` A close-date bound works, and the feed reports ${deepest.total} Calgary sales in the last ${deepest.monthsBack} months, so history can be backfilled.`
+      : dated
+        ? " A close-date bound works, but sizing the history failed — see below."
+        : " A close-date bound was rejected, so history will have to accumulate from today.";
+    return `Sold data is available, with both a close price and a close date. The working query is ${withRows.query}.${reach}`;
+  }
+  // A select-field complaint means the query itself was accepted and only the
+  // column list was wrong. That is not a licence problem.
+  const selectOnly = attempts.find((a) => !a.ok && /Invalid Select Field/i.test(a.error ?? ""));
+  if (selectOnly) {
     return (
-      `Sold records come back for ${withRows.query}, but ` +
-      `${!price ? "ClosePrice" : "CloseDate"} was empty on the sample — the sale figures may sit ` +
-      `under a different field name, or be withheld by the licence.`
+      `The feed accepted ${selectOnly.query} and only objected to the column list (${selectOnly.error}). ` +
+      "Sold data is in the licence; the select needs trimming to the fields the metadata declares."
     );
   }
   if (attempts.some((a) => a.ok)) {

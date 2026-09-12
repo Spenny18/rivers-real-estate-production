@@ -30,6 +30,13 @@ interface SoldProbe {
     saleFields?: Record<string, string | null>;
     error?: string;
   }>;
+  history: Array<{
+    monthsBack: number;
+    since: string;
+    query: string;
+    total: number | null;
+    error?: string;
+  }>;
   verdict: string;
   error?: string;
 }
@@ -336,6 +343,29 @@ export default function MlsSyncPage() {
                   </div>
                 ))}
               </div>
+
+              {soldProbe.data.history?.length > 0 && (
+                <div className="rounded-sm bg-secondary/40 p-3.5" data-testid="sold-history">
+                  <div className="eyebrow text-muted-foreground mb-1.5">How far back the feed will go</div>
+                  <p className="text-[12px] text-muted-foreground mb-2">
+                    Calgary sales the feed reports behind a close-date bound. This decides whether the
+                    charts can be backfilled in one pass.
+                  </p>
+                  <table className="text-[13px] w-full">
+                    <tbody>
+                      {soldProbe.data.history.map((h) => (
+                        <tr key={h.monthsBack}>
+                          <td className="py-0.5 pr-4 whitespace-nowrap">Since {h.since}</td>
+                          <td className="py-0.5 pr-4 text-muted-foreground whitespace-nowrap">{h.monthsBack} months</td>
+                          <td className="py-0.5 tabular-nums">
+                            {h.total != null ? `${h.total.toLocaleString()} sales` : (h.error ?? "failed")}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
 
               <div>
                 <div className="eyebrow text-muted-foreground mb-2">Raw — paste this back</div>
