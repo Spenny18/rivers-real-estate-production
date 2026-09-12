@@ -275,7 +275,9 @@ export default function MlsSyncPage() {
                   {hist
                     ? hist.summary.sold > 0
                       ? `${hist.summary.sold.toLocaleString()} sales · ${hist.summary.rows.toLocaleString()} rows`
-                      : "Empty — run the backfill"
+                      : histRunning
+                        ? "Backfilling…"
+                        : "Empty — run the backfill"
                     : "…"}
                 </div>
                 <div className="text-xs text-muted-foreground mt-1">
@@ -287,7 +289,7 @@ export default function MlsSyncPage() {
                   <div className="text-xs mt-2" data-testid="text-history-progress">
                     <span className="font-medium">{hist.progress.mode === "backfill" ? "Backfilling" : "Syncing"}</span>
                     {" — "}
-                    {hist.progress.windowsDone}/{hist.progress.windows} windows · {hist.progress.fetched.toLocaleString()} rows
+                    {hist.progress.windowsDone}/{hist.progress.windows} windows · {hist.progress.fetched.toLocaleString()} fetched · {hist.progress.upserted.toLocaleString()} kept
                     {hist.progress.currentWindow ? ` · ${hist.progress.currentWindow}` : ""}
                   </div>
                 )}
