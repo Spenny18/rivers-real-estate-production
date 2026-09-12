@@ -60,6 +60,7 @@ const SELECT_FIELDS = [
   "YearBuilt",
   "StatusChangeTimestamp",
   "ModificationTimestamp",
+  "MlsStatus",
 ].join(",");
 
 const PAGE_SIZE = 500;
@@ -128,10 +129,28 @@ function day(v: unknown): string | null {
   return m ? m[1] : null;
 }
 
+/**
+ * The feed is queried by code (S, X, W, T) but COMPACT-DECODED replies carry
+ * the lookup's long value ("Sold", "Expired", …). The first production
+ * backfill fetched 144,000 rows and kept none of them because this only
+ * accepted the codes. Both spellings are accepted now.
+ */
+const STATUS_CODES: Record<string, OffMarketStatus> = {
+  S: "S", SOLD: "S", CLOSED: "S",
+  X: "X", EXPIRED: "X",
+  W: "W", WITHDRAWN: "W",
+  T: "T", TERMINATED: "T", CANCELLED: "T", CANCELED: "T",
+};
+
+export function statusCode(raw: unknown): OffMarketStatus | null {
+  const s = text(raw);
+  return s ? STATUS_CODES[s.toUpperCase()] ?? null : null;
+}
+
 export function normalizeHistoryRow(row: Record<string, string>): InsertMlsHistory | null {
   const id = text(row.ListingId);
-  const status = text(row.StandardStatus) as OffMarketStatus | null;
-  if (!id || !status || !OFF_MARKET_STATUSES.includes(status)) return null;
+  const status = statusCode(row.StandardStatus) ?? statusCode(row.MlsStatus);
+  if (!id || !status) return null;
 
   const closeDate = status === "S" ? day(row.CloseDate) : null;
   const statusChangedAt = text(row.StatusChangeTimestamp);
@@ -220,6 +239,26 @@ function shapesFor(field: string, w: Window): string[] {
 
 /** Index of the shape each field has been seen to accept, for this process. */
 const acceptedShape = new Map<string, number>();
+
+/**
+ * Pillar 9 caps concurrent queries per login ("20210: Too many outstanding
+ * queries"), and the hourly active sync runs alongside this one. Back off
+ * and retry rather than fail the window.
+ */
+async function searchWithRetry(client: RetsClient, opts: Parameters<RetsClient["search"]>[0]) {
+  const waits = [20_000, 45_000, 90_000];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await client.search(opts);
+    } catch (e: any) {
+      const msg = String(e?.message ?? e);
+      const transient = /20210|Too many outstanding|ECONNRESET|ETIMEDOUT|socket hang up|fetch failed/i.test(msg);
+      if (!transient || attempt >= waits.length) throw e;
+      console.warn(`[mls-history] ${msg.slice(0, 80)} — retrying in ${waits[attempt] / 1000}s`);
+      await new Promise((r) => setTimeout(r, waits[attempt]));
+    }
+  }
+}
 
 /** True once the feed has been seen to accept only the open-ended shape. */
 function lowerBoundOnly(field: string): boolean {
@@ -371,7 +410,7 @@ async function fetchWindow(
     let total: number | null = null;
     try {
       while (true) {
-        const r = await client.search({
+        const r = await searchWithRetry(client, {
           resource: "Property",
           class: "Property",
           query,
