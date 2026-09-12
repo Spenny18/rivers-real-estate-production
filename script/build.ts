@@ -1,6 +1,6 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
-import { rm, readFile } from "node:fs/promises";
+import { rm, readFile, cp } from "node:fs/promises";
 import path from "node:path";
 
 // server deps to bundle to reduce openat(2) syscalls
@@ -76,6 +76,12 @@ async function buildAll() {
     external: externals,
     logLevel: "info",
   });
+
+  // Files the server reads at runtime rather than bundles: the brand fonts
+  // the market-report renderer hands to resvg. dist/ is copied wholesale into
+  // the image, so they ride along at dist/assets/fonts.
+  console.log("copying server assets...");
+  await cp("server/assets", "dist/assets", { recursive: true });
 }
 
 buildAll().catch((err) => {
