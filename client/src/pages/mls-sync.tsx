@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
 import { Card, CardContent } from "@/components/ui/card";
@@ -7,7 +8,31 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useMutation } from "@tanstack/react-query";
-import { Database, RefreshCw, CheckCircle2, AlertTriangle, Clock } from "lucide-react";
+import { Database, RefreshCw, CheckCircle2, AlertTriangle, Clock, Stethoscope } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+
+/** Shape of GET /api/admin/mls-sync/sold-probe — see server/rets-sold-probe.ts. */
+interface SoldProbe {
+  configured: boolean;
+  loggedIn: boolean;
+  statusLookups: Array<{ value: string; longValue?: string; shortValue?: string }>;
+  saleFieldsInMetadata: string[];
+  attempts: Array<{
+    query: string;
+    ok: boolean;
+    rows: number;
+    fields?: string[];
+    saleFields?: Record<string, string | null>;
+    error?: string;
+  }>;
+  verdict: string;
+  error?: string;
+}
 
 type MlsSyncRun = {
   id: number;
@@ -75,6 +100,25 @@ export default function MlsSyncPage() {
     },
   });
 
+  // Asks the feed whether it will give us sold listings, and under what status
+  // value and field names. The active sync only pulls StandardStatus=|A, so a
+  // market report has no sale prices to work from until this is answered — and
+  // the answer differs by board, so it has to be asked rather than assumed.
+  const [probeOpen, setProbeOpen] = useState(false);
+  const soldProbe = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("GET", "/api/admin/mls-sync/sold-probe");
+      return (await res.json()) as SoldProbe;
+    },
+    onSuccess: () => setProbeOpen(true),
+    onError: (err: any) =>
+      toast({
+        title: "Probe failed",
+        description: err?.message ?? "Try again in a moment.",
+        variant: "destructive",
+      }),
+  });
+
   const runs = data ?? [];
   const lastSuccess = runs.find((r) => r.status === "success");
   const lastError = runs.find((r) => r.status === "error");
@@ -84,15 +128,27 @@ export default function MlsSyncPage() {
     <AppShell
       pageTitle="MLS Sync"
       pageActions={
-        <Button
-          onClick={() => triggerMutation.mutate()}
-          disabled={triggerMutation.isPending || isRunning}
-          className="rounded-sm font-display tracking-[0.16em] text-[11px]"
-          data-testid="button-run-sync"
-        >
-          <RefreshCw className={`w-4 h-4 mr-1.5 ${triggerMutation.isPending ? "animate-spin" : ""}`} />
-          {isRunning ? "RUNNING…" : "RUN SYNC NOW"}
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => soldProbe.mutate()}
+            disabled={soldProbe.isPending}
+            className="rounded-sm font-display tracking-[0.16em] text-[11px]"
+            data-testid="button-sold-probe"
+          >
+            <Stethoscope className="w-4 h-4 mr-1.5" />
+            {soldProbe.isPending ? "CHECKING…" : "CHECK SOLD DATA"}
+          </Button>
+          <Button
+            onClick={() => triggerMutation.mutate()}
+            disabled={triggerMutation.isPending || isRunning}
+            className="rounded-sm font-display tracking-[0.16em] text-[11px]"
+            data-testid="button-run-sync"
+          >
+            <RefreshCw className={`w-4 h-4 mr-1.5 ${triggerMutation.isPending ? "animate-spin" : ""}`} />
+            {isRunning ? "RUNNING…" : "RUN SYNC NOW"}
+          </Button>
+        </div>
       }
     >
       <div className="px-8 py-7 space-y-6 max-w-7xl">
@@ -219,6 +275,82 @@ export default function MlsSyncPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* ---- Sold-data probe result ----
+          The verdict is the answer; the raw JSON is what gets pasted back so
+          the sync can be written against real field names rather than guesses. */}
+      <Dialog open={probeOpen} onOpenChange={setProbeOpen}>
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="font-serif text-2xl">Will this feed give us sold data?</DialogTitle>
+          </DialogHeader>
+          {soldProbe.data && (
+            <div className="space-y-4">
+              <p className="text-sm leading-relaxed" data-testid="sold-verdict">
+                {soldProbe.data.verdict}
+              </p>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-sm bg-secondary/40 p-3.5">
+                  <div className="eyebrow text-muted-foreground mb-1.5">Status values the feed accepts</div>
+                  <p className="text-[13px] break-words">
+                    {soldProbe.data.statusLookups.length > 0
+                      ? soldProbe.data.statusLookups
+                          .map((l) => l.longValue ? `${l.value} (${l.longValue})` : l.value)
+                          .join(", ")
+                      : "None reported — its metadata didn't answer."}
+                  </p>
+                </div>
+                <div className="rounded-sm bg-secondary/40 p-3.5">
+                  <div className="eyebrow text-muted-foreground mb-1.5">Sale fields it defines</div>
+                  <p className="text-[13px] break-words">
+                    {soldProbe.data.saleFieldsInMetadata.length > 0
+                      ? soldProbe.data.saleFieldsInMetadata.join(", ")
+                      : "None found — a market report needs ClosePrice and CloseDate."}
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                {soldProbe.data.attempts.map((a, i) => (
+                  <div key={i} className="rounded-sm bg-secondary/40 px-3.5 py-2.5" data-testid={`sold-attempt-${i}`}>
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <Badge
+                        variant="outline"
+                        className={`text-[10px] tracking-[0.1em] ${
+                          a.ok && a.rows > 0 ? "border-emerald-500 text-emerald-700 dark:text-emerald-400" : ""
+                        }`}
+                      >
+                        {a.ok ? `${a.rows} row${a.rows === 1 ? "" : "s"}` : "REJECTED"}
+                      </Badge>
+                      <code className="text-[12px]">{a.query}</code>
+                    </div>
+                    {a.saleFields && (
+                      <p className="text-[12px] text-muted-foreground mt-1.5 break-words">
+                        {Object.entries(a.saleFields)
+                          .map(([k, v]) => `${k}: ${v ?? "—"}`)
+                          .join(" · ")}
+                      </p>
+                    )}
+                    {a.error && <p className="text-[12px] text-muted-foreground mt-1.5">{a.error}</p>}
+                  </div>
+                ))}
+              </div>
+
+              <div>
+                <div className="eyebrow text-muted-foreground mb-2">Raw — paste this back</div>
+                <textarea
+                  readOnly
+                  value={JSON.stringify(soldProbe.data, null, 2)}
+                  data-testid="sold-probe-json"
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="w-full h-52 text-[11.5px] font-mono leading-relaxed rounded-sm border border-border bg-secondary/30 p-3"
+                />
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </AppShell>
   );
 }

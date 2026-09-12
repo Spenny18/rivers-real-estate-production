@@ -549,6 +549,9 @@ export async function registerRoutes(
   try {
     const { registerCrmRoutes } = await import("./crm-routes");
     registerCrmRoutes(app, { requireAuth });
+
+    const { registerMarketRoutes } = await import("./market-routes");
+    registerMarketRoutes(app, { requireAuth });
   } catch (e) {
     console.error("[crm] failed to register CRM routes:", e);
   }
@@ -2873,6 +2876,23 @@ export async function registerRoutes(
       res.json({ ok: true, message: "Sync started" });
     } catch (err: any) {
       res.status(500).json({ ok: false, message: err?.message ?? "Sync failed" });
+    }
+  });
+
+  // GET /api/admin/mls-sync/sold-probe (auth) — ask the RETS feed whether it
+  // will hand over sold listings, and under what status value and field names.
+  //
+  // The active sync queries StandardStatus=|A. A market report needs closed
+  // sales with a price and a date, and none of that is knowable from here:
+  // boards differ on the status value, on whether ClosePrice is selectable,
+  // and on whether the licence includes sold data at all. Read-only — metadata
+  // plus single-row searches.
+  app.get("/api/admin/mls-sync/sold-probe", requireAuth, async (_req, res) => {
+    try {
+      const { probeSoldListings } = await import("./rets-sold-probe");
+      res.json(await probeSoldListings());
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message ?? "Probe failed" });
     }
   });
 
