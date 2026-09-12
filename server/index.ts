@@ -156,6 +156,12 @@ app.use((req, res, next) => {
     console.error("[market-reports] failed to start cron:", err);
   }
   try {
+    const { startNewsletterCron } = await import("./newsletter");
+    startNewsletterCron();
+  } catch (err) {
+    console.error("[newsletter] failed to start cron:", err);
+  }
+  try {
     startLeadAlertCron();
   } catch (err) {
     console.error("[lead-alerts] failed to start cron:", err);

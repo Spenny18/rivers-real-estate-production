@@ -26,6 +26,7 @@ import {
   Contact,
   TrendingUp,
   FileBarChart,
+  Mail,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -48,6 +49,7 @@ const primaryNav: NavItem[] = [
   { label: "Scheduling", icon: CalendarClock, href: "/admin/scheduling" },
   { label: "Market Report", icon: TrendingUp, href: "/admin/market" },
   { label: "Community Reports", icon: FileBarChart, href: "/admin/market-reports" },
+  { label: "Newsletter", icon: Mail, href: "/admin/newsletter" },
   { label: "Marketing", icon: Megaphone, href: "/admin/marketing" },
   { label: "Analytics", icon: BarChart3, href: "/admin/analytics" },
   { label: "Saved Searches", icon: Bookmark, href: "/admin/saved-searches" },
