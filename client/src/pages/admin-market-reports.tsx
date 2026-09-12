@@ -124,6 +124,15 @@ export default function AdminMarketReportsPage() {
 
   const scopes = useQuery<Scopes>({ queryKey: ["/api/admin/market/scopes"] });
   const presets = useQuery<{ presets: Preset[] }>({ queryKey: ["/api/admin/market/reports/presets"] });
+  // The sold history behind every number here. Shown at the top so an empty
+  // community list explains itself instead of reading as a broken search.
+  const history = useQuery<{
+    summary: { rows: number; sold: number; earliestClose: string | null; latestClose: string | null; lastSyncedAt: string | null };
+    progress: { running: boolean; mode: string | null; windows: number; windowsDone: number; fetched: number; lastError: string | null };
+  }>({
+    queryKey: ["/api/admin/mls-sync/history"],
+    refetchInterval: (q) => (q.state.data?.progress.running ? 5_000 : 60_000),
+  });
   const reports = useQuery<ReportsPayload>({
     queryKey: ["/api/admin/market/reports"],
     refetchInterval: (q) => (q.state.data?.batch.running ? 3_000 : 60_000),
@@ -216,6 +225,33 @@ export default function AdminMarketReportsPage() {
       }
     >
       <div className="px-8 py-7 space-y-6 max-w-7xl">
+        {/* Where the numbers come from */}
+        {history.data && (
+          <Card className={history.data.summary.sold === 0 ? "border-amber-300 dark:border-amber-900" : ""}>
+            <CardContent className="p-4 text-sm leading-relaxed" data-testid="text-history-state">
+              {history.data.progress.running ? (
+                <>
+                  <span className="font-medium">{history.data.progress.mode === "backfill" ? "Backfilling sold history" : "Syncing sold history"}</span>
+                  {" — "}{history.data.progress.windowsDone}/{history.data.progress.windows} windows, {history.data.progress.fetched.toLocaleString()} rows so far.
+                  {" "}Communities appear in the search as their sales land.
+                </>
+              ) : history.data.summary.sold === 0 ? (
+                <>
+                  <span className="font-medium">No sold history yet.</span> Every number on these reports comes from the sold and
+                  off-market listings synced from Pillar 9, and that table is empty. Open{" "}
+                  <a href="/admin/mls-sync" className="underline">MLS Sync</a> and press <span className="font-medium">Backfill 25 months</span>.
+                  {history.data.progress.lastError && <span className="block text-destructive mt-1">Last error: {history.data.progress.lastError}</span>}
+                </>
+              ) : (
+                <span className="text-muted-foreground">
+                  Sold history: {history.data.summary.sold.toLocaleString()} sales, closings from {history.data.summary.earliestClose} to {history.data.summary.latestClose},
+                  last synced {history.data.summary.lastSyncedAt ? new Date(history.data.summary.lastSyncedAt).toLocaleString("en-CA", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—"}.
+                </span>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
         {/* Picker */}
         <Card>
           <CardContent className="p-5">
@@ -243,7 +279,22 @@ export default function AdminMarketReportsPage() {
                 />
                 {search && (
                   <div className="mt-1 max-h-48 overflow-y-auto rounded-sm border border-border bg-background text-[13px]">
-                    {options.length === 0 && <div className="px-3 py-2 text-muted-foreground">No match</div>}
+                    {options.length === 0 && (
+                      <div className="px-3 py-2 text-muted-foreground">
+                        {(scopes.data?.subdivisions.length ?? 0) + (scopes.data?.cities.length ?? 0) === 0
+                          ? "No sold history yet — see the note above."
+                          : "No community with sales matches."}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between px-3 py-1.5 text-left hover:bg-secondary border-t border-border text-muted-foreground"
+                      onClick={() => { setName(search.trim()); setCity(kind === "subdivision" ? "Calgary" : null); setSearch(""); }}
+                      data-testid="button-use-typed-scope"
+                    >
+                      <span>Use “{search.trim()}” as typed</span>
+                      <span className="text-[11px]">renders N/A where there is no data</span>
+                    </button>
                     {options.map((o) => (
                       <button
                         key={`${o.name}|${o.city ?? ""}`}

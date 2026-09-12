@@ -14,7 +14,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { storage } from "./storage";
 import { ensureUploadsDir } from "./uploads";
-import { PROPERTY_CLASSES, isValidPeriod, type ClassFilter, type Scope } from "./market-stats";
+import { PROPERTY_CLASSES, isValidPeriod, monthStats, shiftPeriod, type ClassFilter, type Scope } from "./market-stats";
+import { CITYWIDE, periodLabel } from "./market-report";
 import { buildReportData, defaultReportPeriod, renderReport } from "./market-report-render";
 
 export interface ReportRequest {
@@ -178,6 +179,48 @@ export async function generateAllPresets(period: string, onlyMissing = false): P
   return getBatchProgress();
 }
 
+// ---- The citywide figures behind the Market at a Glance graphic --------------------
+
+/**
+ * Fill the market_stats row set for a period — and its two comparison months —
+ * from the sold history. Median sold price per property class goes in the
+ * price slot; citywide sales, month-end inventory and average days on market
+ * on the "all" row. Only figures the data actually produces are written, so a
+ * month with no sold history yet is left as it was, and reported as skipped.
+ */
+export function autofillMarketFigures(period: string): { filled: number; skipped: string[] } {
+  const calgary: Scope = { kind: "city", name: "Calgary" };
+  const periods = [period, shiftPeriod(period, -1), shiftPeriod(period, -12)];
+  let filled = 0;
+  const skipped: string[] = [];
+  for (const p of periods) {
+    const entries: Array<{ propertyType: string; benchmarkPrice?: number | null; sales?: number | null; activeListings?: number | null; avgDom?: number | null }> = [];
+    let any = false;
+    for (const cls of PROPERTY_CLASSES) {
+      const m = monthStats(calgary, cls, p);
+      if (m.medianSoldPrice != null) {
+        entries.push({ propertyType: cls, benchmarkPrice: m.medianSoldPrice });
+        filled++;
+        any = true;
+      }
+    }
+    const all = monthStats(calgary, "all", p);
+    if (all.sales > 0 || all.activeListings != null || all.avgDom != null) {
+      entries.push({
+        propertyType: CITYWIDE,
+        sales: all.sales > 0 ? all.sales : undefined,
+        activeListings: all.activeListings ?? undefined,
+        avgDom: all.avgDom ?? undefined,
+      });
+      filled += (all.sales > 0 ? 1 : 0) + (all.activeListings != null ? 1 : 0) + (all.avgDom != null ? 1 : 0);
+      any = true;
+    }
+    if (entries.length) storage.upsertMarketStats(p, entries);
+    if (!any) skipped.push(periodLabel(p));
+  }
+  return { filled, skipped };
+}
+
 // ---- Monthly cron -----------------------------------------------------------------
 
 let timer: NodeJS.Timeout | null = null;
@@ -194,7 +237,15 @@ export async function ensureMonthlyReports(now = new Date()): Promise<void> {
   if (mountainDayOfMonth(now) < 2) return;
   if (storage.listReportPresets().length === 0) return;
   if (storage.mlsHistorySummary().sold === 0) return; // nothing to report from yet
-  await generateAllPresets(defaultReportPeriod(now), true);
+  const period = defaultReportPeriod(now);
+  // The citywide figures first, so the Market at a Glance graphic is ready
+  // for the newsletter without anyone typing them in.
+  try {
+    autofillMarketFigures(period);
+  } catch (e) {
+    console.error("[market-reports] autofill failed:", e);
+  }
+  await generateAllPresets(period, true);
 }
 
 export function startMarketReportCron() {

@@ -12,7 +12,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Save, TriangleAlert, CheckCircle2, ExternalLink } from "lucide-react";
+import { Loader2, Save, TriangleAlert, CheckCircle2, ExternalLink, Database } from "lucide-react";
 import { apiErrorMessage, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -52,19 +52,23 @@ const TYPE_LABEL: Record<string, string> = {
 type Draft = Record<string, string>;
 const key = (p: string, t: string, f: string) => `${p}:${t}:${f}`;
 
-function currentPeriod(): string {
+/** The last complete month in Mountain time — the month a newsletter sent on the 8th reports on. */
+function lastCompletePeriod(): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Edmonton",
     year: "numeric",
     month: "2-digit",
   }).formatToParts(new Date());
-  return `${parts.find((p) => p.type === "year")!.value}-${parts.find((p) => p.type === "month")!.value}`;
+  const y = Number(parts.find((p) => p.type === "year")!.value);
+  const m = Number(parts.find((p) => p.type === "month")!.value);
+  const d = new Date(Date.UTC(y, m - 2, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
 export default function AdminMarketPage() {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const [period, setPeriod] = useState(currentPeriod());
+  const [period, setPeriod] = useState(lastCompletePeriod());
   const [draft, setDraft] = useState<Draft>({});
 
   const { data, isLoading } = useQuery<MarketPayload>({
@@ -111,6 +115,27 @@ export default function AdminMarketPage() {
       toast({ title: "Couldn't save", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
+  const fill = useMutation({
+    mutationFn: async () => {
+      const r = await apiRequest("POST", `/api/admin/market/${period}/autofill`, {});
+      return (await r.json()) as { filled: number; skipped: string[] };
+    },
+    onSuccess: (r) => {
+      setDraft({});
+      qc.invalidateQueries({ queryKey: [`/api/admin/market/${period}`] });
+      setPreviewNonce(Date.now());
+      toast({
+        title: r.filled > 0 ? `Filled ${r.filled} figure${r.filled === 1 ? "" : "s"} from MLS data` : "Nothing to fill",
+        description:
+          r.skipped.length > 0
+            ? `No sold history yet for: ${r.skipped.join(", ")}. Check the history card on MLS Sync.`
+            : "The graphic below is regenerated.",
+      });
+    },
+    onError: (e) =>
+      toast({ title: "Couldn't fill", description: apiErrorMessage(e), variant: "destructive" }),
+  });
+
   // The preview is fetched and injected, not pointed at with an iframe src.
   //
   // An iframe's src is a plain browser navigation: it cannot carry the bearer
@@ -149,6 +174,24 @@ export default function AdminMarketPage() {
     <AppShell
       pageTitle="Market Report"
       pageActions={
+        <div className="flex gap-2">
+        <Button
+          variant="outline"
+          onClick={() => fill.mutate()}
+          disabled={fill.isPending || isLoading}
+          data-testid="button-fill-market"
+          className="rounded-sm font-display tracking-[0.16em] text-[11px]"
+        >
+          {fill.isPending ? (
+            <>
+              <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> FILLING…
+            </>
+          ) : (
+            <>
+              <Database className="w-4 h-4 mr-1.5" /> FILL FROM MLS DATA
+            </>
+          )}
+        </Button>
         <Button
           onClick={() => save.mutate()}
           disabled={save.isPending || isLoading}
@@ -165,6 +208,7 @@ export default function AdminMarketPage() {
             </>
           )}
         </Button>
+        </div>
       }
     >
       <div className="px-8 py-7 max-w-[1500px]">
@@ -226,7 +270,7 @@ export default function AdminMarketPage() {
                     </span>
                   </div>
 
-                  <div className="eyebrow text-muted-foreground mb-2">Benchmark price by type</div>
+                  <div className="eyebrow text-muted-foreground mb-2">Median sold price by type</div>
                   <div className="grid gap-2.5 sm:grid-cols-2 mb-5">
                     {(data?.propertyTypes ?? []).map((t) => (
                       <label key={t} className="block">
@@ -275,11 +319,13 @@ export default function AdminMarketPage() {
                   WHERE THESE COME FROM
                 </h3>
                 <p className="text-sm text-muted-foreground leading-relaxed">
-                  The Calgary Real Estate Board publishes these each month. Benchmark price is their
-                  Home Price Index — a modelled price for a typical home of that type, not an average
-                  of sales — which is why it's entered rather than calculated from your MLS feed. A
-                  median worked out from raw sales would be a different number, and it would disagree
-                  with the board, the Herald, and every other agent's newsletter.
+                  <strong className="text-foreground">Fill from MLS data</strong> computes every figure for
+                  Calgary from the sold history synced from Pillar 9: the median sold price for each
+                  property type, and citywide sales, active listings at month end, and average days on
+                  market. It fills all three months at once. Anything you type over top is kept — the
+                  fill only writes figures that come back from the data, and a month with no sold history
+                  yet is left as it was. The fill runs on its own from the 2nd of each month for the
+                  month just ended.
                 </p>
               </CardContent>
             </Card>

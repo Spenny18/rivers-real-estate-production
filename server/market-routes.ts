@@ -18,7 +18,7 @@ import {
 } from "./market-report";
 import { CLASS_LABEL, PROPERTY_CLASSES, listScopes, series, type ClassFilter } from "./market-stats";
 import { buildReportData, defaultReportPeriod, renderPage1, renderPage2, svgToPng } from "./market-report-render";
-import { generateAllPresets, generateReport, getBatchProgress, parseReportRequest, toStored } from "./market-report-store";
+import { autofillMarketFigures, generateAllPresets, generateReport, getBatchProgress, parseReportRequest, toStored } from "./market-report-store";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
 
@@ -153,6 +153,17 @@ export function registerMarketRoutes(app: Express, deps: { requireAuth: Middlewa
     if (storage.listReportPresets().length === 0) return res.status(400).json({ message: "The monthly set is empty." });
     generateAllPresets(period, false).catch((e) => console.error("[market-reports] batch failed:", e));
     res.json({ ok: true, message: "Generating" });
+  });
+
+  /**
+   * Fill a period's citywide figures (and its two comparison months) from the
+   * sold history. Figures the data can't produce are left untouched.
+   */
+  app.post("/api/admin/market/:period/autofill", requireAuth, (req, res) => {
+    const period = String((req.params as any).period ?? "");
+    if (!isValidPeriod(period)) return res.status(400).json({ message: "Period must be YYYY-MM" });
+    const r = autofillMarketFigures(period);
+    res.json({ ok: true, ...r, report: buildReport(period) });
   });
 
   /** The assembled report for a period, with its comparison months. */
