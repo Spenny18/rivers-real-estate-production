@@ -410,9 +410,15 @@ export function startHistorySyncCron() {
 
   // First run 90s after boot, after the active sync has had its head start.
   // An empty table gets the backfill rather than a 45-day slice, so a fresh
-  // deploy fills itself without anyone having to press anything.
+  // deploy fills itself without anyone having to press anything. So does a
+  // backfill a redeploy cut off mid-walk: the run row it left behind still
+  // says "running", which nothing else can leave behind, so that is the
+  // signal to start over rather than settle for a half-filled table.
   setTimeout(() => {
-    const mode = storage.mlsHistorySummary().rows === 0 ? "backfill" : "incremental";
+    const summary = storage.mlsHistorySummary();
+    const interrupted = storage.reconcileInterruptedHistoryRuns();
+    const mode = summary.rows === 0 || interrupted > 0 ? "backfill" : "incremental";
+    if (interrupted > 0) console.log(`[mls-history] ${interrupted} run(s) were cut off by a restart — backfilling again`);
     runHistorySync({ mode }).catch((err) => console.error("[mls-history] uncaught:", err));
   }, 90_000);
   timer = setInterval(() => {
