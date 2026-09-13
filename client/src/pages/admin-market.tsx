@@ -11,6 +11,7 @@ import { AppShell } from "@/components/app-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Save, TriangleAlert, CheckCircle2, ExternalLink, Database } from "lucide-react";
 import { apiErrorMessage, apiRequest } from "@/lib/queryClient";
@@ -34,6 +35,7 @@ interface MarketPayload {
     missing: string[];
     complete: boolean;
   };
+  commentary: { headline: string | null; body: string | null };
   figures: Figure[];
   periods: Record<"present" | "lastMonth" | "lastYear", { key: string; label: string }>;
   propertyTypes: string[];
@@ -89,6 +91,17 @@ export default function AdminMarketPage() {
     setDraft((prev) => ({ ...seeded, ...prev }));
   }, [data]);
 
+  // The month's written commentary: a headline and a paragraph or two, shown
+  // in the newsletter above the graphic. Seeded from what's stored when the
+  // month changes; typing wins after that.
+  const [note, setNote] = useState<{ period: string; headline: string; body: string } | null>(null);
+  useEffect(() => {
+    if (!data) return;
+    setNote((prev) =>
+      prev && prev.period === period ? prev : { period, headline: data.commentary?.headline ?? "", body: data.commentary?.body ?? "" },
+    );
+  }, [data, period]);
+
   const save = useMutation({
     mutationFn: async () => {
       // Send each of the three months separately — they're distinct records,
@@ -103,7 +116,12 @@ export default function AdminMarketPage() {
           activeListings: draft[key(m.key, t, "activeListings")] ?? "",
           avgDom: draft[key(m.key, t, "avgDom")] ?? "",
         }));
-        await apiRequest("PUT", `/api/admin/market/${m.key}`, { figures });
+        const body: Record<string, unknown> = { figures };
+        if (m.key === period && note && note.period === period) {
+          body.headline = note.headline.trim() || null;
+          body.commentary = note.body.trim() || null;
+        }
+        await apiRequest("PUT", `/api/admin/market/${m.key}`, body);
       }
     },
     onSuccess: () => {
@@ -312,6 +330,39 @@ export default function AdminMarketPage() {
                 </CardContent>
               </Card>
             ))}
+
+            <Card>
+              <CardContent className="p-5">
+                <div className="flex items-baseline gap-2.5 mb-1">
+                  <h2 className="font-serif text-xl">Commentary</h2>
+                  <span className="eyebrow text-muted-foreground">Shown in the newsletter above the graphic</span>
+                </div>
+                <p className="text-[12px] text-muted-foreground mb-4 leading-relaxed">
+                  A headline and a paragraph or two in your words on what the month's figures mean. Blank means the newsletter shows the graphic alone.
+                </p>
+                <label className="block mb-3">
+                  <span className="text-[12px] text-muted-foreground block mb-1">Headline</span>
+                  <Input
+                    value={note?.headline ?? ""}
+                    onChange={(e) => setNote((n) => (n ? { ...n, headline: e.target.value } : n))}
+                    placeholder="Balanced conditions across the city, apartments the exception"
+                    data-testid="input-market-headline"
+                    className="rounded-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-[12px] text-muted-foreground block mb-1">Commentary</span>
+                  <Textarea
+                    rows={6}
+                    value={note?.body ?? ""}
+                    onChange={(e) => setNote((n) => (n ? { ...n, body: e.target.value } : n))}
+                    placeholder="Sales eased against last year while inventory kept building…"
+                    data-testid="input-market-commentary"
+                    className="rounded-sm"
+                  />
+                </label>
+              </CardContent>
+            </Card>
 
             <Card>
               <CardContent className="p-5">

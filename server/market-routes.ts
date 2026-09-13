@@ -178,6 +178,7 @@ export function registerMarketRoutes(app: Express, deps: { requireAuth: Middlewa
     const periods = [period, previousMonth(period), sameMonthLastYear(period)];
     res.json({
       report,
+      commentary: storage.getMarketCommentaryFull(period) ?? { headline: null, body: null },
       figures: storage.listMarketStats(periods),
       periods: {
         present: { key: period, label: periodLabel(period) },
