@@ -280,8 +280,10 @@ export function annualMedians(scope: Scope, cls: ClassFilter, years: number, now
 // Where the sales actually happen. A month in one community is a handful of
 // closings, so the breakdown covers twelve months and marks the month's own
 // sales inside each band. The bands adapt to the place: Beltline apartments
-// get $50K steps from $200K, Springbank Hill detached gets $250K steps from
-// $1M, both with round edges and never more than eight bands.
+// get $100K steps from $200K, Springbank Hill detached gets $250K steps from
+// $750K, both with round edges. Above the grid, a scope that sells past $2M
+// gets its tail split at $2M, $2.5M and $3M, so the top of the market reads
+// as more than one bar. Eleven bands at most.
 
 export interface PriceBand {
   label: string;
@@ -310,7 +312,10 @@ export interface PriceBands {
 }
 
 const BAND_STEPS = [50_000, 100_000, 150_000, 200_000, 250_000, 500_000, 1_000_000, 2_000_000, 5_000_000];
+/** The adaptive grid: up to six closed bands plus an open one at each end. */
 const MAX_BANDS = 8;
+/** Fixed edges the tail is split at when a scope sells past them; up to three more bands. */
+const LUXURY_EDGES = [2_000_000, 2_500_000, 3_000_000];
 
 export function bandMoney(n: number): string {
   if (n >= 1_000_000) {
@@ -356,12 +361,28 @@ export function priceBands(scope: Scope, cls: ClassFilter, period: string, month
   if (high <= low) high = low + step;
   // The open bands only exist when something falls in them.
   const hasBelow = prices[0] < low;
-  const hasAbove = prices[prices.length - 1] >= high;
+  const topSale = prices[prices.length - 1];
+  const hasAbove = topSale >= high;
 
   const edges: Array<{ from: number | null; to: number | null; label: string }> = [];
   if (hasBelow) edges.push({ from: null, to: low, label: `Under ${bandMoney(low)}` });
   for (let e = low; e < high; e += step) edges.push({ from: e, to: e + step, label: `${bandMoney(e)} – ${bandMoney(e + step)}` });
-  if (hasAbove) edges.push({ from: high, to: null, label: `${bandMoney(high)}+` });
+  // The top of the market is where the reader's own home usually sits, so it
+  // is never one lump: when a scope has sales past $2M the tail is split at
+  // fixed luxury edges, each shown only when something sold in it, and the
+  // last one left open.
+  const luxuryEdges = LUXURY_EDGES.filter((e) => e > high);
+  if (topSale >= LUXURY_EDGES[0] && luxuryEdges.length > 0) {
+    let prev = high;
+    for (const e of luxuryEdges) {
+      if (topSale < e) break;
+      edges.push({ from: prev, to: e, label: `${bandMoney(prev)} – ${bandMoney(e)}` });
+      prev = e;
+    }
+    edges.push({ from: prev, to: null, label: `${bandMoney(prev)}+` });
+  } else if (hasAbove) {
+    edges.push({ from: high, to: null, label: `${bandMoney(high)}+` });
+  }
 
   const bands: PriceBand[] = edges.map((e) => {
     const inBand = rows.filter((r) => (e.from == null || r.price >= e.from) && (e.to == null || r.price < e.to));
