@@ -67,6 +67,10 @@ export interface StoredReport {
 }
 
 export function toStored(row: Record<string, any>): StoredReport {
+  // /uploads is served with a day of browser caching and a regenerated
+  // report keeps its file names, so the version rides in the query string:
+  // a fresh render is a fresh URL, and a link already sent still works.
+  const v = `?v=${String(row.generatedAt ?? "").replace(/[^0-9]/g, "")}`;
   return {
     id: row.id,
     period: row.period,
@@ -76,10 +80,10 @@ export function toStored(row: Record<string, any>): StoredReport {
     cls: row.cls,
     title: row.title,
     subtitle: row.subtitle,
-    pdfUrl: `/uploads/${row.pdfPath}`,
-    png1Url: `/uploads/${row.png1Path}`,
-    png2Url: `/uploads/${row.png2Path}`,
-    png3Url: row.png3Path ? `/uploads/${row.png3Path}` : null,
+    pdfUrl: `/uploads/${row.pdfPath}${v}`,
+    png1Url: `/uploads/${row.png1Path}${v}`,
+    png2Url: `/uploads/${row.png2Path}${v}`,
+    png3Url: row.png3Path ? `/uploads/${row.png3Path}${v}` : null,
     generatedAt: row.generatedAt,
   };
 }
