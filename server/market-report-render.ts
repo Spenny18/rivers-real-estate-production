@@ -608,7 +608,7 @@ export function renderPage1(d: ReportData): string {
   // Section 2: ten years, the community
   y = SECTION_Y[1];
   parts.push(sectionLabel(y, "Ten year history", `Annual median · ${d.title} ${d.subtitle}`));
-  parts.push(scopeGlyph(y, d.title, d.subtitle, d.scope.kind === "city" ? "city" : "community"));
+  parts.push(scopeGlyph(y, d.title, d.subtitle, d.scope.kind === "city" ? "city" : d.scope.kind === "district" ? "district" : "community"));
   parts.push(annualColumns({ x: CHART_X, y: y + 34, w: CHART_W, h: 180 }, d.communityYears));
 
   // Section 3: ten years, the city
@@ -637,15 +637,18 @@ export function renderPage1(d: ReportData): string {
 }
 
 /** The property-type block beside a ten-year chart: an icon and two lines. */
-function scopeGlyph(y: number, place: string, cls: string, kind: "community" | "city"): string {
+function scopeGlyph(y: number, place: string, cls: string, kind: "community" | "city" | "district"): string {
   const cx = M + LEFT_W / 2;
   const gy = y + 60;
   const icon =
     kind === "city"
       ? // A skyline: three blocks and a spire
         `<g fill="${INK}"><rect x="${cx - 44}" y="${gy + 26}" width="18" height="34"/><rect x="${cx - 20}" y="${gy + 8}" width="22" height="52"/><rect x="${cx + 8}" y="${gy + 34}" width="16" height="26"/><rect x="${cx + 30}" y="${gy + 18}" width="12" height="42"/><rect x="${cx - 12}" y="${gy - 6}" width="6" height="14"/></g><rect x="${cx - 52}" y="${gy + 60}" width="104" height="4" fill="${GOLD}"/>`
-      : // A house: roof, walls, door
-        `<g fill="${INK}"><path d="M${cx} ${gy} l46 32 h-10 v30 h-72 v-30 h-10 Z"/></g><rect x="${cx - 8}" y="${gy + 42}" width="16" height="20" fill="${SURFACE}"/><rect x="${cx - 52}" y="${gy + 62}" width="104" height="4" fill="${GOLD}"/>`;
+      : kind === "district"
+        ? // A row of three houses: a district is many communities
+          `<g fill="${INK}"><path d="M${cx - 36} ${gy + 14} l24 18 h-5 v30 h-38 v-30 h-5 Z"/><path d="M${cx} ${gy + 2} l28 22 h-6 v38 h-44 v-38 h-6 Z"/><path d="M${cx + 36} ${gy + 14} l24 18 h-5 v30 h-38 v-30 h-5 Z"/></g><rect x="${cx - 5}" y="${gy + 46}" width="10" height="16" fill="${SURFACE}"/><rect x="${cx - 52}" y="${gy + 62}" width="104" height="4" fill="${GOLD}"/>`
+        : // A house: roof, walls, door
+          `<g fill="${INK}"><path d="M${cx} ${gy} l46 32 h-10 v30 h-72 v-30 h-10 Z"/></g><rect x="${cx - 8}" y="${gy + 42}" width="16" height="20" fill="${SURFACE}"/><rect x="${cx - 52}" y="${gy + 62}" width="104" height="4" fill="${GOLD}"/>`;
   return [
     icon,
     text(cx, gy + 96, `Property type: ${cls}`, { size: 8.5, weight: 700, tracking: 1.2, fill: MUTED, anchor: "middle", upper: true }),

@@ -18,8 +18,11 @@ import { PROPERTY_CLASSES, isValidPeriod, monthStats, shiftPeriod, type ClassFil
 import { CITYWIDE, periodLabel } from "./market-report";
 import { buildReportData, defaultReportPeriod, renderReport } from "./market-report-render";
 
+export type ScopeKind = Scope["kind"];
+export const SCOPE_KINDS: readonly ScopeKind[] = ["city", "subdivision", "district"];
+
 export interface ReportRequest {
-  kind: "city" | "subdivision";
+  kind: ScopeKind;
   name: string;
   city?: string | null;
   cls: ClassFilter;
@@ -32,11 +35,11 @@ export function parseReportRequest(q: Record<string, unknown>): ReportRequest | 
   const cls = String(q.cls ?? "all");
   const city = q.city ? String(q.city).trim() : null;
   const period = q.period ? String(q.period) : undefined;
-  if (kind !== "city" && kind !== "subdivision") return { error: "kind must be city or subdivision" };
+  if (!(SCOPE_KINDS as readonly string[]).includes(kind)) return { error: "kind must be city, subdivision or district" };
   if (!name) return { error: "name is required" };
   if (cls !== "all" && !(PROPERTY_CLASSES as readonly string[]).includes(cls)) return { error: "unknown property class" };
   if (period && !isValidPeriod(period)) return { error: "period must be YYYY-MM" };
-  return { kind, name, city, cls: cls as ClassFilter, period };
+  return { kind: kind as ScopeKind, name, city, cls: cls as ClassFilter, period };
 }
 
 function slug(s: string): string {
@@ -170,7 +173,7 @@ export async function generateAllPresets(period: string, onlyMissing = false): P
     for (const p of todo) {
       batch.current = `${p.name} · ${p.cls}`;
       try {
-        await generateReport({ kind: p.kind as "city" | "subdivision", name: p.name, city: p.city, cls: p.cls as ClassFilter, period });
+        await generateReport({ kind: p.kind as ScopeKind, name: p.name, city: p.city, cls: p.cls as ClassFilter, period });
       } catch (e: any) {
         batch.errors.push(`${p.name} ${p.cls}: ${String(e?.message ?? e).slice(0, 200)}`);
       }

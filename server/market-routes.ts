@@ -18,7 +18,7 @@ import {
 } from "./market-report";
 import { CLASS_LABEL, PROPERTY_CLASSES, listScopes, series, type ClassFilter } from "./market-stats";
 import { buildReportData, defaultReportPeriod, renderPage1, renderPage2, renderPage3, svgToPng } from "./market-report-render";
-import { autofillMarketFigures, generateAllPresets, generateReport, getBatchProgress, parseReportRequest, toStored } from "./market-report-store";
+import { SCOPE_KINDS, autofillMarketFigures, generateAllPresets, generateReport, getBatchProgress, parseReportRequest, toStored, type ScopeKind } from "./market-report-store";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
 
@@ -68,14 +68,14 @@ export function registerMarketRoutes(app: Express, deps: { requireAuth: Middlewa
     const city = req.query.city ? String(req.query.city).trim() : undefined;
     const end = req.query.end ? String(req.query.end) : undefined;
 
-    if (kind !== "city" && kind !== "subdivision") return res.status(400).json({ message: "kind must be city or subdivision" });
+    if (!(SCOPE_KINDS as readonly string[]).includes(kind)) return res.status(400).json({ message: "kind must be city, subdivision or district" });
     if (!name) return res.status(400).json({ message: "name is required" });
     if (cls !== "all" && !(PROPERTY_CLASSES as readonly string[]).includes(cls)) {
       return res.status(400).json({ message: `cls must be one of ${[...PROPERTY_CLASSES, "all"].join(", ")}` });
     }
     if (end && !isValidPeriod(end)) return res.status(400).json({ message: "end must be YYYY-MM" });
 
-    const scope = { kind, name, city } as const;
+    const scope = { kind: kind as ScopeKind, name, city };
     res.json({
       scope,
       cls,
@@ -125,7 +125,7 @@ export function registerMarketRoutes(app: Express, deps: { requireAuth: Middlewa
     if ("error" in parsed) return res.status(400).json({ message: parsed.error });
     const page = Number(req.query.page) === 3 ? 3 : Number(req.query.page) === 2 ? 2 : 1;
     try {
-      const scope = { kind: parsed.kind, name: parsed.name, city: parsed.city ?? undefined } as const;
+      const scope = { kind: parsed.kind, name: parsed.name, city: parsed.city ?? undefined };
       const data = buildReportData(scope, parsed.cls, parsed.period ?? defaultReportPeriod());
       const svg = page === 1 ? renderPage1(data) : page === 2 ? renderPage2(data) : renderPage3(data);
       res.type("png").send(svgToPng(svg, 1.5));
