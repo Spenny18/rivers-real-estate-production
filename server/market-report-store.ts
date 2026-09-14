@@ -10,13 +10,13 @@
 // complete and the history sync has had a day to catch late closings, the
 // cron generates every preset for that month that doesn't exist yet.
 
-import fs from "node:fs";
 import path from "node:path";
 import { storage } from "./storage";
 import { ensureUploadsDir } from "./uploads";
 import { PROPERTY_CLASSES, isValidPeriod, monthStats, shiftPeriod, type ClassFilter, type Scope } from "./market-stats";
 import { CITYWIDE, periodLabel } from "./market-report";
-import { buildReportData, defaultReportPeriod, renderReport } from "./market-report-render";
+import { buildReportData, defaultReportPeriod } from "./market-report-render";
+import { renderReportToFiles } from "./render-host";
 
 export type ScopeKind = Scope["kind"];
 export const SCOPE_KINDS: readonly ScopeKind[] = ["city", "subdivision", "district"];
@@ -89,7 +89,6 @@ export async function generateReport(req: ReportRequest): Promise<StoredReport> 
   const period = req.period ?? defaultReportPeriod();
   const scope: Scope = { kind: req.kind, name: req.name, city: req.city ?? undefined };
   const data = buildReportData(scope, req.cls, period);
-  const rendered = await renderReport(data);
 
   const dir = ensureUploadsDir(path.join("reports", period));
   const base = `${slug(req.name)}-${req.cls}`;
@@ -97,10 +96,12 @@ export async function generateReport(req: ReportRequest): Promise<StoredReport> 
   const png1Path = path.join("reports", period, `${base}-1.png`);
   const png2Path = path.join("reports", period, `${base}-2.png`);
   const png3Path = path.join("reports", period, `${base}-3.png`);
-  fs.writeFileSync(path.join(dir, `${base}.pdf`), rendered.pdf);
-  fs.writeFileSync(path.join(dir, `${base}-1.png`), rendered.png[0]);
-  fs.writeFileSync(path.join(dir, `${base}-2.png`), rendered.png[1]);
-  fs.writeFileSync(path.join(dir, `${base}-3.png`), rendered.png[2]);
+  // Rendered in a worker process, written straight to the uploads root; the
+  // row is only recorded once every file is on disk.
+  await renderReportToFiles(data, {
+    pdf: path.join(dir, `${base}.pdf`),
+    png: [path.join(dir, `${base}-1.png`), path.join(dir, `${base}-2.png`), path.join(dir, `${base}-3.png`)],
+  });
 
   const id = storage.upsertMarketReport({
     period,

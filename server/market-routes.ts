@@ -17,7 +17,8 @@ import {
   sameMonthLastYear,
 } from "./market-report";
 import { CLASS_LABEL, PROPERTY_CLASSES, listScopes, series, type ClassFilter } from "./market-stats";
-import { buildReportData, defaultReportPeriod, renderPage1, renderPage2, renderPage3, svgToPng } from "./market-report-render";
+import { buildReportData, defaultReportPeriod } from "./market-report-render";
+import { renderPageToPng } from "./render-host";
 import { SCOPE_KINDS, autofillMarketFigures, generateAllPresets, generateReport, getBatchProgress, parseReportRequest, toStored, type ScopeKind } from "./market-report-store";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
@@ -127,8 +128,7 @@ export function registerMarketRoutes(app: Express, deps: { requireAuth: Middlewa
     try {
       const scope = { kind: parsed.kind, name: parsed.name, city: parsed.city ?? undefined };
       const data = buildReportData(scope, parsed.cls, parsed.period ?? defaultReportPeriod());
-      const svg = page === 1 ? renderPage1(data) : page === 2 ? renderPage2(data) : renderPage3(data);
-      res.type("png").send(svgToPng(svg, 1.5));
+      res.type("png").send(await renderPageToPng(data, page, 1.5));
     } catch (e: any) {
       res.status(500).json({ message: e?.message ?? "Render failed" });
     }
