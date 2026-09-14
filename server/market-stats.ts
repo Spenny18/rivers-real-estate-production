@@ -297,6 +297,8 @@ export interface PriceBand {
   /** Sales in the report month alone. */
   monthSales: number;
   medianPrice: number | null;
+  /** Median of close price ÷ living area, over sales that report an area. */
+  medianPerSqft: number | null;
   avgDom: number | null;
   soldToListRatio: number | null;
 }
@@ -308,7 +310,17 @@ export interface PriceBands {
   total: number;
   monthTotal: number;
   medianPrice: number | null;
+  medianPerSqft: number | null;
   bands: PriceBand[];
+}
+
+/** Living areas below this are data-entry noise (a lot size in acres, a zero). */
+const MIN_SANE_SQFT = 200;
+
+function perSqft(rows: Array<{ price: number; sqft: number | null }>): number | null {
+  const v = rows.filter((r) => r.sqft != null && r.sqft >= MIN_SANE_SQFT).map((r) => r.price / r.sqft!).sort((a, b) => a - b);
+  const m = median(v);
+  return m == null ? null : Math.round(m);
 }
 
 const BAND_STEPS = [50_000, 100_000, 150_000, 200_000, 250_000, 500_000, 1_000_000, 2_000_000, 5_000_000];
@@ -332,15 +344,15 @@ export function priceBands(scope: Scope, cls: ClassFilter, period: string, month
   const where = `${scopeWhere(scope)} AND ${classWhere(cls)}`;
   const rows = sqlite
     .prepare(
-      `SELECT close_price AS price, list_price AS list, days_on_market AS dom, close_date AS closed
+      `SELECT close_price AS price, list_price AS list, days_on_market AS dom, close_date AS closed, sqft
          FROM mls_history
         WHERE status = 'S' AND close_date BETWEEN @start AND @end AND close_price >= ${MIN_SANE_PRICE}
           AND ${where}
         ORDER BY price`,
     )
-    .all(params(scope, cls, { start, end })) as Array<{ price: number; list: number | null; dom: number | null; closed: string }>;
+    .all(params(scope, cls, { start, end })) as Array<{ price: number; list: number | null; dom: number | null; closed: string; sqft: number | null }>;
 
-  const empty: PriceBands = { months, fromPeriod, toPeriod: period, total: rows.length, monthTotal: 0, medianPrice: null, bands: [] };
+  const empty: PriceBands = { months, fromPeriod, toPeriod: period, total: rows.length, monthTotal: 0, medianPrice: null, medianPerSqft: null, bands: [] };
   if (rows.length === 0) return empty;
 
   const prices = rows.map((r) => r.price);
@@ -400,6 +412,7 @@ export function priceBands(scope: Scope, cls: ClassFilter, period: string, month
       share: Math.round((inBand.length / rows.length) * 1000) / 10,
       monthSales: inMonth.length,
       medianPrice: median(inBand.map((r) => r.price)),
+      medianPerSqft: perSqft(inBand),
       avgDom: avgDom == null ? null : Math.round(avgDom),
       soldToListRatio: avgRatio == null ? null : Math.round(avgRatio * 10000) / 10000,
     };
@@ -412,6 +425,7 @@ export function priceBands(scope: Scope, cls: ClassFilter, period: string, month
     total: rows.length,
     monthTotal: rows.filter((r) => r.closed >= mStart && r.closed <= end).length,
     medianPrice: median(prices),
+    medianPerSqft: perSqft(rows),
     bands,
   };
 }
