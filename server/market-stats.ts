@@ -42,7 +42,8 @@ export const CLASS_LABEL: Record<ClassFilter, string> = {
 };
 
 export interface Scope {
-  kind: "city" | "subdivision";
+  /** A whole city, one community, or a board district ("CAL Zone W"). */
+  kind: "city" | "subdivision" | "district";
   name: string;
   /** Optional city to disambiguate a subdivision name that exists in two towns. */
   city?: string;
@@ -95,7 +96,8 @@ function classWhere(cls: ClassFilter): string {
 
 function scopeWhere(scope: Scope): string {
   if (scope.kind === "city") return `city = @name`;
-  return scope.city ? `subdivision = @name AND city = @scopeCity` : `subdivision = @name`;
+  const col = scope.kind === "district" ? "district" : "subdivision";
+  return scope.city ? `${col} = @name AND city = @scopeCity` : `${col} = @name`;
 }
 
 function params(scope: Scope, cls: ClassFilter, extra: Record<string, unknown> = {}) {
@@ -401,7 +403,7 @@ export interface ScopeOption {
   sales: number; // last 13 months
 }
 
-export function listScopes(): { cities: ScopeOption[]; subdivisions: ScopeOption[]; floor: string | null } {
+export function listScopes(): { cities: ScopeOption[]; subdivisions: ScopeOption[]; districts: ScopeOption[]; floor: string | null } {
   const since = periodBounds(shiftPeriod(currentPeriod(), -12)).start;
   const cities = sqlite
     .prepare(
@@ -417,5 +419,12 @@ export function listScopes(): { cities: ScopeOption[]; subdivisions: ScopeOption
         GROUP BY subdivision, city ORDER BY sales DESC`,
     )
     .all({ since }) as ScopeOption[];
-  return { cities, subdivisions, floor: historyFloor() };
+  const districts = sqlite
+    .prepare(
+      `SELECT district AS name, city, COUNT(*) AS sales FROM mls_history
+        WHERE status = 'S' AND close_date >= @since AND district IS NOT NULL AND district <> ''
+        GROUP BY district, city ORDER BY sales DESC`,
+    )
+    .all({ since }) as ScopeOption[];
+  return { cities, subdivisions, districts, floor: historyFloor() };
 }

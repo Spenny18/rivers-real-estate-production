@@ -22,7 +22,9 @@ import { Eye, FileDown, Loader2, Plus, Trash2, Layers, Image as ImageIcon } from
 import { apiErrorMessage, apiRequest, apiUrl } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
-type Kind = "city" | "subdivision";
+type Kind = "city" | "subdivision" | "district";
+const KIND_LABEL: Record<Kind, string> = { city: "City", subdivision: "Community", district: "District" };
+const KIND_PLURAL: Record<Kind, string> = { city: "cities", subdivision: "communities", district: "districts" };
 type Cls = "detached" | "semi_detached" | "row" | "apartment" | "all";
 
 const CLASS_LABEL: Record<Cls, string> = {
@@ -41,6 +43,7 @@ interface ScopeOption {
 interface Scopes {
   cities: ScopeOption[];
   subdivisions: ScopeOption[];
+  districts: ScopeOption[];
   floor: string | null;
 }
 interface Preset {
@@ -158,7 +161,7 @@ export default function AdminMarketReportsPage() {
   }, [reports.data?.defaultPeriod]);
 
   const options = useMemo(() => {
-    const list = kind === "city" ? scopes.data?.cities ?? [] : scopes.data?.subdivisions ?? [];
+    const list = kind === "city" ? scopes.data?.cities ?? [] : kind === "district" ? scopes.data?.districts ?? [] : scopes.data?.subdivisions ?? [];
     const q = search.trim().toLowerCase();
     return (q ? list.filter((o) => o.name.toLowerCase().includes(q)) : list).slice(0, 40);
   }, [scopes.data, kind, search]);
@@ -264,18 +267,19 @@ export default function AdminMarketReportsPage() {
                   <SelectTrigger className="h-10"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="subdivision">Community</SelectItem>
+                    <SelectItem value="district">District (board zone)</SelectItem>
                     <SelectItem value="city">City / town</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div>
                 <label className="eyebrow text-muted-foreground block mb-1.5">
-                  {kind === "city" ? "City" : "Community"} {name ? `· ${name}${city ? ` (${city})` : ""}` : ""}
+                  {KIND_LABEL[kind]} {name ? `· ${name}${city ? ` (${city})` : ""}` : ""}
                 </label>
                 <Input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder={scopes.isLoading ? "Loading…" : `Search ${kind === "city" ? "cities" : "communities"} with sales…`}
+                  placeholder={scopes.isLoading ? "Loading…" : `Search ${KIND_PLURAL[kind]} with sales…`}
                   className="h-10"
                   data-testid="input-scope-search"
                 />
@@ -285,13 +289,13 @@ export default function AdminMarketReportsPage() {
                       <div className="px-3 py-2 text-muted-foreground">
                         {(scopes.data?.subdivisions.length ?? 0) + (scopes.data?.cities.length ?? 0) === 0
                           ? "No sold history yet — see the note above."
-                          : "No community with sales matches."}
+                          : `No ${KIND_LABEL[kind].toLowerCase()} with sales matches.`}
                       </div>
                     )}
                     <button
                       type="button"
                       className="flex w-full items-center justify-between px-3 py-1.5 text-left hover:bg-secondary border-t border-border text-muted-foreground"
-                      onClick={() => { setName(search.trim()); setCity(kind === "subdivision" ? "Calgary" : null); setSearch(""); }}
+                      onClick={() => { setName(search.trim()); setCity(kind === "city" ? null : "Calgary"); setSearch(""); }}
                       data-testid="button-use-typed-scope"
                     >
                       <span>Use “{search.trim()}” as typed</span>
@@ -304,7 +308,7 @@ export default function AdminMarketReportsPage() {
                         className="flex w-full items-center justify-between px-3 py-1.5 text-left hover:bg-secondary"
                         onClick={() => { setName(o.name); setCity(o.city ?? null); setSearch(""); }}
                       >
-                        <span>{o.name}{o.city && kind === "subdivision" ? <span className="text-muted-foreground"> · {o.city}</span> : null}</span>
+                        <span>{o.name}{o.city && kind !== "city" ? <span className="text-muted-foreground"> · {o.city}</span> : null}</span>
                         <span className="text-muted-foreground tabular-nums">{o.sales} sales</span>
                       </button>
                     ))}
@@ -407,7 +411,8 @@ export default function AdminMarketReportsPage() {
                     <li key={p.id} className="flex items-center justify-between px-5 py-2.5 text-sm">
                       <span>
                         {p.name}
-                        {p.kind === "subdivision" && p.city ? <span className="text-muted-foreground"> · {p.city}</span> : null}
+                        {p.kind !== "city" && p.city ? <span className="text-muted-foreground"> · {p.city}</span> : null}
+                        {p.kind === "district" ? <span className="text-muted-foreground"> · district</span> : null}
                         <Badge variant="outline" className="ml-2 text-[10px] tracking-[0.1em]">{CLASS_LABEL[p.cls]}</Badge>
                       </span>
                       <Button variant="ghost" size="icon" onClick={() => removePreset.mutate(p.id)} aria-label="Remove" data-testid={`button-remove-preset-${p.id}`}>
