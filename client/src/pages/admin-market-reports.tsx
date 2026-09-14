@@ -18,7 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Eye, FileDown, Loader2, Plus, Trash2, Layers, Image as ImageIcon } from "lucide-react";
+import { Eye, FileDown, Loader2, Plus, Trash2, Layers, Image as ImageIcon, RefreshCw } from "lucide-react";
 import { apiErrorMessage, apiRequest, apiUrl } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -208,6 +208,25 @@ export default function AdminMarketReportsPage() {
 
   const batch = reports.data?.batch;
   const forPeriod = (reports.data?.reports ?? []).filter((r) => r.period === period);
+
+  // Re-render reports already on file — after the layout or the data changes —
+  // one at a time in the order listed, so the list updates as each lands.
+  const [regenerating, setRegenerating] = useState<number | null>(null);
+  const regenerate = useMutation({
+    mutationFn: async (rows: StoredReport[]) => {
+      let done = 0;
+      for (const r of rows) {
+        setRegenerating(r.id);
+        await apiRequest("POST", "/api/admin/market/reports/generate", { kind: r.kind, name: r.name, city: r.city, cls: r.cls, period: r.period });
+        done++;
+        qc.invalidateQueries({ queryKey: ["/api/admin/market/reports"] });
+      }
+      return done;
+    },
+    onSuccess: (done) => toast({ title: done === 1 ? "Report regenerated" : `${done} reports regenerated`, description: "The PDF and pages now reflect the current data and layout." }),
+    onError: (e) => toast({ title: "Couldn't regenerate", description: apiErrorMessage(e), variant: "destructive" }),
+    onSettled: () => setRegenerating(null),
+  });
   const presetList = presets.data?.presets ?? [];
   const isPreset = presetList.some((p) => p.kind === kind && p.name === name && (p.city ?? null) === (city ?? null) && p.cls === cls);
 
@@ -437,7 +456,22 @@ export default function AdminMarketReportsPage() {
                 <h2 className="font-serif text-lg" style={{ letterSpacing: "-0.01em" }}>
                   Generated · {period ? periodLabel(period) : ""}
                 </h2>
-                <span className="eyebrow text-muted-foreground">{forPeriod.length}</span>
+                <span className="flex items-center gap-3">
+                  {forPeriod.length > 1 && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-[11px]"
+                      disabled={regenerate.isPending || !!batch?.running}
+                      onClick={() => regenerate.mutate(forPeriod)}
+                      data-testid="button-regenerate-all"
+                    >
+                      {regenerate.isPending && regenerating != null ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-1" />}
+                      Regenerate all
+                    </Button>
+                  )}
+                  <span className="eyebrow text-muted-foreground">{forPeriod.length}</span>
+                </span>
               </div>
               {forPeriod.length === 0 ? (
                 <div className="px-5 py-5 text-sm text-muted-foreground">No reports for this month yet.</div>
@@ -449,6 +483,16 @@ export default function AdminMarketReportsPage() {
                         {r.title} <span className="text-muted-foreground">· {r.subtitle}</span>
                       </span>
                       <span className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => regenerate.mutate([r])}
+                          disabled={regenerate.isPending || !!batch?.running}
+                          title="Render this report again with the current data and layout"
+                          className="inline-flex items-center gap-1 rounded-sm border border-border px-2 py-1 text-[11px] hover:bg-secondary disabled:opacity-50"
+                          data-testid={`button-regenerate-${r.id}`}
+                        >
+                          {regenerating === r.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Regenerate
+                        </button>
                         <a href={apiUrl(r.pdfUrl)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-sm border border-border px-2 py-1 text-[11px] hover:bg-secondary" data-testid={`link-pdf-${r.id}`}>
                           <FileDown className="w-3.5 h-3.5" /> PDF
                         </a>
