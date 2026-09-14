@@ -62,6 +62,7 @@ interface StoredReport {
   pdfUrl: string;
   png1Url: string;
   png2Url: string;
+  png3Url: string | null;
   generatedAt: string;
 }
 interface ReportsPayload {
@@ -165,6 +166,7 @@ export default function AdminMarketReportsPage() {
   const query = name && period ? `kind=${kind}&name=${encodeURIComponent(name)}${city ? `&city=${encodeURIComponent(city)}` : ""}&cls=${cls}&period=${period}` : null;
   const page1 = useAuthedImage(previewKey ? `/api/admin/market/reports/preview?${previewKey}&page=1` : null);
   const page2 = useAuthedImage(previewKey ? `/api/admin/market/reports/preview?${previewKey}&page=2` : null);
+  const page3 = useAuthedImage(previewKey ? `/api/admin/market/reports/preview?${previewKey}&page=3` : null);
 
   const generate = useMutation({
     mutationFn: async () => {
@@ -372,8 +374,8 @@ export default function AdminMarketReportsPage() {
 
         {/* Preview */}
         {previewKey && (
-          <div className="grid gap-4 lg:grid-cols-2">
-            {[page1, page2].map((p, i) => (
+          <div className="grid gap-4 lg:grid-cols-3">
+            {[page1, page2, page3].map((p, i) => (
               <Card key={i}>
                 <CardContent className="p-3">
                   <div className="eyebrow text-muted-foreground mb-2">Page {i + 1}</div>
@@ -451,6 +453,11 @@ export default function AdminMarketReportsPage() {
                         <a href={apiUrl(r.png2Url)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-sm border border-border px-2 py-1 text-[11px] hover:bg-secondary">
                           <ImageIcon className="w-3.5 h-3.5" /> 2
                         </a>
+                        {r.png3Url && (
+                          <a href={apiUrl(r.png3Url)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-sm border border-border px-2 py-1 text-[11px] hover:bg-secondary">
+                            <ImageIcon className="w-3.5 h-3.5" /> 3
+                          </a>
+                        )}
                       </span>
                     </li>
                   ))}

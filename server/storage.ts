@@ -1155,6 +1155,17 @@ try {
   console.error("[migration] failed to add neighbourhoods columns:", err);
 }
 
+// Community reports grew a third page (sales by price band).
+try {
+  const cols = sqlite.prepare("PRAGMA table_info(market_reports)").all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === "png3_path")) {
+    sqlite.exec(`ALTER TABLE market_reports ADD COLUMN png3_path TEXT`);
+    console.log("[migration] added png3_path to market_reports");
+  }
+} catch (err) {
+  console.error("[migration] failed to add png3_path to market_reports:", err);
+}
+
 export const db = drizzle(sqlite);
 
 // Convert raw row → public-shape (parse JSON arrays)
@@ -2185,15 +2196,16 @@ export class DatabaseStorage implements IStorage {
     pdfPath: string;
     png1Path: string;
     png2Path: string;
+    png3Path: string | null;
     statsJson: string;
   }): number {
     sqlite
       .prepare(
-        `INSERT INTO market_reports (period, kind, name, city, cls, title, subtitle, pdf_path, png1_path, png2_path, stats_json, generated_at)
-         VALUES (@period, @kind, @name, @city, @cls, @title, @subtitle, @pdfPath, @png1Path, @png2Path, @statsJson, @generatedAt)
+        `INSERT INTO market_reports (period, kind, name, city, cls, title, subtitle, pdf_path, png1_path, png2_path, png3_path, stats_json, generated_at)
+         VALUES (@period, @kind, @name, @city, @cls, @title, @subtitle, @pdfPath, @png1Path, @png2Path, @png3Path, @statsJson, @generatedAt)
          ON CONFLICT(period, kind, name, city, cls) DO UPDATE SET
            title = excluded.title, subtitle = excluded.subtitle,
-           pdf_path = excluded.pdf_path, png1_path = excluded.png1_path, png2_path = excluded.png2_path,
+           pdf_path = excluded.pdf_path, png1_path = excluded.png1_path, png2_path = excluded.png2_path, png3_path = excluded.png3_path,
            stats_json = excluded.stats_json, generated_at = excluded.generated_at`,
       )
       .run({ ...r, generatedAt: new Date().toISOString() });
@@ -2205,7 +2217,7 @@ export class DatabaseStorage implements IStorage {
 
   listMarketReports(period?: string): Array<Record<string, any>> {
     const sql = `SELECT id, period, kind, name, city, cls, title, subtitle, pdf_path AS pdfPath, png1_path AS png1Path,
-                        png2_path AS png2Path, generated_at AS generatedAt
+                        png2_path AS png2Path, png3_path AS png3Path, generated_at AS generatedAt
                    FROM market_reports ${period ? "WHERE period = ?" : ""}
                   ORDER BY period DESC, name, cls`;
     return (period ? sqlite.prepare(sql).all(period) : sqlite.prepare(sql).all()) as any[];
@@ -2215,7 +2227,7 @@ export class DatabaseStorage implements IStorage {
     return sqlite
       .prepare(
         `SELECT id, period, kind, name, city, cls, title, subtitle, pdf_path AS pdfPath, png1_path AS png1Path,
-                png2_path AS png2Path, stats_json AS statsJson, generated_at AS generatedAt
+                png2_path AS png2Path, png3_path AS png3Path, stats_json AS statsJson, generated_at AS generatedAt
            FROM market_reports WHERE id = ?`,
       )
       .get(id) as any;

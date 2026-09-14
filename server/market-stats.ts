@@ -273,6 +273,126 @@ export function annualMedians(scope: Scope, cls: ClassFilter, years: number, now
   return out;
 }
 
+// ---- Sales by price band ------------------------------------------------------
+//
+// Where the sales actually happen. A month in one community is a handful of
+// closings, so the breakdown covers twelve months and marks the month's own
+// sales inside each band. The bands adapt to the place: Beltline apartments
+// get $50K steps from $200K, Springbank Hill detached gets $250K steps from
+// $1M, both with round edges and never more than eight bands.
+
+export interface PriceBand {
+  label: string;
+  /** Inclusive lower edge; null for the open bottom band. */
+  from: number | null;
+  /** Exclusive upper edge; null for the open top band. */
+  to: number | null;
+  sales: number;
+  /** Of all sales in the window, 0–100. */
+  share: number;
+  /** Sales in the report month alone. */
+  monthSales: number;
+  medianPrice: number | null;
+  avgDom: number | null;
+  soldToListRatio: number | null;
+}
+
+export interface PriceBands {
+  months: number;
+  fromPeriod: string;
+  toPeriod: string;
+  total: number;
+  monthTotal: number;
+  medianPrice: number | null;
+  bands: PriceBand[];
+}
+
+const BAND_STEPS = [50_000, 100_000, 150_000, 200_000, 250_000, 500_000, 1_000_000, 2_000_000, 5_000_000];
+const MAX_BANDS = 8;
+
+export function bandMoney(n: number): string {
+  if (n >= 1_000_000) {
+    const m = n / 1_000_000;
+    return `$${Number.isInteger(m) ? m : m.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}M`;
+  }
+  return `$${Math.round(n / 1000)}K`;
+}
+
+export function priceBands(scope: Scope, cls: ClassFilter, period: string, months = 12): PriceBands {
+  const fromPeriod = shiftPeriod(period, -(months - 1));
+  const { start } = periodBounds(fromPeriod);
+  const { start: mStart, end } = periodBounds(period);
+  const where = `${scopeWhere(scope)} AND ${classWhere(cls)}`;
+  const rows = sqlite
+    .prepare(
+      `SELECT close_price AS price, list_price AS list, days_on_market AS dom, close_date AS closed
+         FROM mls_history
+        WHERE status = 'S' AND close_date BETWEEN @start AND @end AND close_price >= ${MIN_SANE_PRICE}
+          AND ${where}
+        ORDER BY price`,
+    )
+    .all(params(scope, cls, { start, end })) as Array<{ price: number; list: number | null; dom: number | null; closed: string }>;
+
+  const empty: PriceBands = { months, fromPeriod, toPeriod: period, total: rows.length, monthTotal: 0, medianPrice: null, bands: [] };
+  if (rows.length === 0) return empty;
+
+  const prices = rows.map((r) => r.price);
+  const at = (q: number) => prices[Math.min(prices.length - 1, Math.max(0, Math.floor(q * (prices.length - 1))))];
+  // Fit the closed bands to the middle 80% of sales; the tails go in the two
+  // open bands, so one $4M sale does not stretch a $250K grid across the page.
+  const p10 = at(0.1);
+  const p90 = at(0.9);
+  let step = BAND_STEPS[BAND_STEPS.length - 1];
+  for (const s of BAND_STEPS) {
+    if (Math.ceil((p90 - p10) / s) + 1 <= MAX_BANDS - 2) {
+      step = s;
+      break;
+    }
+  }
+  let low = Math.floor(p10 / step) * step;
+  let high = Math.ceil(p90 / step) * step;
+  if (high <= low) high = low + step;
+  // The open bands only exist when something falls in them.
+  const hasBelow = prices[0] < low;
+  const hasAbove = prices[prices.length - 1] >= high;
+
+  const edges: Array<{ from: number | null; to: number | null; label: string }> = [];
+  if (hasBelow) edges.push({ from: null, to: low, label: `Under ${bandMoney(low)}` });
+  for (let e = low; e < high; e += step) edges.push({ from: e, to: e + step, label: `${bandMoney(e)} – ${bandMoney(e + step)}` });
+  if (hasAbove) edges.push({ from: high, to: null, label: `${bandMoney(high)}+` });
+
+  const bands: PriceBand[] = edges.map((e) => {
+    const inBand = rows.filter((r) => (e.from == null || r.price >= e.from) && (e.to == null || r.price < e.to));
+    const inMonth = inBand.filter((r) => r.closed >= mStart && r.closed <= end);
+    const doms = inBand.filter((r) => r.dom != null && r.dom >= 0).map((r) => r.dom!);
+    const ratios = inBand.filter((r) => r.list && r.list > 0).map((r) => r.price / r.list!);
+    const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+    const avgDom = avg(doms);
+    const avgRatio = avg(ratios);
+    return {
+      label: e.label,
+      from: e.from,
+      to: e.to,
+      sales: inBand.length,
+      share: Math.round((inBand.length / rows.length) * 1000) / 10,
+      monthSales: inMonth.length,
+      medianPrice: median(inBand.map((r) => r.price)),
+      avgDom: avgDom == null ? null : Math.round(avgDom),
+      soldToListRatio: avgRatio == null ? null : Math.round(avgRatio * 10000) / 10000,
+    };
+  });
+
+  return {
+    months,
+    fromPeriod,
+    toPeriod: period,
+    total: rows.length,
+    monthTotal: rows.filter((r) => r.closed >= mStart && r.closed <= end).length,
+    medianPrice: median(prices),
+    bands,
+  };
+}
+
 // ---- What scopes exist ------------------------------------------------------
 
 export interface ScopeOption {
