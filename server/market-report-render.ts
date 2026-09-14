@@ -29,10 +29,13 @@ import {
   annualMedians,
   CLASS_LABEL,
   currentPeriod,
+  priceBands,
   series,
   shiftPeriod,
   type ClassFilter,
   type MonthStats,
+  type PriceBand,
+  type PriceBands,
   type Scope,
   type YearStats,
 } from "./market-stats";
@@ -48,6 +51,7 @@ const CHART_X = M + LEFT_W + 30;
 const CHART_W = W - M - CHART_X;
 const SECTION_Y = [200, 478, 756];
 const SECTION_H = 262;
+const PAGES = 3;
 
 const INK = "#0A0A0A";
 const INK_SOFT = "#333333";
@@ -75,6 +79,8 @@ export interface ReportData {
   months: MonthStats[]; // 13, ending at `period`
   communityYears: YearStats[]; // 10
   cityYears: YearStats[]; // 10
+  /** Sales by price band over the twelve months ending at `period`. */
+  bands: PriceBands;
   generatedAt: string;
 }
 
@@ -98,6 +104,7 @@ export function buildReportData(scope: Scope, cls: ClassFilter, period = default
     months: series(scope, cls, 13, period),
     communityYears: annualMedians(scope, cls, 10, at),
     cityYears: scope.kind === "city" ? [] : annualMedians(cityScope, cls, 10, at),
+    bands: priceBands(scope, cls, period, 12),
     generatedAt: new Date().toISOString(),
   };
 }
@@ -330,7 +337,7 @@ function footer(page: number): string {
     text(M, y + 12, "Prepared by Rivers Real Estate from Pillar 9 MLS® System data. Prices are the median of reported sales for the month and area, not the CREB® benchmark.", { size: 7, weight: 500, fill: MUTED }),
     text(M, y + 22, "N/A marks months or years before the sold history the feed retains. Information deemed reliable but not guaranteed. Not intended to solicit properties already under contract.", { size: 7, weight: 500, fill: MUTED }),
     text(M, y + 32, "Spencer Rivers · Synterra Realty · 700, 1816 Crowchild Trail NW, Calgary · luxuryhomescalgary.ca", { size: 7, weight: 500, fill: MUTED }),
-    text(W - M, y + 22, `${page} / 2`, { size: 8, weight: 600, fill: FAINT, anchor: "end" }),
+    text(W - M, y + 22, `${page} / ${PAGES}`, { size: 8, weight: 600, fill: FAINT, anchor: "end" }),
   ].join("\n");
 }
 
@@ -705,6 +712,143 @@ export function renderPage2(d: ReportData): string {
   return parts.join("\n");
 }
 
+// ---- Page 3: where the sales are ------------------------------------------------------
+
+/** Horizontal bars, one per band: twelve months in ink, the report month's share of it in gold. */
+function bandBars(f: Frame, b: PriceBands): string {
+  const parts: string[] = [];
+  parts.push(rect(f.x, f.y + 2, 10, 10, INK), text(f.x + 15, f.y + 11, "Last twelve months", { size: 8, weight: 600, fill: INK_SOFT }));
+  parts.push(rect(f.x + 118, f.y + 2, 10, 10, GOLD), text(f.x + 133, f.y + 11, "Of which this month", { size: 8, weight: 600, fill: INK_SOFT }));
+  if (b.bands.length === 0) {
+    parts.push(text(f.x + f.w / 2, f.y + f.h / 2, "No sales in the last twelve months", { size: 9, weight: 600, fill: FAINT, anchor: "middle" }));
+    return parts.join("\n");
+  }
+  const labelW = 98;
+  const valueW = 64;
+  const barX = f.x + labelW;
+  const barMax = f.w - labelW - valueW;
+  const top = f.y + 26;
+  const rowH = Math.min(24, (f.h - 30) / b.bands.length);
+  const barH = Math.min(14, rowH - 6);
+  const max = Math.max(1, ...b.bands.map((x) => x.sales));
+  b.bands.forEach((band, i) => {
+    const y = top + i * rowH;
+    const cy = y + rowH / 2;
+    parts.push(text(barX - 8, cy + 3, band.label, { size: 8, weight: 700, fill: INK_SOFT, anchor: "end" }));
+    parts.push(rect(barX, cy - barH / 2, barMax, barH, TRACK));
+    const w = (band.sales / max) * barMax;
+    if (band.sales > 0) parts.push(rect(barX, cy - barH / 2, Math.max(2, w), barH, INK));
+    if (band.monthSales > 0) parts.push(rect(barX, cy - barH / 2, Math.max(2, (band.monthSales / max) * barMax), barH, GOLD));
+    parts.push(text(barX + Math.max(2, w) + 6, cy + 3, `${band.sales} · ${band.share.toFixed(0)}%`, { size: 8, weight: 700, fill: INK }));
+  });
+  return parts.join("\n");
+}
+
+/** The detail table across the full page width. */
+function bandTable(y: number, b: PriceBands): string {
+  const parts: string[] = [];
+  const cols: Array<{ label: string; w: number; anchor: "start" | "end"; pick: (x: PriceBand) => string }> = [
+    { label: "Price band", w: 160, anchor: "start", pick: (x) => x.label },
+    { label: "Sales · 12 mo", w: 96, anchor: "end", pick: (x) => String(x.sales) },
+    { label: "Share", w: 76, anchor: "end", pick: (x) => `${x.share.toFixed(1)}%` },
+    { label: "This month", w: 90, anchor: "end", pick: (x) => String(x.monthSales) },
+    { label: "Median price", w: 120, anchor: "end", pick: (x) => money(x.medianPrice) },
+    { label: "Avg. days", w: 90, anchor: "end", pick: (x) => (x.avgDom == null ? "—" : String(x.avgDom)) },
+    { label: "Sold ÷ list", w: 104, anchor: "end", pick: (x) => (x.soldToListRatio == null ? "—" : `${(x.soldToListRatio * 100).toFixed(1)}%`) },
+  ];
+  const headY = y + 52;
+  let x = M;
+  for (const c of cols) {
+    parts.push(text(c.anchor === "end" ? x + c.w : x, headY, c.label, { size: 7.5, weight: 700, tracking: 1, fill: MUTED, anchor: c.anchor, upper: true }));
+    x += c.w;
+  }
+  parts.push(line(M, headY + 8, W - M, headY + 8, INK, 1));
+  if (b.bands.length === 0) {
+    parts.push(text(M, headY + 32, "No sales in the last twelve months.", { size: 9, weight: 600, fill: FAINT }));
+    return parts.join("\n");
+  }
+  const rowH = Math.min(22, (SECTION_H - 80) / (b.bands.length + 1));
+  b.bands.forEach((band, i) => {
+    const ry = headY + 8 + rowH * (i + 1) - 6;
+    x = M;
+    for (const c of cols) {
+      parts.push(text(c.anchor === "end" ? x + c.w : x, ry, c.pick(band), { size: 8.5, weight: c.label === "Price band" ? 700 : 500, fill: c.label === "Price band" ? INK : INK_SOFT, anchor: c.anchor }));
+      x += c.w;
+    }
+    parts.push(line(M, ry + 7, W - M, ry + 7));
+  });
+  const ty = headY + 8 + rowH * (b.bands.length + 1) - 6;
+  x = M;
+  const totals = [`All bands`, String(b.total), "100%", String(b.monthTotal), money(b.medianPrice), "", ""];
+  cols.forEach((c, i) => {
+    if (totals[i]) parts.push(text(c.anchor === "end" ? x + c.w : x, ty, totals[i], { size: 8.5, weight: 800, fill: INK, anchor: c.anchor }));
+    x += c.w;
+  });
+  return parts.join("\n");
+}
+
+export function renderPage3(d: ReportData): string {
+  const { cur, prev, lastYear, prevLabel, lastYearLabel } = comparisons(d);
+  const b = d.bands;
+  const parts: string[] = [`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`];
+  parts.push(header(d, 3));
+
+  // Section A: the bands
+  let y = SECTION_Y[0];
+  parts.push(sectionLabel(y, "Sales by price band", `${periodShort(b.fromPeriod)} – ${periodShort(b.toPeriod)} · ${d.title} ${d.subtitle}`));
+  const busiest = b.bands.length ? b.bands.reduce((a, x) => (x.sales > a.sales ? x : a)) : null;
+  const busiestMonth = b.bands.filter((x) => x.monthSales > 0).sort((p, q) => q.monthSales - p.monthSales)[0] ?? null;
+  parts.push(text(M, y + 52, "Most active band", { size: 8.5, weight: 700, tracking: 1.5, fill: MUTED, upper: true }));
+  parts.push(text(M, y + 92, busiest ? busiest.label : "N/A", { size: busiest && busiest.label.length > 12 ? 22 : 26, weight: 800, fill: INK }));
+  parts.push(
+    text(M, y + 112, busiest ? `${busiest.sales} of ${b.total} sales · ${busiest.share.toFixed(0)}% · twelve months` : "No sales in the window", { size: 9, weight: 600, fill: MUTED }),
+  );
+  parts.push(line(M, y + 126, M + LEFT_W, y + 126));
+  parts.push(text(M, y + 150, "This month", { size: 9, weight: 700 }));
+  parts.push(
+    text(M, y + 163, busiestMonth ? `${b.monthTotal} ${b.monthTotal === 1 ? "sale" : "sales"} · most in ${busiestMonth.label}` : `${periodShort(cur.period)} · no sales reported`, { size: 9, weight: 500, fill: MUTED }),
+  );
+  parts.push(text(M, y + 190, "Twelve month median", { size: 9, weight: 700 }));
+  parts.push(text(M, y + 203, `${money(b.medianPrice)} across ${b.total} ${b.total === 1 ? "sale" : "sales"}`, { size: 9, weight: 500, fill: MUTED }));
+  parts.push(bandBars({ x: CHART_X, y: y + 34, w: CHART_W, h: 200 }, b));
+
+  // Section B: the table
+  y = SECTION_Y[1];
+  parts.push(sectionLabel(y, "Price band detail", `${periodShort(b.fromPeriod)} – ${periodShort(b.toPeriod)} · sales, price and pace by band`));
+  parts.push(bandTable(y, b));
+
+  // Section C: sold to list for a community (a city report already carries it on page 1); new listings for a city
+  y = SECTION_Y[2];
+  if (d.scope.kind === "city") {
+    parts.push(sectionLabel(y, "New listings", `13 months · ${d.title} ${d.subtitle}`));
+    const nlMom = delta(cur.newListings, prev?.newListings ?? null);
+    const nlYoy = delta(cur.newListings, lastYear?.newListings ?? null);
+    parts.push(
+      heroTile(y, "Newly listed", String(cur.newListings), `${periodShort(cur.period)} · came to market`, [
+        (ry) => deltaRow(M, ry, "Month to month", nlMom, phraseFor(nlMom, prevLabel, "percent")),
+        (ry) => deltaRow(M, ry, "Year to year", nlYoy, phraseFor(nlYoy, lastYearLabel, "percent")),
+      ]),
+    );
+    parts.push(valueColumns({ x: CHART_X, y: y + 34, w: CHART_W, h: 180 }, d.months, (m) => m.newListings, (v) => String(Math.round(v))));
+  } else {
+    parts.push(sectionLabel(y, "Sold to list", `13 months · ${d.title} ${d.subtitle}`));
+    const ratio = cur.soldToListRatio == null ? null : cur.soldToListRatio * 100;
+    const rprev = prev?.soldToListRatio == null ? null : prev.soldToListRatio * 100;
+    const rly = lastYear?.soldToListRatio == null ? null : lastYear.soldToListRatio * 100;
+    parts.push(
+      heroTile(y, "Sold price ÷ list price", ratio == null ? "N/A" : `${ratio.toFixed(1)}%`, `${periodShort(cur.period)} average`, [
+        (ry) => deltaRow(M, ry, "Month to month", delta(ratio, rprev), phraseFor(delta(ratio, rprev), prevLabel, "points")),
+        (ry) => deltaRow(M, ry, "Year to year", delta(ratio, rly), phraseFor(delta(ratio, rly), lastYearLabel, "points")),
+      ]),
+    );
+    parts.push(valueColumns({ x: CHART_X, y: y + 34, w: CHART_W, h: 180 }, d.months, (m) => (m.soldToListRatio == null ? null : m.soldToListRatio * 100), (v) => `${v.toFixed(1)}%`));
+  }
+
+  parts.push(footer(3));
+  parts.push("</svg>");
+  return parts.join("\n");
+}
+
 // ---- Rasterise + bind -------------------------------------------------------------
 
 export function svgToPng(svg: string, scale = 2): Buffer {
@@ -732,14 +876,14 @@ export async function pngsToPdf(pages: Buffer[], meta: { title: string; subject:
 
 export interface RenderedReport {
   data: ReportData;
-  svg: [string, string];
-  png: [Buffer, Buffer];
+  svg: [string, string, string];
+  png: [Buffer, Buffer, Buffer];
   pdf: Buffer;
 }
 
 export async function renderReport(data: ReportData): Promise<RenderedReport> {
-  const svg: [string, string] = [renderPage1(data), renderPage2(data)];
-  const png: [Buffer, Buffer] = [svgToPng(svg[0]), svgToPng(svg[1])];
+  const svg: [string, string, string] = [renderPage1(data), renderPage2(data), renderPage3(data)];
+  const png: [Buffer, Buffer, Buffer] = [svgToPng(svg[0]), svgToPng(svg[1]), svgToPng(svg[2])];
   const pdf = await pngsToPdf(png, {
     title: `${data.title} ${data.subtitle} market report — ${periodLong(data.period)}`,
     subject: "Community market report",

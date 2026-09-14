@@ -58,6 +58,8 @@ export interface StoredReport {
   pdfUrl: string;
   png1Url: string;
   png2Url: string;
+  /** Null for reports generated before the price-band page existed. */
+  png3Url: string | null;
   generatedAt: string;
 }
 
@@ -74,6 +76,7 @@ export function toStored(row: Record<string, any>): StoredReport {
     pdfUrl: `/uploads/${row.pdfPath}`,
     png1Url: `/uploads/${row.png1Path}`,
     png2Url: `/uploads/${row.png2Path}`,
+    png3Url: row.png3Path ? `/uploads/${row.png3Path}` : null,
     generatedAt: row.generatedAt,
   };
 }
@@ -90,9 +93,11 @@ export async function generateReport(req: ReportRequest): Promise<StoredReport> 
   const pdfPath = path.join("reports", period, `${base}.pdf`);
   const png1Path = path.join("reports", period, `${base}-1.png`);
   const png2Path = path.join("reports", period, `${base}-2.png`);
+  const png3Path = path.join("reports", period, `${base}-3.png`);
   fs.writeFileSync(path.join(dir, `${base}.pdf`), rendered.pdf);
   fs.writeFileSync(path.join(dir, `${base}-1.png`), rendered.png[0]);
   fs.writeFileSync(path.join(dir, `${base}-2.png`), rendered.png[1]);
+  fs.writeFileSync(path.join(dir, `${base}-3.png`), rendered.png[2]);
 
   const id = storage.upsertMarketReport({
     period,
@@ -105,6 +110,7 @@ export async function generateReport(req: ReportRequest): Promise<StoredReport> 
     pdfPath,
     png1Path,
     png2Path,
+    png3Path,
     statsJson: JSON.stringify(data),
   });
   return toStored(storage.getMarketReport(id)!);

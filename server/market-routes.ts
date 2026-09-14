@@ -17,7 +17,7 @@ import {
   sameMonthLastYear,
 } from "./market-report";
 import { CLASS_LABEL, PROPERTY_CLASSES, listScopes, series, type ClassFilter } from "./market-stats";
-import { buildReportData, defaultReportPeriod, renderPage1, renderPage2, svgToPng } from "./market-report-render";
+import { buildReportData, defaultReportPeriod, renderPage1, renderPage2, renderPage3, svgToPng } from "./market-report-render";
 import { autofillMarketFigures, generateAllPresets, generateReport, getBatchProgress, parseReportRequest, toStored } from "./market-report-store";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
@@ -123,11 +123,11 @@ export function registerMarketRoutes(app: Express, deps: { requireAuth: Middlewa
   app.get("/api/admin/market/reports/preview", requireAuth, async (req, res) => {
     const parsed = parseReportRequest(req.query as Record<string, unknown>);
     if ("error" in parsed) return res.status(400).json({ message: parsed.error });
-    const page = Number(req.query.page) === 2 ? 2 : 1;
+    const page = Number(req.query.page) === 3 ? 3 : Number(req.query.page) === 2 ? 2 : 1;
     try {
       const scope = { kind: parsed.kind, name: parsed.name, city: parsed.city ?? undefined } as const;
       const data = buildReportData(scope, parsed.cls, parsed.period ?? defaultReportPeriod());
-      const svg = page === 1 ? renderPage1(data) : renderPage2(data);
+      const svg = page === 1 ? renderPage1(data) : page === 2 ? renderPage2(data) : renderPage3(data);
       res.type("png").send(svgToPng(svg, 1.5));
     } catch (e: any) {
       res.status(500).json({ message: e?.message ?? "Render failed" });
