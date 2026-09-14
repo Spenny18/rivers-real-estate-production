@@ -63,5 +63,9 @@ primary_region = "sjc"
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "512mb"
+  # 1GB, not 512MB: rendering a community report (three pages at print
+  # resolution plus the PDF) peaks around 300MB of native memory in its
+  # worker process, on top of the server's own ~150MB. At 512MB that was an
+  # out-of-memory kill, a restart, and a 502 for whoever pressed Regenerate.
+  memory = "1gb"
   cpus = 1

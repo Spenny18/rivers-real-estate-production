@@ -77,6 +77,24 @@ async function buildAll() {
     logLevel: "info",
   });
 
+  // The report render worker: a separate process the server forks per job
+  // (see server/render-worker.ts), so it needs its own entry bundle next to
+  // index.cjs. It imports only the pure page renderer — no database.
+  console.log("building render worker...");
+  await esbuild({
+    entryPoints: ["server/render-worker.ts"],
+    platform: "node",
+    bundle: true,
+    format: "cjs",
+    outfile: "dist/render-worker.cjs",
+    define: {
+      "process.env.NODE_ENV": '"production"',
+    },
+    minify: true,
+    external: externals,
+    logLevel: "info",
+  });
+
   // Files the server reads at runtime rather than bundles: the brand fonts
   // the market-report renderer hands to resvg. dist/ is copied wholesale into
   // the image, so they ride along at dist/assets/fonts.
