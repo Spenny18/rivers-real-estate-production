@@ -706,13 +706,14 @@ function bandBars(f: Frame, b: PriceBands): string {
 function bandTable(y: number, b: PriceBands): string {
   const parts: string[] = [];
   const cols: Array<{ label: string; w: number; anchor: "start" | "end"; pick: (x: PriceBand) => string }> = [
-    { label: "Price band", w: 160, anchor: "start", pick: (x) => x.label },
-    { label: "Sales · 12 mo", w: 96, anchor: "end", pick: (x) => String(x.sales) },
-    { label: "Share", w: 76, anchor: "end", pick: (x) => `${x.share.toFixed(1)}%` },
-    { label: "This month", w: 90, anchor: "end", pick: (x) => String(x.monthSales) },
-    { label: "Median price", w: 120, anchor: "end", pick: (x) => money(x.medianPrice) },
-    { label: "Avg. days", w: 90, anchor: "end", pick: (x) => (x.avgDom == null ? "—" : String(x.avgDom)) },
-    { label: "Sold ÷ list", w: 104, anchor: "end", pick: (x) => (x.soldToListRatio == null ? "—" : `${(x.soldToListRatio * 100).toFixed(1)}%`) },
+    { label: "Price band", w: 138, anchor: "start", pick: (x) => x.label },
+    { label: "Sales · 12 mo", w: 84, anchor: "end", pick: (x) => String(x.sales) },
+    { label: "Share", w: 64, anchor: "end", pick: (x) => `${x.share.toFixed(1)}%` },
+    { label: "This month", w: 82, anchor: "end", pick: (x) => String(x.monthSales) },
+    { label: "Median price", w: 108, anchor: "end", pick: (x) => money(x.medianPrice) },
+    { label: "Median $/sq ft", w: 96, anchor: "end", pick: (x) => (x.medianPerSqft == null ? "—" : money(x.medianPerSqft)) },
+    { label: "Avg. days", w: 72, anchor: "end", pick: (x) => (x.avgDom == null ? "—" : String(x.avgDom)) },
+    { label: "Sold ÷ list", w: 92, anchor: "end", pick: (x) => (x.soldToListRatio == null ? "—" : `${(x.soldToListRatio * 100).toFixed(1)}%`) },
   ];
   const headY = y + 52;
   let x = M;
@@ -737,7 +738,7 @@ function bandTable(y: number, b: PriceBands): string {
   });
   const ty = headY + 8 + rowH * (b.bands.length + 1) - 6;
   x = M;
-  const totals = [`All bands`, String(b.total), "100%", String(b.monthTotal), money(b.medianPrice), "", ""];
+  const totals = [`All bands`, String(b.total), "100%", String(b.monthTotal), money(b.medianPrice), b.medianPerSqft == null ? "" : money(b.medianPerSqft), "", ""];
   cols.forEach((c, i) => {
     if (totals[i]) parts.push(text(c.anchor === "end" ? x + c.w : x, ty, totals[i], { size: 8.5, weight: 800, fill: INK, anchor: c.anchor }));
     x += c.w;
