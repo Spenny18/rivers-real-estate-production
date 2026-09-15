@@ -1,22 +1,18 @@
 <!--
-  Rivers Real Estate favicon — the brand mark from client/src/components/logo.tsx
-  (tall trapezoidal house with the skewed roofline and a 2x2 window grid),
-  redrawn for small sizes.
+  Rivers Real Estate favicon — the actual logo mark, traced from
+  client/public/rivers-logo.jpg (measured stroke by stroke, so the geometry
+  is the logo's, not a redrawing): the open roofline running down to the
+  right wall, the gap between the upper wall and the inner room, the inner
+  L, the doorway on the right, and the 2×2 window grid. Same gold gradient.
 
-  Two deliberate departures from the logo, both for legibility below 48px:
-  the inner room outline is dropped (at 16px it merges with the outer wall
-  into a stack of rectangles), and the windows are enlarged and squared up so
-  they survive downscaling. The silhouette and the gold gradient — the parts
-  that read as the brand — are unchanged.
+  Google crops favicons to a circle in search results, so the mark sits well
+  inside the tile with nothing meaningful near the corners.
 
-  Google crops favicons to a circle in search results, so the mark is centred
-  in the tile with nothing meaningful near the corners.
-
-  If the logo mark changes, update this file and regenerate the raster set
-  (favicon.ico, favicon-96x96, favicon-192x192, favicon-512x512,
-  apple-touch-icon) from it.
+  The raster set (favicon.ico, favicon-96x96, favicon-192x192,
+  favicon-512x512, apple-touch-icon) is rendered from this file by
+  script/favicons.ts — regenerate it if this changes.
 -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640" width="640" height="640">
   <defs>
     <linearGradient id="riversGold" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#B8893D"/>
@@ -26,15 +22,27 @@
     </linearGradient>
   </defs>
 
-  <rect width="64" height="64" fill="#000"/>
+  <rect width="640" height="640" fill="#000"/>
 
-  <!-- Logo mark, centred on the tile (the mark's own centre is x=34, y=32). -->
-  <g transform="translate(32 32) scale(1.06) translate(-34 -32)">
-    <path d="M16 8 L52 12 L52 56 L16 56 Z"
-          fill="none" stroke="url(#riversGold)" stroke-width="4" stroke-linejoin="miter"/>
-    <rect x="26" y="28" width="6" height="6" fill="url(#riversGold)"/>
-    <rect x="36" y="29" width="6" height="6" fill="url(#riversGold)"/>
-    <rect x="26" y="38" width="6" height="6" fill="url(#riversGold)"/>
-    <rect x="36" y="38" width="6" height="6" fill="url(#riversGold)"/>
+  <!-- Logo coordinates: the mark spans x 454–982, y 0–607 in the source
+       image. Scaled to 420px tall and centred on the tile. -->
+  <g transform="translate(-176.7 110) scale(0.692)" fill="url(#riversGold)">
+    <!-- Roof -->
+    <polygon points="454,0 982,165 982,206 454,41"/>
+    <!-- Right wall -->
+    <rect x="941" y="165" width="41" height="442"/>
+    <!-- Left wall, upper (stops short of the inner room) -->
+    <rect x="454" y="0" width="41" height="257"/>
+    <!-- Inner room: the L -->
+    <rect x="454" y="297" width="273" height="41"/>
+    <rect x="454" y="297" width="41" height="310"/>
+    <!-- Doorway frame -->
+    <rect x="772" y="297" width="127" height="41"/>
+    <rect x="772" y="297" width="41" height="310"/>
+    <!-- Windows -->
+    <rect x="562" y="428" width="41" height="42"/>
+    <rect x="627" y="428" width="42" height="42"/>
+    <rect x="562" y="491" width="41" height="42"/>
+    <rect x="627" y="491" width="42" height="42"/>
   </g>
 </svg>
