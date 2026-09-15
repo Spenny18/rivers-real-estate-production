@@ -14,11 +14,23 @@
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640" width="640" height="640">
   <defs>
-    <linearGradient id="riversGold" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#B8893D"/>
-      <stop offset="38%" stop-color="#D4AF37"/>
-      <stop offset="58%" stop-color="#F0D785"/>
-      <stop offset="100%" stop-color="#9C7424"/>
+    <!-- The logo's metallic sweep, sampled from rivers-logo.jpg. It runs
+         diagonally (down-right, in logo coordinates x+y): flat brand gold
+         across the upper left, a bright highlight band through the inner L
+         and the roof, a dark trough down the right wall and doorway, then
+         back to brand gold at the bottom right. userSpaceOnUse so the
+         stops sit exactly where they do on the logo. -->
+    <linearGradient id="riversGold" gradientUnits="userSpaceOnUse" x1="454" y1="0" x2="1021.5" y2="567.5">
+      <stop offset="0%"    stop-color="#CE9720"/>
+      <stop offset="26%"   stop-color="#CE9720"/>
+      <stop offset="33%"   stop-color="#E8C873"/>
+      <stop offset="39.3%" stop-color="#FDECB4"/>
+      <stop offset="46%"   stop-color="#D8C38A"/>
+      <stop offset="53%"   stop-color="#95793A"/>
+      <stop offset="60%"   stop-color="#7A5D19"/>
+      <stop offset="71%"   stop-color="#98701B"/>
+      <stop offset="83%"   stop-color="#B6851C"/>
+      <stop offset="100%"  stop-color="#CE9720"/>
     </linearGradient>
   </defs>
 
