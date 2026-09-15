@@ -23,6 +23,13 @@ import { publicOrigin } from "./origin";
 
 const ORIGIN = publicOrigin();
 const SITE_NAME = "Rivers Real Estate";
+/**
+ * The site name Google shows above the URL in results. Read from
+ * og:site_name here, WebSite.name in schema/entities.ts, the web manifest and
+ * the homepage <title> — keep all four identical or Google falls back to the
+ * bare domain. SITE_NAME stays the short suffix for page titles.
+ */
+const SITE_NAME_FULL = "Luxury Homes Calgary - Rivers Real Estate";
 const BRAND_TAGLINE = "Spencer Rivers — Luxury Homes Calgary";
 // Brand OG/Twitter card (1200×630, built from the Rivers Real Estate logo —
 // see client/public/img/og-default.jpg). Never a stock photo: link previews
@@ -763,7 +770,7 @@ export function injectMetaIntoHtml(html: string, meta: SeoMeta): string {
     `<meta property="og:type" content="${ogType}" />`,
     `<meta property="og:url" content="${canonical}" />`,
     `<meta property="og:image" content="${ogImage}" />`,
-    `<meta property="og:site_name" content="${SITE_NAME}" />`,
+    `<meta property="og:site_name" content="${SITE_NAME_FULL}" />`,
     `<meta name="twitter:card" content="summary_large_image" />`,
     `<meta name="twitter:title" content="${title}" />`,
     `<meta name="twitter:description" content="${desc}" />`,

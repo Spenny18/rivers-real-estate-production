@@ -1419,7 +1419,9 @@ export function blockTitle(block: PageBlock): string {
 // ---------------------------------------------------------------------------
 
 export const DEFAULT_HOME_SEO: PageSeo = {
-  title: "Spencer Rivers — Luxury Homes Calgary | Rivers Real Estate",
+  // Leads with the site name Google is asked to show above the URL (see
+  // WebSite.name in server/schema/entities.ts); the rest is the page.
+  title: "Luxury Homes Calgary - Rivers Real Estate | Spencer Rivers, Calgary Luxury Realtor",
   description:
     "Spencer Rivers is a top Calgary luxury Realtor representing buyers and sellers in Springbank Hill, Aspen Woods, Upper Mount Royal, Elbow Park, Britannia, and Bel-Aire.",
   keywords: "",

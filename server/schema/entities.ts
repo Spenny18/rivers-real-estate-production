@@ -162,8 +162,8 @@ const WEBSITE: SchemaNode = {
   "@type": "WebSite",
   "@id": IDS.website,
   url: `${ORIGIN}/`,
-  name: "Rivers Real Estate",
-  alternateName: ["Luxury Homes Calgary", "Rivers Real Estate Calgary"],
+  name: "Luxury Homes Calgary - Rivers Real Estate",
+  alternateName: ["Rivers Real Estate", "Luxury Homes Calgary"],
   inLanguage: "en-CA",
   publisher: { "@id": IDS.agent },
   potentialAction: {
