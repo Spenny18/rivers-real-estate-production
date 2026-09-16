@@ -32,24 +32,51 @@ export default function AdminFormsPage() {
   const { toast } = useToast();
   const { data: forms = [], isLoading } = useQuery<FormTemplateSummary[]>({ queryKey: ["/api/admin/form-templates"] });
   const [adding, setAdding] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [name, setName] = useState("");
-  const [kind, setKind] = useState<FormTemplateKind>("purchase");
+  const [kind, setKind] = useState<FormTemplateKind>("other");
   const fileInput = useRef<HTMLInputElement>(null);
+  const file = files[0] ?? null;
+
+  type Uploaded = FormTemplateDetail & { matched: { id: string; name: string; code: string; sameRevision: boolean; boxes: number } | null; detected: number };
 
   const upload = useMutation({
     mutationFn: async () => {
-      if (!file) throw new Error("Choose the blank form PDF");
-      const dataUrl = await readAsDataUrl(file);
-      const res = await apiRequest("POST", "/api/admin/form-templates", { name: name.trim() || file.name.replace(/\.pdf$/i, ""), kind, dataUrl });
-      return (await res.json()) as FormTemplateDetail;
+      if (!files.length) throw new Error("Choose the blank form PDF");
+      const out: Uploaded[] = [];
+      const failed: string[] = [];
+      for (const f of files) {
+        try {
+          const dataUrl = await readAsDataUrl(f);
+          const res = await apiRequest("POST", "/api/admin/form-templates", { name: files.length === 1 ? name.trim() : "", filename: f.name, kind, dataUrl });
+          out.push((await res.json()) as Uploaded);
+        } catch (e) {
+          failed.push(`${f.name}: ${apiErrorMessage(e)}`);
+        }
+      }
+      return { out, failed };
     },
-    onSuccess: (t) => {
+    onSuccess: ({ out, failed }) => {
       qc.invalidateQueries({ queryKey: ["/api/admin/form-templates"] });
       setAdding(false);
-      setFile(null);
+      setFiles([]);
       setName("");
-      window.location.assign(`/admin/forms/${t.id}`);
+      if (failed.length) toast({ title: `${failed.length} file(s) failed`, description: failed.join(" · "), variant: "destructive" });
+      if (out.length === 1) {
+        const t = out[0];
+        toast({
+          title: t.matched ? `Recognised: AREA ${t.matched.name}` : t.detected ? `${t.detected} blanks found` : "Form added",
+          description: t.matched
+            ? `${t.matched.boxes} boxes placed from the built-in layout${t.matched.sameRevision ? "" : " (a different revision of the form — check them)"}.`
+            : t.detected
+              ? "Each underscored blank is a typed box. Bind the ones the deal knows, delete the rest."
+              : "Draw the boxes on it.",
+        });
+        window.location.assign(`/admin/forms/${t.id}`);
+      } else if (out.length) {
+        const recognised = out.filter((t) => t.matched).length;
+        toast({ title: `${out.length} forms added`, description: `${recognised} recognised with boxes pre-placed; ${out.length - recognised} with blanks detected or left to draw.` });
+      }
     },
     onError: (e) => toast({ title: "Upload failed", description: apiErrorMessage(e), variant: "destructive" }),
   });
@@ -144,7 +171,7 @@ export default function AdminFormsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add a blank form</DialogTitle>
-            <DialogDescription>The unfilled AREA form as a PDF, up to 10 MB. You will draw its boxes next.</DialogDescription>
+            <DialogDescription>The unfilled AREA forms as PDFs, up to 10 MB each. Password-protected exports from WEBForms are fine.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div
@@ -153,37 +180,42 @@ export default function AdminFormsPage() {
               onDragOver={(e) => e.preventDefault()}
               onDrop={(e) => {
                 e.preventDefault();
-                const f = e.dataTransfer.files?.[0];
-                if (f) {
-                  setFile(f);
-                  if (!name) setName(f.name.replace(/\.pdf$/i, ""));
-                }
+                const fs = Array.from(e.dataTransfer.files ?? []).filter((f) => /\.pdf$/i.test(f.name) || f.type === "application/pdf");
+                if (fs.length) setFiles(fs);
               }}
             >
               <input
                 ref={fileInput}
                 type="file"
                 accept="application/pdf,.pdf"
+                multiple
                 className="hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0] ?? null;
-                  setFile(f);
-                  if (f && !name) setName(f.name.replace(/\.pdf$/i, ""));
-                }}
+                onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
               />
               <Upload className="h-6 w-6 mx-auto text-muted-foreground mb-2" strokeWidth={1.5} />
-              {file ? (
+              {files.length > 1 ? (
+                <div className="text-[13px]">
+                  <span className="font-medium">{files.length} PDFs</span> · {fmtBytes(files.reduce((a, f) => a + f.size, 0))}
+                  <div className="text-[11px] text-muted-foreground mt-1 max-h-24 overflow-auto">{files.map((f) => f.name).join(" · ")}</div>
+                </div>
+              ) : file ? (
                 <div className="text-[13px]">
                   <span className="font-medium">{file.name}</span> · {fmtBytes(file.size)}
                 </div>
               ) : (
-                <div className="text-[13px] text-muted-foreground">Drop the blank PDF here or click to choose</div>
+                <div className="text-[13px] text-muted-foreground">Drop one or more blank PDFs here, or click to choose</div>
               )}
             </div>
-            <div className="space-y-1.5">
-              <Label>Form name</Label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Residential Purchase Contract (AREA)" />
+            <div className="text-[11px] text-muted-foreground">
+              AREA forms are recognised by their footer code and get their boxes placed for you: the Residential Purchase Contract, Amendment, Addendum,
+              Notice and Exclusive Buyer Representation Agreement. Other forms get a typed box on every underscored blank.
             </div>
+            {files.length <= 1 ? (
+              <div className="space-y-1.5">
+                <Label>Form name</Label>
+                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Leave blank to use the recognised name or the file name" />
+              </div>
+            ) : null}
             <div className="space-y-1.5">
               <Label>Type</Label>
               <Select value={kind} onValueChange={(v) => setKind(v as FormTemplateKind)}>
@@ -204,9 +236,9 @@ export default function AdminFormsPage() {
             <Button variant="outline" onClick={() => setAdding(false)}>
               Cancel
             </Button>
-            <Button disabled={!file || upload.isPending} onClick={() => upload.mutate()}>
+            <Button disabled={!files.length || upload.isPending} onClick={() => upload.mutate()} data-testid="button-upload-forms">
               {upload.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
-              Upload
+              {files.length > 1 ? `Upload ${files.length} forms` : "Upload"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -39,7 +39,7 @@ import {
 const PAGE_WIDTH = 640;
 const ORDINAL = ["First", "Second", "Third", "Fourth"];
 const ATTR_LABELS: Record<PartyAttr, string> = { name: "Full name", email: "Email", phone: "Phone", address: "Mailing address" };
-const GROUP_ORDER: BindingGroup[] = ["property", "offer", "amendment", "listing", "document", "agent"];
+const GROUP_ORDER: BindingGroup[] = ["property", "offer", "conveyancing", "amendment", "agreement", "listing", "document", "agent"];
 const SOURCE_LABELS: Record<PrefillSource, string> = {
   deal: "from the deal",
   listing: "from the MLS® listing",

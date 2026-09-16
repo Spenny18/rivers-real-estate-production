@@ -40,7 +40,21 @@ import {
   type SignerRole,
 } from "@/lib/esign-types";
 import { DATE_FORMATS, TIME_FORMATS, DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, formatStamp } from "@shared/esign-format";
-import { BINDINGS, BINDING_GROUP_LABELS, BINDING_BY_KEY, MAX_PARTIES, bindingLabel, customKeyFor, isCustomKey, type BindingGroup, type FillType } from "@shared/form-bindings";
+import {
+  BINDINGS,
+  BINDING_GROUP_LABELS,
+  BINDING_BY_KEY,
+  DATE_FILL_FORMATS,
+  DEFAULT_DATE_FILL_FORMAT,
+  DEFAULT_MONEY_FORMAT,
+  MAX_PARTIES,
+  MONEY_FORMATS,
+  bindingLabel,
+  customKeyFor,
+  isCustomKey,
+  type BindingGroup,
+  type FillType,
+} from "@shared/form-bindings";
 
 const PAGE_WIDTH = 720;
 const FILL_COLOUR = "#1d4ed8";
@@ -54,7 +68,7 @@ const FILL_DEFAULT_SIZE: Record<FillType, { w: number; h: number }> = {
   checkbox: { w: 0.02, h: 0.015 },
 };
 const ORDINAL = ["First", "Second", "Third", "Fourth"];
-const GROUP_ORDER: BindingGroup[] = ["property", "buyer", "seller", "offer", "amendment", "listing", "agent", "document"];
+const GROUP_ORDER: BindingGroup[] = ["property", "buyer", "seller", "offer", "conveyancing", "amendment", "agreement", "listing", "agent", "document"];
 
 type Arm = { kind: "fill"; name: string; label: string | null; dataType: FillType } | { kind: "sign"; role: SignerRole; roleIndex: number; type: FieldType };
 
@@ -501,6 +515,23 @@ function SelectedBoxEditor({
                     {(Object.keys(FILL_TYPE_LABELS) as FillType[]).map((t) => (
                       <SelectItem key={t} value={t}>
                         {FILL_TYPE_LABELS[t]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
+            {box.dataType === "money" || box.dataType === "date" ? (
+              <div className="space-y-1">
+                <Label className="text-[11px]">Printed as</Label>
+                <Select value={box.format ?? (box.dataType === "money" ? DEFAULT_MONEY_FORMAT : DEFAULT_DATE_FILL_FORMAT)} onValueChange={(v) => onChange({ format: v })}>
+                  <SelectTrigger className="h-8 text-[12px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(box.dataType === "money" ? MONEY_FORMATS : DATE_FILL_FORMATS).map((f) => (
+                      <SelectItem key={f.id} value={f.id}>
+                        {f.label}
                       </SelectItem>
                     ))}
                   </SelectContent>

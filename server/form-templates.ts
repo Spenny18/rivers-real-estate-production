@@ -46,6 +46,9 @@ import { decryptPdfIfNeeded } from "./pdf-decrypt";
 import { INK, drawCheck, drawTextInBox, fieldRect, inspectPdf, safe, wrap } from "./signing";
 import { MAX_PDF_BYTES, importPdfDocument, newSignerToken, nowIso, touchDocument } from "./deal-store";
 import { AGENT } from "./brand";
+import { areaFormCode, detectBlanks, extractText } from "./pdf-text";
+import { findAreaLayout } from "./area-layouts";
+import { customKeyFor } from "@shared/form-bindings";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -85,26 +88,86 @@ export interface ImportTemplateInput {
   kind: string;
   description?: string | null;
   bytes: Buffer;
+  /** Filename, used as the name when none was given. */
+  filename?: string | null;
 }
 
-/** Validate and store a blank form. Throws with a user-facing message. */
-export async function importFormTemplate(input: ImportTemplateInput): Promise<FormTemplate> {
+export interface ImportTemplateResult {
+  template: FormTemplate;
+  /** The built-in AREA layout that was placed, if the footer code matched one. */
+  matched: { id: string; name: string; code: string; measuredOn: string; sameRevision: boolean; boxes: number } | null;
+  /** Underscored blanks turned into typed boxes when no layout matched. */
+  detected: number;
+}
+
+/**
+ * Validate and store a blank form. When the footer says which AREA form it
+ * is, the built-in boxes are placed; otherwise every underscored blank
+ * becomes a typed box labelled from the text beside it. Throws with a
+ * user-facing message when the bytes are not a usable PDF.
+ */
+export async function importFormTemplate(input: ImportTemplateInput): Promise<ImportTemplateResult> {
   if (input.bytes.length < 100 || input.bytes.subarray(0, 5).toString("latin1") !== "%PDF-") throw new Error("That file is not a PDF.");
   if (input.bytes.length > MAX_PDF_BYTES) throw new Error("PDFs must be 10 MB or smaller.");
   const { bytes } = await decryptPdfIfNeeded(input.bytes);
   const info = await inspectPdf(bytes);
+
+  const text = await extractText(bytes);
+  const code = areaFormCode(text);
+  const layout = code ? findAreaLayout(code.id) : undefined;
+  let fields: FormTemplateField[] = [];
+  let matched: ImportTemplateResult["matched"] = null;
+  let detected = 0;
+  let name = input.name.trim().slice(0, 120);
+  let kind = input.kind;
+  let description = input.description?.trim() || null;
+  if (layout && layout.pageCount === info.pageCount) {
+    fields = layout.fields().filter((f) => f.page <= info.pageCount);
+    matched = { id: layout.id, name: layout.name, code: code!.code, measuredOn: layout.measuredOn, sameRevision: code!.code === layout.measuredOn, boxes: fields.length };
+    if (!name || name === (input.filename ?? "").replace(/\.pdf$/i, "")) name = layout.name;
+    if (kind === "other") kind = layout.kind;
+    if (!description) description = `${layout.description}${matched.sameRevision ? "" : ` Boxes were measured on ${layout.measuredOn}; this blank is ${code!.code} — check them.`}`;
+  } else if (text.items.length) {
+    const seen = new Set<string>();
+    for (const bl of detectBlanks(text)) {
+      const size = text.pageSizes[bl.page - 1] ?? { w: 612, h: 792 };
+      const h = Math.max(11, Math.min(16, bl.size + 5));
+      const base = bl.label ? customKeyFor(bl.label) : `custom.blank-p${bl.page}`;
+      let key = base;
+      for (let i = 2; seen.has(key); i++) key = `${base}-${i}`;
+      seen.add(key);
+      fields.push({
+        kind: "fill",
+        key: `d${fields.length + 1}`,
+        page: bl.page,
+        x: bl.x0 / size.w,
+        y: (size.h - (bl.y - 3 + h)) / size.h,
+        w: (bl.x1 - bl.x0) / size.w,
+        h: h / size.h,
+        name: key,
+        label: bl.label || `Blank (page ${bl.page})`,
+        dataType: "text",
+        align: "left",
+        fontSize: null,
+        format: null,
+      });
+      detected += 1;
+    }
+  }
+  if (!name) name = (input.filename ?? "").replace(/\.pdf$/i, "").trim() || "Form";
+
   const r = db
     .insert(formTemplates)
     .values({
-      name: input.name.trim().slice(0, 120) || "Form",
-      kind: input.kind,
-      description: input.description?.trim() || null,
+      name,
+      kind,
+      description,
       storageKey: "pending",
       sha256: sha256Hex(bytes),
       bytes: bytes.length,
       pageCount: info.pageCount,
       pageSizes: JSON.stringify(info.pageSizes),
-      fields: "[]",
+      fields: JSON.stringify(fields),
       createdAt: nowIso(),
       updatedAt: nowIso(),
     })
@@ -113,7 +176,7 @@ export async function importFormTemplate(input: ImportTemplateInput): Promise<Fo
   const key = templateKey(id, "blank.pdf");
   writeDocument(key, bytes);
   db.update(formTemplates).set({ storageKey: key }).where(eq(formTemplates.id, id)).run();
-  return getTemplate(id)!;
+  return { template: getTemplate(id)!, matched, detected };
 }
 
 export function deleteTemplate(t: FormTemplate): void {
@@ -231,6 +294,7 @@ export function prefillForDeal(deal: Deal, template: FormTemplate): Prefill {
   set("agent.email", AGENT.email, "agent");
   set("agent.address", AGENT.address, "agent");
   if (!values["offer.depositHolder"]) set("offer.depositHolder", AGENT.brokerage, "agent");
+  if (!values["offer.contractProvidedBy"]) set("offer.contractProvidedBy", deal.kind === "listing" ? "seller's" : "buyer's", "auto");
 
   const today = todayIso();
   set("document.date", today, "auto");
@@ -263,7 +327,7 @@ export function prefillForDeal(deal: Deal, template: FormTemplate): Prefill {
 // ---- Rendering --------------------------------------------------------------------------
 
 function drawFill(page: PDFPage, font: PDFFont, f: FormFillField, raw: string | undefined) {
-  const text = formatFillValue(f.dataType, raw);
+  const text = formatFillValue(f.dataType, raw, f.format);
   if (!text) return;
   const r = fieldRect(page, f);
   if (f.dataType === "checkbox") {

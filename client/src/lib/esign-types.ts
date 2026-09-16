@@ -325,6 +325,7 @@ export interface FormFillBox extends FormBoxBase {
   dataType: "text" | "multiline" | "money" | "date" | "checkbox";
   align?: "left" | "center" | "right";
   fontSize?: number | null;
+  format?: string | null;
 }
 
 export interface FormSignBox extends FormBoxBase {
