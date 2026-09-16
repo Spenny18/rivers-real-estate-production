@@ -31,6 +31,12 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=8080
 
+# qpdf strips the owner-password encryption CREA WEBForms puts on exported
+# PDFs so signatures can be stamped onto them (server/pdf-decrypt.ts).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends qpdf \
+ && rm -rf /var/lib/apt/lists/*
+
 # Bring in only what the server bundle needs at runtime.
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund \
