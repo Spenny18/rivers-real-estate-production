@@ -24,7 +24,29 @@ function workerPath(): string | null {
   return null;
 }
 
+/** Every file a job promises to write, so success can be checked on disk. */
+function outputs(job: RenderJob): string[] {
+  return job.kind === "page" ? [job.out] : [job.out.pdf, ...job.out.png];
+}
+
+function wroteEverything(job: RenderJob): boolean {
+  return outputs(job).every((p) => {
+    try {
+      return fs.statSync(p).size > 0;
+    } catch {
+      return false;
+    }
+  });
+}
+
 function runInChild(job: RenderJob, worker: string): Promise<void> {
+  // Start from a clean slate so a stale file from an earlier run can never
+  // pass for this job's output.
+  for (const p of outputs(job)) {
+    try {
+      fs.unlinkSync(p);
+    } catch {}
+  }
   return new Promise((resolve, reject) => {
     const child = fork(worker, [], { execArgv: [], env: { ...process.env, RENDER_WORKER: "1" }, stdio: ["ignore", "inherit", "inherit", "ipc"] });
     let settled = false;
@@ -40,8 +62,21 @@ function runInChild(job: RenderJob, worker: string): Promise<void> {
     }, JOB_TIMEOUT_MS);
     child.once("message", (reply: RenderReply) => (reply.ok ? done() : done(new Error(reply.error))));
     child.once("error", (e) => done(e));
+    // Node does not promise that the worker's reply is delivered before its
+    // 'exit' event — on a loaded machine the exit can land first. So a clean
+    // exit is judged by what is on disk, not by whether the reply arrived.
     child.once("exit", (code, signal) => {
-      if (!settled) done(new Error(signal === "SIGKILL" ? "Render worker was killed (out of memory?)" : `Render worker exited with code ${code}`));
+      if (settled) return;
+      if (code === 0 && wroteEverything(job)) return done();
+      done(
+        new Error(
+          signal === "SIGKILL"
+            ? "Render worker was killed (out of memory?)"
+            : code === 0
+              ? "Render worker exited without writing its output"
+              : `Render worker exited with code ${code}`,
+        ),
+      );
     });
     child.send(job);
   });
