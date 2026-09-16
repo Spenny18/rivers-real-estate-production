@@ -226,10 +226,32 @@ ordinary flow: send, sign, certificate. Sign boxes whose party was left blank
 (no second buyer) are dropped and reported. Deleting a form leaves the
 documents made from it untouched.
 
-Start with the Residential Purchase Contract and the Amendment: in WEBForms
-open a transaction with nothing filled in and *Save as PDF* the blank form.
-Form revisions from AREA mean re-uploading the blank and redrawing the boxes;
-the values carry over because they are keyed by name, not position.
+**Recognised AREA forms arrive with their boxes already drawn.** On upload
+the server reads the footer code (`AREA©158CLDA_JAN2026`) from the PDF's
+text layer (`server/pdf-text.ts`, pdf.js in Node) and, for a form it knows,
+places the layout measured from that form (`server/area-layouts.ts`):
+
+| Code | Form | Boxes |
+|------|------|-------|
+| 158 | Residential Purchase Contract (6 pages) | parties, property, legal description, goods, price, completion day, deposits, dower, conditions, brokerages, conveyancing; signature/date/initials for two buyers and two sellers |
+| 160 | Amendment | header, delete/insert paragraphs, four signature blocks |
+| 159 | Addendum | header, terms, four signature blocks |
+| 163 | Notice (waiver / satisfaction of conditions) | header, party, conditions, two signature blocks (buyer slots; switch to seller in the editor when the seller waives) |
+| 123 | Exclusive Buyer Representation Agreement (4 pages) | buyer and brokerage details, term dates, signatures and initials for two buyers and the agent |
+
+Blanks WEBForms pre-prints on the export (the 11:59 p.m. condition times,
+"seller's" in 3.1(m), the payment-method choices, the agent's standard 9.2
+clauses) are left alone. A newer revision of a form keeps its number, so
+the layout still applies and the template's description says which
+revision it was measured on. Forms without a layout get a typed box on
+every underscored blank, labelled from the text beside it, to bind or
+delete. Several PDFs can be uploaded at once; password-protected WEBForms
+exports are decrypted like any other upload.
+
+The blank PDFs are AREA members' material and are not in this repository:
+only the box coordinates are. Export each blank once from WEBForms (open a
+transaction with nothing filled in, *Save as PDF*) and upload it under
+Forms.
 
 ### Getting forms in from WEBForms
 

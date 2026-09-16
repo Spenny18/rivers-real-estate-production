@@ -15,7 +15,7 @@
 export const FILL_TYPES = ["text", "multiline", "money", "date", "checkbox"] as const;
 export type FillType = (typeof FILL_TYPES)[number];
 
-export type BindingGroup = "property" | "buyer" | "seller" | "offer" | "amendment" | "listing" | "agent" | "document";
+export type BindingGroup = "property" | "buyer" | "seller" | "offer" | "conveyancing" | "amendment" | "agreement" | "listing" | "agent" | "document";
 
 export type BindingSource =
   | "deal" // the deal record or its MLS listing
@@ -73,7 +73,7 @@ function partyBindings(role: PartyRole): Binding[] {
 export const BINDINGS: Binding[] = [
   // Property — from the deal, topped up from the MLS listing when the deal
   // carries an MLS number that is in the Pillar 9 mirror.
-  { key: "property.address", label: "Property address", group: "property", type: "text", source: "deal" },
+  { key: "property.address", label: "Property address (one line)", group: "property", type: "text", source: "deal" },
   { key: "property.street", label: "Street address (no city)", group: "property", type: "text", source: "deal" },
   { key: "property.city", label: "City / town", group: "property", type: "text", source: "deal" },
   { key: "property.province", label: "Province", group: "property", type: "text", source: "deal" },
@@ -84,7 +84,7 @@ export const BINDINGS: Binding[] = [
   { key: "property.legalPlan", label: "Legal description — plan", group: "property", type: "text", source: "manual" },
   { key: "property.legalBlock", label: "Legal description — block", group: "property", type: "text", source: "manual" },
   { key: "property.legalLot", label: "Legal description — lot", group: "property", type: "text", source: "manual" },
-  { key: "property.legalUnit", label: "Legal description — unit / condo plan", group: "property", type: "text", source: "manual" },
+  { key: "property.legalOther", label: "Legal description — other (unit / condo plan)", group: "property", type: "text", source: "manual" },
   { key: "property.title", label: "Title number", group: "property", type: "text", source: "manual" },
 
   ...partyBindings("buyer"),
@@ -92,33 +92,70 @@ export const BINDINGS: Binding[] = [
 
   // The offer — typed once, carried forward to the counter and the amendment.
   { key: "offer.price", label: "Purchase price", group: "offer", type: "money", source: "manual" },
-  { key: "offer.deposit", label: "Initial deposit", group: "offer", type: "money", source: "manual" },
-  { key: "offer.depositDue", label: "Initial deposit due", group: "offer", type: "text", source: "manual", hint: "e.g. within 2 business days of acceptance" },
-  { key: "offer.additionalDeposit", label: "Additional deposit", group: "offer", type: "money", source: "manual" },
-  { key: "offer.additionalDepositDue", label: "Additional deposit due", group: "offer", type: "text", source: "manual" },
-  { key: "offer.depositHolder", label: "Deposit held by (brokerage)", group: "offer", type: "text", source: "manual" },
-  { key: "offer.financing", label: "New financing amount", group: "offer", type: "money", source: "manual" },
-  { key: "offer.balance", label: "Balance owing on completion", group: "offer", type: "money", source: "manual" },
   { key: "offer.completionDay", label: "Completion day", group: "offer", type: "date", source: "manual" },
-  { key: "offer.conditionDay", label: "Condition day", group: "offer", type: "date", source: "manual" },
-  { key: "offer.openUntilDate", label: "Offer open until — date", group: "offer", type: "date", source: "manual" },
-  { key: "offer.openUntilTime", label: "Offer open until — time", group: "offer", type: "text", source: "manual", hint: "e.g. 9:00 p.m." },
-  { key: "offer.attachedGoods", label: "Attached goods — exclusions", group: "offer", type: "multiline", source: "manual" },
-  { key: "offer.unattachedGoods", label: "Unattached goods — inclusions", group: "offer", type: "multiline", source: "manual" },
-  { key: "offer.additionalTerms", label: "Additional terms", group: "offer", type: "multiline", source: "manual" },
-  { key: "offer.buyerConditions", label: "Buyer's conditions", group: "offer", type: "multiline", source: "manual" },
+  { key: "offer.unattachedGoods", label: "Unattached goods included", group: "offer", type: "multiline", source: "manual" },
+  { key: "offer.attachedGoods", label: "Attached goods excluded", group: "offer", type: "multiline", source: "manual" },
+  { key: "offer.depositHolder", label: "Deposit trustee (brokerage)", group: "offer", type: "text", source: "manual" },
+  { key: "offer.deposit", label: "Initial deposit", group: "offer", type: "money", source: "manual" },
+  { key: "offer.depositMethod", label: "Initial deposit — method of payment", group: "offer", type: "text", source: "manual", hint: "e.g. bank draft, wire transfer, direct deposit" },
+  { key: "offer.depositDueTime", label: "Initial deposit due — time", group: "offer", type: "text", source: "manual", hint: "e.g. 11:59 p" },
+  { key: "offer.depositDueDate", label: "Initial deposit due — date", group: "offer", type: "date", source: "manual" },
+  { key: "offer.additionalDeposit", label: "Additional deposit", group: "offer", type: "money", source: "manual" },
+  { key: "offer.additionalDepositMethod", label: "Additional deposit — method of payment", group: "offer", type: "text", source: "manual" },
+  { key: "offer.additionalDepositDueTime", label: "Additional deposit due — time", group: "offer", type: "text", source: "manual", hint: "e.g. 11:59 p" },
+  { key: "offer.additionalDepositDueDate", label: "Additional deposit due — date", group: "offer", type: "date", source: "manual" },
+  { key: "offer.dowerTime", label: "Dower consent due — time", group: "offer", type: "text", source: "manual", hint: "e.g. 11:59 p" },
+  { key: "offer.dowerDate", label: "Dower consent due — date", group: "offer", type: "date", source: "manual" },
+  { key: "offer.downPaymentPercent", label: "Financing — down payment (%)", group: "offer", type: "text", source: "manual", hint: "Just the number, e.g. 20" },
+  { key: "offer.financingConditionDay", label: "Financing condition day", group: "offer", type: "date", source: "manual" },
+  { key: "offer.inspectionConditionDay", label: "Property inspection condition day", group: "offer", type: "date", source: "manual" },
+  { key: "offer.saleConditionTime", label: "Sale of buyer's property — time", group: "offer", type: "text", source: "manual", hint: "e.g. 11:59 p" },
+  { key: "offer.saleConditionDay", label: "Sale of buyer's property — condition day", group: "offer", type: "date", source: "manual" },
+  { key: "offer.buyerConditions", label: "Additional buyer's conditions", group: "offer", type: "multiline", source: "manual" },
+  { key: "offer.buyerConditionsTime", label: "Additional buyer's conditions — time", group: "offer", type: "text", source: "manual", hint: "e.g. 11:59 p" },
+  { key: "offer.buyerConditionsDay", label: "Additional buyer's conditions — condition day", group: "offer", type: "date", source: "manual" },
   { key: "offer.sellerConditions", label: "Seller's conditions", group: "offer", type: "multiline", source: "manual" },
+  { key: "offer.sellerConditionsTime", label: "Seller's conditions — time", group: "offer", type: "text", source: "manual", hint: "e.g. 11:59 p" },
+  { key: "offer.sellerConditionsDay", label: "Seller's conditions — condition day", group: "offer", type: "date", source: "manual" },
+  { key: "offer.otherAttachment", label: "Other attached document", group: "offer", type: "text", source: "manual" },
+  { key: "offer.additionalTerms", label: "Additional terms", group: "offer", type: "multiline", source: "manual" },
+  { key: "offer.openUntilTime", label: "Offer open until — time", group: "offer", type: "text", source: "manual", hint: "e.g. 9:00 p" },
+  { key: "offer.openUntilDate", label: "Offer open until — date", group: "offer", type: "date", source: "manual" },
+  { key: "offer.contractProvidedBy", label: "Brokerage providing the contract to lawyers", group: "offer", type: "text", source: "manual", hint: "seller's or buyer's" },
 
-  // Amendments and counters refer back to the contract they change.
-  { key: "amendment.contractDate", label: "Date of the contract being amended", group: "amendment", type: "date", source: "manual" },
-  { key: "amendment.terms", label: "Amendment — the changes", group: "amendment", type: "multiline", source: "manual" },
-  { key: "amendment.openUntilDate", label: "Amendment open until — date", group: "amendment", type: "date", source: "manual" },
-  { key: "amendment.openUntilTime", label: "Amendment open until — time", group: "amendment", type: "text", source: "manual" },
+  // Conveyancing: the lawyers on each side.
+  { key: "conveyancing.sellerLawyer", label: "Seller's lawyer", group: "conveyancing", type: "text", source: "manual" },
+  { key: "conveyancing.sellerLawyerFirm", label: "Seller's lawyer — firm", group: "conveyancing", type: "text", source: "manual" },
+  { key: "conveyancing.sellerLawyerAddress", label: "Seller's lawyer — address", group: "conveyancing", type: "text", source: "manual" },
+  { key: "conveyancing.sellerLawyerPhone", label: "Seller's lawyer — phone", group: "conveyancing", type: "text", source: "manual" },
+  { key: "conveyancing.sellerLawyerEmail", label: "Seller's lawyer — email", group: "conveyancing", type: "text", source: "manual" },
+  { key: "conveyancing.buyerLawyer", label: "Buyer's lawyer", group: "conveyancing", type: "text", source: "manual" },
+  { key: "conveyancing.buyerLawyerFirm", label: "Buyer's lawyer — firm", group: "conveyancing", type: "text", source: "manual" },
+  { key: "conveyancing.buyerLawyerAddress", label: "Buyer's lawyer — address", group: "conveyancing", type: "text", source: "manual" },
+  { key: "conveyancing.buyerLawyerPhone", label: "Buyer's lawyer — phone", group: "conveyancing", type: "text", source: "manual" },
+  { key: "conveyancing.buyerLawyerEmail", label: "Buyer's lawyer — email", group: "conveyancing", type: "text", source: "manual" },
+
+  // Amendments, addenda and notices refer back to the contract they change.
+  { key: "amendment.delete", label: "Amendment — delete", group: "amendment", type: "multiline", source: "manual" },
+  { key: "amendment.insert", label: "Amendment — insert", group: "amendment", type: "multiline", source: "manual" },
+  { key: "addendum.terms", label: "Addendum — additional terms", group: "amendment", type: "multiline", source: "manual" },
+  { key: "notice.party", label: "Notice given by (seller or buyer)", group: "amendment", type: "text", source: "manual" },
+  { key: "notice.conditions", label: "Conditions waived or satisfied", group: "amendment", type: "multiline", source: "manual" },
+
+  // Representation agreements.
+  { key: "agreement.startDate", label: "Agreement begins — date", group: "agreement", type: "date", source: "manual" },
+  { key: "agreement.startTime", label: "Agreement begins — time", group: "agreement", type: "text", source: "manual", hint: "e.g. 12:01 a" },
+  { key: "agreement.endDate", label: "Agreement ends — date", group: "agreement", type: "date", source: "manual" },
+  { key: "agreement.endTime", label: "Agreement ends — time", group: "agreement", type: "text", source: "manual", hint: "e.g. 11:59 p" },
+  { key: "agreement.fee", label: "Fee", group: "agreement", type: "text", source: "manual" },
+  { key: "agreement.retainer", label: "Retainer", group: "agreement", type: "money", source: "manual" },
 
   // Listing brokerage, from the MLS mirror.
   { key: "listing.brokerage", label: "Listing brokerage", group: "listing", type: "text", source: "listing" },
+  { key: "listing.brokerageAddress", label: "Listing brokerage — address", group: "listing", type: "text", source: "manual" },
   { key: "listing.agent", label: "Listing agent", group: "listing", type: "text", source: "listing" },
   { key: "listing.agentPhone", label: "Listing agent phone", group: "listing", type: "text", source: "listing" },
+  { key: "listing.agentEmail", label: "Listing agent email", group: "listing", type: "text", source: "manual" },
 
   // The agent's own details.
   { key: "agent.name", label: "Agent name", group: "agent", type: "text", source: "agent" },
@@ -127,7 +164,8 @@ export const BINDINGS: Binding[] = [
   { key: "agent.email", label: "Agent email", group: "agent", type: "text", source: "agent" },
   { key: "agent.address", label: "Brokerage address", group: "agent", type: "text", source: "agent" },
 
-  // Filled when the document is created.
+  // Filled when the document is created, or typed once per deal.
+  { key: "document.number", label: "Contract / agreement number", group: "document", type: "text", source: "manual", hint: "Printed in the top-right of every page" },
   { key: "document.date", label: "Today's date", group: "document", type: "date", source: "auto" },
   { key: "document.year", label: "Today's year (two digits)", group: "document", type: "text", source: "auto" },
 ];
@@ -139,7 +177,9 @@ export const BINDING_GROUP_LABELS: Record<BindingGroup, string> = {
   buyer: "Buyers",
   seller: "Sellers",
   offer: "The offer",
-  amendment: "Amendment",
+  conveyancing: "Conveyancing",
+  amendment: "Amendment / notice",
+  agreement: "Representation agreement",
   listing: "Listing brokerage",
   agent: "Agent",
   document: "Document",
@@ -166,37 +206,77 @@ export function bindingLabel(key: string, label?: string | null): string {
 }
 
 // ---- Printing -----------------------------------------------------------------------
+//
+// A fill box's `format` picks how a money or date value is printed, because
+// the blank on the form already carries part of it: AREA prints "$" before
+// the price, and its date blanks read "____________, 20___" so the month and
+// day go in one box and the last two digits of the year in another.
+
+export const MONEY_FORMATS = [
+  { id: "dollar", label: "$650,000.00" },
+  { id: "plain", label: "650,000.00 (the form prints the $)" },
+  { id: "whole", label: "$650,000" },
+] as const;
+
+export const DATE_FILL_FORMATS = [
+  { id: "long", label: "October 15, 2026" },
+  { id: "short", label: "Oct 15, 2026" },
+  { id: "month-day", label: "October 15 (for a “, 20__” blank)" },
+  { id: "yy", label: "26 (just the two-digit year)" },
+  { id: "iso", label: "2026-10-15" },
+  { id: "numeric", label: "15/10/2026" },
+] as const;
+
+export const DEFAULT_MONEY_FORMAT = "dollar";
+export const DEFAULT_DATE_FILL_FORMAT = "long";
 
 /** "650000" | "$650,000" | "650,000.5" → "$650,000.50"; anything unparseable prints as typed. */
-export function formatMoney(raw: string): string {
+export function formatMoney(raw: string, format: string | null | undefined = DEFAULT_MONEY_FORMAT): string {
   const s = raw.trim();
   if (!s) return "";
   const cleaned = s.replace(/[$,\s]/g, "");
   if (!/^-?\d+(\.\d{1,2})?$/.test(cleaned)) return s;
   const n = Number(cleaned);
-  return `$${n.toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const digits = format === "whole" ? 0 : 2;
+  const num = n.toLocaleString("en-CA", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  return format === "plain" ? num : `$${num}`;
 }
 
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
-/** "2026-10-15" → "October 15, 2026"; anything else prints as typed. */
-export function formatDateValue(raw: string): string {
+/** "2026-10-15" → "October 15, 2026" (or the chosen format); anything else prints as typed. */
+export function formatDateValue(raw: string, format: string | null | undefined = DEFAULT_DATE_FILL_FORMAT): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw.trim());
   if (!m) return raw.trim();
   const month = MONTHS[Number(m[2]) - 1];
   if (!month) return raw.trim();
-  return `${month} ${Number(m[3])}, ${m[1]}`;
+  const day = Number(m[3]);
+  switch (format) {
+    case "short":
+      return `${month.slice(0, 3)} ${day}, ${m[1]}`;
+    case "month-day":
+      return `${month} ${day}`;
+    case "yy":
+      return m[1].slice(-2);
+    case "iso":
+      return `${m[1]}-${m[2]}-${m[3]}`;
+    case "numeric":
+      return `${m[3]}/${m[2]}/${m[1]}`;
+    case "long":
+    default:
+      return `${month} ${day}, ${m[1]}`;
+  }
 }
 
 /** The text printed in a fill box for a stored value. */
-export function formatFillValue(type: FillType, raw: string | null | undefined): string {
+export function formatFillValue(type: FillType, raw: string | null | undefined, format?: string | null): string {
   const s = (raw ?? "").trim();
   if (!s) return "";
   switch (type) {
     case "money":
-      return formatMoney(s);
+      return formatMoney(s, format);
     case "date":
-      return formatDateValue(s);
+      return formatDateValue(s, format);
     case "checkbox":
       return s === "true" ? "true" : "";
     default:

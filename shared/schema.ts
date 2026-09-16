@@ -1396,6 +1396,8 @@ export const formFillFieldSchema = z.object({
   align: z.enum(["left", "center", "right"]).optional(),
   // Points; null = fit the box.
   fontSize: z.number().min(4).max(24).nullable().optional(),
+  // MONEY_FORMATS / DATE_FILL_FORMATS id (shared/form-bindings.ts); null = default.
+  format: z.string().max(20).nullable().optional(),
 });
 export type FormFillField = z.infer<typeof formFillFieldSchema>;
 

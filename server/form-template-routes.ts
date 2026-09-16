@@ -75,7 +75,8 @@ export function registerFormTemplateRoutes(app: Express, deps: { requireAuth: Mi
   });
 
   const uploadSchema = z.object({
-    name: z.string().trim().min(1, "Give the form a name").max(120),
+    name: z.string().trim().max(120).optional(),
+    filename: z.string().trim().max(200).optional(),
     kind: z.enum(FORM_TEMPLATE_KINDS).optional(),
     description: z.string().trim().max(500).optional(),
     dataUrl: z.string().min(20, "Choose the blank form PDF"),
@@ -88,9 +89,9 @@ export function registerFormTemplateRoutes(app: Express, deps: { requireAuth: Mi
     if (!m) return bad(res, 400, "Only PDF files can be used as a form.");
     const bytes = Buffer.from(m[1].replace(/\s+/g, ""), "base64");
     try {
-      const t = await importFormTemplate({ name: parsed.data.name, kind: parsed.data.kind ?? "other", description: parsed.data.description, bytes });
+      const r = await importFormTemplate({ name: parsed.data.name ?? "", filename: parsed.data.filename, kind: parsed.data.kind ?? "other", description: parsed.data.description, bytes });
       queueDocumentsBackup();
-      res.status(201).json(detail(t));
+      res.status(201).json({ ...detail(r.template), matched: r.matched, detected: r.detected });
     } catch (e: any) {
       const msg = String(e?.message ?? "Could not read that PDF.");
       return bad(res, /10 MB/.test(msg) ? 413 : 400, msg);
