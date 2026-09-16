@@ -1,8 +1,9 @@
 // /admin/deals/:id — one transaction: its details and its documents.
 //
-// Documents arrive as PDFs (exported from CREA WEBForms). Uploading one opens
-// its workspace (/admin/deals/:id/documents/:docId) where signers and
-// signature boxes are set up and the document is sent.
+// Documents are produced from a form template (/admin/forms) with the deal's
+// data filled in, or arrive as PDFs exported from CREA WEBForms. Either way
+// they open in their workspace (/admin/deals/:id/documents/:docId) where
+// signers and signature boxes are set up and the document is sent.
 
 import { useRef, useState } from "react";
 import { Link, useParams } from "wouter";
@@ -16,7 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, CheckCircle2, Clock, Copy, ExternalLink, FileText, Inbox, Loader2, Mail, Plus, RefreshCw, Save, Search, Trash2, Upload, X, XCircle } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Clock, Copy, ExternalLink, FilePlus2, FileStack, FileText, Inbox, Loader2, Mail, Plus, RefreshCw, Save, Search, Trash2, Upload, X, XCircle } from "lucide-react";
 import { apiErrorMessage, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -27,7 +28,9 @@ import {
   type DealView,
   type DocumentDetail,
   type DocumentSummary,
+  type FormTemplateSummary,
   type InboxStatus,
+  FORM_KIND_LABELS,
 } from "@/lib/esign-types";
 import type { Lead } from "@shared/schema";
 
@@ -73,6 +76,8 @@ export default function AdminDealPage() {
 
   const [edit, setEdit] = useState<Partial<DealView> | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [pickingForm, setPickingForm] = useState(false);
+  const { data: forms = [] } = useQuery<FormTemplateSummary[]>({ queryKey: ["/api/admin/form-templates"] });
   const [file, setFile] = useState<File | null>(null);
   const [docTitle, setDocTitle] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
@@ -152,8 +157,11 @@ export default function AdminDealPage() {
           <Link href="/admin/deals" className="inline-flex items-center text-[12px] text-muted-foreground hover:text-foreground mr-2">
             <ArrowLeft className="h-4 w-4 mr-1" /> All deals
           </Link>
-          <Button size="sm" onClick={() => setUploading(true)} data-testid="button-upload-document">
-            <Plus className="h-4 w-4 mr-1" /> Add document
+          <Button size="sm" variant="outline" onClick={() => setUploading(true)} data-testid="button-upload-document">
+            <Upload className="h-4 w-4 mr-1" /> Upload PDF
+          </Button>
+          <Button size="sm" onClick={() => setPickingForm(true)} data-testid="button-new-from-form">
+            <FilePlus2 className="h-4 w-4 mr-1" /> New from form
           </Button>
         </div>
       }
@@ -168,12 +176,17 @@ export default function AdminDealPage() {
                 <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-3" strokeWidth={1.4} />
                 <div className="font-serif text-[20px] mb-1">No documents yet</div>
                 <p className="text-[13px] text-muted-foreground max-w-md mx-auto">
-                  In CREA WEBForms open the transaction, choose the forms and use <em>Print / Save as PDF</em>. Upload that PDF here, place the
-                  signature boxes, and send.
+                  Start a contract from one of your forms: the deal's details, the parties and the signature boxes are filled in for you. Or
+                  upload a PDF exported from CREA WEBForms and place the boxes yourself.
                 </p>
-                <Button className="mt-5" size="sm" onClick={() => setUploading(true)}>
-                  <Plus className="h-4 w-4 mr-1" /> Add document
-                </Button>
+                <div className="mt-5 flex items-center justify-center gap-2">
+                  <Button size="sm" onClick={() => setPickingForm(true)}>
+                    <FilePlus2 className="h-4 w-4 mr-1" /> New from form
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setUploading(true)}>
+                    <Upload className="h-4 w-4 mr-1" /> Upload PDF
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           ) : (
@@ -187,7 +200,7 @@ export default function AdminDealPage() {
                     </Link>
                     <div className="text-[12px] text-muted-foreground">
                       {d.pageCount} {d.pageCount === 1 ? "page" : "pages"} · {fmtBytes(d.originalBytes)}
-                      {d.source === "email" ? " · arrived by email" : ""}
+                      {d.source === "email" ? " · arrived by email" : d.source === "template" ? " · from a form" : ""}
                       {d.signerCount ? ` · ${d.signedCount}/${d.signerCount} signed` : " · no signers yet"}
                       {d.status === "sent" && d.sentAt ? ` · sent ${fmtDateTime(d.sentAt)}` : ""}
                       {d.status === "completed" && d.completedAt ? ` · completed ${fmtDateTime(d.completedAt)}` : ""}
@@ -295,6 +308,46 @@ export default function AdminDealPage() {
           </div>
         </div>
       </div>
+
+      <Dialog open={pickingForm} onOpenChange={(o) => !o && setPickingForm(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>New document from a form</DialogTitle>
+            <DialogDescription>Pick the form. You will review the filled-in values before anything is created.</DialogDescription>
+          </DialogHeader>
+          {forms.length === 0 ? (
+            <div className="text-[13px] text-muted-foreground">
+              No forms set up yet.{" "}
+              <Link href="/admin/forms" className="underline underline-offset-2">
+                Add a blank AREA form
+              </Link>{" "}
+              once and it is one click from then on.
+            </div>
+          ) : (
+            <div className="border border-border rounded-sm divide-y divide-border max-h-80 overflow-auto">
+              {forms.map((f) => (
+                <Link key={f.id} href={`/admin/deals/${deal.id}/forms/${f.id}`} className="flex items-center gap-3 p-3 hover:bg-secondary text-[13px]" data-testid={`pick-form-${f.id}`}>
+                  <FileStack className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium truncate">{f.name}</div>
+                    <div className="text-[11px] text-muted-foreground">
+                      {FORM_KIND_LABELS[f.kind] ?? f.kind} · {f.pageCount} pages · {f.fillCount} blanks filled for you · {f.signCount} signature boxes
+                    </div>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          )}
+          <DialogFooter>
+            <Link href="/admin/forms" className="text-[12px] text-muted-foreground underline underline-offset-2 mr-auto">
+              Manage forms
+            </Link>
+            <Button variant="outline" onClick={() => setPickingForm(false)}>
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={uploading} onOpenChange={(o) => !o && setUploading(false)}>
         <DialogContent>

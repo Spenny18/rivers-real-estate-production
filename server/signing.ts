@@ -50,7 +50,7 @@ export async function inspectPdf(bytes: Uint8Array): Promise<{ pageCount: number
 
 // ---- Drawing --------------------------------------------------------------------
 
-const INK = rgb(0.05, 0.08, 0.2);
+export const INK = rgb(0.05, 0.08, 0.2);
 const MUTE = rgb(0.42, 0.45, 0.5);
 const RULE = rgb(0.85, 0.86, 0.88);
 const GOLD = rgb(0.83, 0.69, 0.22);
@@ -71,20 +71,31 @@ const ASCII_STANDINS: Record<string, string> = {
   " ": " ",
   "→": "->",
 };
-function safe(s: string | null | undefined): string {
+export function safe(s: string | null | undefined): string {
   return String(s ?? "")
     .replace(/[—–‘’“”…• →]/g, (c) => ASCII_STANDINS[c] ?? "?")
     .replace(/[^\x20-\x7E\xA0-\xFF]/g, "?");
 }
 
-function fitText(font: PDFFont, text: string, maxWidth: number, startSize: number, minSize = 5): number {
+export function fitText(font: PDFFont, text: string, maxWidth: number, startSize: number, minSize = 5): number {
   let size = startSize;
   while (size > minSize && font.widthOfTextAtSize(text, size) > maxWidth) size -= 0.5;
   return size;
 }
 
+export interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface PageRect extends Box {
+  rotate: number;
+}
+
 /** Field box in page points, bottom-left origin, accounting for page rotation. */
-function fieldRect(page: PDFPage, f: DealField): { x: number; y: number; w: number; h: number; rotate: number } {
+export function fieldRect(page: PDFPage, f: Box): PageRect {
   const { width, height } = page.getSize();
   const rot = ((page.getRotation().angle % 360) + 360) % 360;
   if (rot === 0) {
@@ -144,15 +155,17 @@ function drawImageInBox(page: PDFPage, img: PDFImage, r: { x: number; y: number;
   }
 }
 
-function drawTextInBox(page: PDFPage, ctx: DrawContext, text: string, r: { x: number; y: number; w: number; h: number; rotate: number }) {
+export function drawTextInBox(page: PDFPage, ctx: Pick<DrawContext, "font">, text: string, r: PageRect, opts: { align?: "left" | "center" | "right"; maxSize?: number } = {}) {
   const t = safe(text);
   if (!t) return;
   const boxW = r.rotate === 0 ? r.w : r.h;
   const boxH = r.rotate === 0 ? r.h : r.w;
-  const size = fitText(ctx.font, t, boxW - 6, Math.min(boxH * 0.62, 11));
+  const size = fitText(ctx.font, t, boxW - 6, Math.min(boxH * 0.62, opts.maxSize ?? 11));
   const textH = ctx.font.heightAtSize(size);
   if (r.rotate === 0) {
-    page.drawText(t, { x: r.x + 3, y: r.y + (r.h - textH) / 2 + size * 0.22, size, font: ctx.font, color: INK });
+    const tw = ctx.font.widthOfTextAtSize(t, size);
+    const x = opts.align === "center" ? r.x + (r.w - tw) / 2 : opts.align === "right" ? r.x + r.w - 3 - tw : r.x + 3;
+    page.drawText(t, { x, y: r.y + (r.h - textH) / 2 + size * 0.22, size, font: ctx.font, color: INK });
   } else if (r.rotate === 90) {
     page.drawText(t, { x: r.x + r.w - (r.w - textH) / 2 - size * 0.22, y: r.y + 3, size, font: ctx.font, color: INK, rotate: degrees(90) });
   } else {
@@ -160,7 +173,7 @@ function drawTextInBox(page: PDFPage, ctx: DrawContext, text: string, r: { x: nu
   }
 }
 
-function drawCheck(page: PDFPage, r: { x: number; y: number; w: number; h: number }) {
+export function drawCheck(page: PDFPage, r: Box) {
   const s = Math.min(r.w, r.h) * 0.7;
   const cx = r.x + r.w / 2;
   const cy = r.y + r.h / 2;
@@ -428,7 +441,7 @@ function statusLabel(s: DealSigner): string {
   }
 }
 
-function wrap(font: PDFFont, text: string, size: number, maxWidth: number): string[] {
+export function wrap(font: PDFFont, text: string, size: number, maxWidth: number): string[] {
   const out: string[] = [];
   for (const para of text.split(/\r?\n/)) {
     const words = para.split(/\s+/).filter(Boolean);

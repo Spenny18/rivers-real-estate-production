@@ -29,6 +29,11 @@ export function nowIso(): string {
   return new Date().toISOString();
 }
 
+/** A signer's private credential: 256 bits, in the emailed link. */
+export function newSignerToken(): string {
+  return randomBytes(32).toString("base64url");
+}
+
 export interface Bundle {
   deal: Deal;
   document: DealDocument;
@@ -137,7 +142,7 @@ export interface ImportPdfInput {
   title: string;
   filename?: string | null;
   bytes: Buffer;
-  source: "upload" | "email";
+  source: "upload" | "email" | "template";
   /** Free text for the audit trail, e.g. "emailed by x@y from WEBForms". */
   detail?: string | null;
   ip?: string | null;

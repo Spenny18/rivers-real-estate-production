@@ -76,6 +76,9 @@ const AdminNewsletterPage = lazy(() => import("@/pages/admin-newsletter"));
 const AdminDealsPage = lazy(() => import("@/pages/admin-deals"));
 const AdminDealPage = lazy(() => import("@/pages/admin-deal"));
 const AdminDocumentPage = lazy(() => import("@/pages/admin-document"));
+const AdminDealFormPage = lazy(() => import("@/pages/admin-deal-form"));
+const AdminFormsPage = lazy(() => import("@/pages/admin-forms"));
+const AdminFormTemplatePage = lazy(() => import("@/pages/admin-form-template"));
 
 // E-signature — the signer's private page (/sign/<token>)
 const SignPage = lazy(() => import("@/pages/sign"));
@@ -224,6 +227,18 @@ function AppRouter() {
       <Route
         path="/admin/deals/:dealId/documents/:id"
         component={() => <ProtectedRoute component={AdminDocumentPage} />}
+      />
+      <Route
+        path="/admin/deals/:id/forms/:templateId"
+        component={() => <ProtectedRoute component={AdminDealFormPage} />}
+      />
+      <Route
+        path="/admin/forms"
+        component={() => <ProtectedRoute component={AdminFormsPage} />}
+      />
+      <Route
+        path="/admin/forms/:id"
+        component={() => <ProtectedRoute component={AdminFormTemplatePage} />}
       />
       <Route
         path="/admin/marketing"
