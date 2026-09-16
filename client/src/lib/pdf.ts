@@ -24,8 +24,8 @@ function pdfjs() {
 }
 
 /** Fetch a PDF (with the app's auth headers when relevant) and open it. */
-export async function loadPdf(url: string, headers: Record<string, string> = {}): Promise<PDFDocumentProxy> {
-  const res = await fetch(url, { credentials: "include", headers });
+export async function loadPdf(url: string, headers: Record<string, string> = {}, init: RequestInit = {}): Promise<PDFDocumentProxy> {
+  const res = await fetch(url, { credentials: "include", ...init, headers: { ...headers, ...(init.headers as Record<string, string> | undefined) } });
   if (!res.ok) throw new Error(`${res.status}: could not load the PDF`);
   const data = await res.arrayBuffer();
   const mod = await pdfjs();

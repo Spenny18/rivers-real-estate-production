@@ -23,9 +23,13 @@ export interface PdfPagesProps {
   className?: string;
   /** Called once the document is opened; page count comes from the PDF itself. */
   onLoaded?: (pageCount: number) => void;
+  /** Extra fetch options (e.g. POST a body to a preview endpoint). */
+  init?: RequestInit;
+  /** Changes reload the document even when the URL is the same. */
+  version?: string | number;
 }
 
-export function PdfPages({ url, headers, pageSizes, width, overlay, onPageClick, className, onLoaded }: PdfPagesProps) {
+export function PdfPages({ url, headers, pageSizes, width, overlay, onPageClick, className, onLoaded, init, version }: PdfPagesProps) {
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,7 +38,7 @@ export function PdfPages({ url, headers, pageSizes, width, overlay, onPageClick,
     let opened: PDFDocumentProxy | null = null;
     setDoc(null);
     setError(null);
-    loadPdf(url, headers)
+    loadPdf(url, headers, init)
       .then((d) => {
         if (cancelled) {
           d.destroy();
@@ -51,9 +55,9 @@ export function PdfPages({ url, headers, pageSizes, width, overlay, onPageClick,
       cancelled = true;
       opened?.destroy();
     };
-    // headers are per-URL; the URL is the identity of the document.
+    // headers are per-URL; the URL (plus version) is the identity of the document.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url]);
+  }, [url, version]);
 
   if (error) {
     return <div className="text-[13px] text-destructive py-8 text-center">{error}</div>;
@@ -73,7 +77,7 @@ export function PdfPages({ url, headers, pageSizes, width, overlay, onPageClick,
         const size = pageSizes[i] ?? pageSizes[0] ?? { w: 612, h: 792 };
         const height = (width * size.h) / size.w;
         return (
-          <div key={i} className="relative mx-auto mb-6 bg-white shadow-[0_1px_3px_rgba(0,0,0,0.18),0_8px_24px_rgba(0,0,0,0.08)]" style={{ width, height }}>
+          <div key={i} data-page={i + 1} className="relative mx-auto mb-6 bg-white shadow-[0_1px_3px_rgba(0,0,0,0.18),0_8px_24px_rgba(0,0,0,0.08)]" style={{ width, height }}>
             <PageCanvas doc={doc} page={i + 1} width={width} />
             <div
               className="absolute inset-0"

@@ -143,12 +143,13 @@ events; the admin card flags this and one reconnect fixes it.
 
 ## Deals & e-signature
 
-The transaction file and the in-house replacement for Authentisign. Deals
-live at `/admin/deals`; each one holds the PDFs for a transaction, who signs
-them, and the evidence of what happened. CREA WEBForms stays the place forms
-are filled in — it has no API, so the bridge is its own *Save as PDF*: export
-the completed forms, upload the PDF to the deal, place the signature boxes,
-send. Nothing is subscribed to.
+The transaction file and the in-house replacement for Authentisign — and,
+with form templates, for the day-to-day of CREA WEBForms. Deals live at
+`/admin/deals`; each one holds the PDFs for a transaction, who signs them,
+and the evidence of what happened. A document is produced from a form
+template with the deal's data filled in (*New from form*), or arrives as a
+PDF exported from WEBForms (uploaded or emailed to the deal's address).
+Nothing is subscribed to.
 
 - **Documents** (`deal_documents`) are stored under `DOCUMENTS_ROOT`
   (`/data/documents` in production, `data/documents` locally), which is
@@ -188,6 +189,47 @@ send. Nothing is subscribed to.
 - **Records are kept.** A sent or completed document cannot be deleted, only
   voided (not completed ones), and a deal with such documents can be archived
   but not deleted.
+
+### Form templates (filling AREA forms here instead of in WEBForms)
+
+`/admin/forms` holds blank AREA forms with their boxes drawn on once. A form
+template (`form_templates`, blank stored at `templates/<id>/blank.pdf` under
+`DOCUMENTS_ROOT`) carries two kinds of box, placed in the same editor as
+signature boxes (`/admin/forms/:id`):
+
+- **Fill boxes** print a value into a blank. Each is bound to a key from the
+  catalogue in `shared/form-bindings.ts` — property address, MLS® number,
+  list price, first/second buyer and seller (name, email, phone, address),
+  purchase price, deposits, completion and condition days, additional terms,
+  listing brokerage, the agent's own details, today's date — or to a custom
+  blank typed each time. The same key on several boxes prints the same value
+  in each (the address at the top of every page). Dollar amounts print as
+  `$650,000.00`, dates as `October 15, 2026`, paragraphs wrap and shrink to
+  fit the box.
+- **Sign boxes** are keyed by signer slot (first buyer, second buyer, first
+  seller, agent…) and become the document's signature / initials / date
+  boxes, with the date format chosen per box.
+
+*New from form* on a deal opens the review screen
+(`/admin/deals/:id/forms/:templateId`). The server pre-fills what it knows
+(`prefillForDeal` in `server/form-templates.ts`): the deal and its listing in
+the Pillar 9 mirror (matched by MLS® number), the linked Follow Up Boss
+person or website lead as the first buyer (first seller on a listing deal),
+the agent's details, and — for the counter-offer or the amendment — every
+answer typed on the previous form for this deal, with live data refreshed on
+top. The agent checks the parties, fills the rest against a live preview and
+creates the document: the blank is printed with pdf-lib, stored as the
+document's original (source `template`, the values kept in
+`deal_documents.form_values`), each party with a name and email becomes a
+signer, and the sign boxes land on the document. From there it is the
+ordinary flow: send, sign, certificate. Sign boxes whose party was left blank
+(no second buyer) are dropped and reported. Deleting a form leaves the
+documents made from it untouched.
+
+Start with the Residential Purchase Contract and the Amendment: in WEBForms
+open a transaction with nothing filled in and *Save as PDF* the blank form.
+Form revisions from AREA mean re-uploading the blank and redrawing the boxes;
+the values carry over because they are keyed by name, not position.
 
 ### Getting forms in from WEBForms
 

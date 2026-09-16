@@ -12,7 +12,6 @@
 // server/backup.ts for where the copies go.
 
 import type { Express, Request, Response, NextFunction } from "express";
-import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { desc, eq, inArray } from "drizzle-orm";
@@ -25,6 +24,7 @@ import {
   importPdfDocument,
   loadBundle,
   newInboxToken,
+  newSignerToken,
   nowIso,
   signersWhoCanSignNow,
   touchDeal,
@@ -87,10 +87,6 @@ function userAgent(req: Request): string {
 
 function agentEmail(): string {
   return process.env.SPENCER_NOTIFY_EMAIL || process.env.RESEND_FROM_EMAIL || AGENT.email;
-}
-
-function newToken(): string {
-  return randomBytes(32).toString("base64url");
 }
 
 function bad(res: Response, status: number, message: string) {
@@ -160,6 +156,7 @@ function documentSummary(d: DealDocument, signers: DealSigner[]) {
     title: d.title,
     originalFilename: d.originalFilename,
     source: d.source,
+    formTemplateId: d.formTemplateId,
     status: d.status,
     pageCount: d.pageCount,
     signingOrder: d.signingOrder,
@@ -177,11 +174,12 @@ function documentSummary(d: DealDocument, signers: DealSigner[]) {
   };
 }
 
-function documentDetail(b: Bundle, origin: string) {
+export function documentDetail(b: Bundle, origin: string) {
   return {
     ...documentSummary(b.document, b.signers),
     message: b.document.message,
     voidReason: b.document.voidReason,
+    formValues: b.document.formValues ? (JSON.parse(b.document.formValues) as Record<string, string>) : null,
     pageSizes: JSON.parse(b.document.pageSizes) as Array<{ w: number; h: number }>,
     deal: { id: b.deal.id, title: b.deal.title, address: b.deal.address },
     signers: b.signers.map((s) => signerView(s, origin)),
@@ -381,6 +379,10 @@ function safeFilename(s: string): string {
 
 // ---- Routes --------------------------------------------------------------------------
 
+export function clientMeta(req: Request): { ip: string; userAgent: string } {
+  return { ip: clientIp(req), userAgent: userAgent(req) };
+}
+
 export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware; rateLimit: RateLimit }) {
   const { requireAuth, rateLimit } = deps;
   ensureDocumentsRoot();
@@ -550,7 +552,7 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
             email: s.email,
             role: s.role ?? "buyer",
             orderIndex: i,
-            token: newToken(),
+            token: newSignerToken(),
             status: "pending",
             createdAt: nowIso(),
           })

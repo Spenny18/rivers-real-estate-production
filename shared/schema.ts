@@ -1146,8 +1146,13 @@ export const dealDocuments = sqliteTable("deal_documents", {
   dealId: integer("deal_id").notNull(),
   title: text("title").notNull(),
   originalFilename: text("original_filename"),
-  // 'upload' | 'email' — how the PDF arrived.
+  // 'upload' | 'email' | 'template' — how the PDF arrived.
   source: text("source").notNull().default("upload"),
+  // Set when the PDF was produced from a form template (form_templates):
+  // which one, and the values printed into it (JSON Record<string,string>),
+  // so the next form on the deal can start from the same answers.
+  formTemplateId: integer("form_template_id"),
+  formValues: text("form_values"),
   // 'draft' | 'sent' | 'completed' | 'declined' | 'voided'
   status: text("status").notNull().default("draft"),
   storageKey: text("storage_key").notNull(),
@@ -1339,3 +1344,79 @@ export const dealInboundMessages = sqliteTable("deal_inbound_messages", {
   processedAt: text("processed_at").notNull(),
 });
 export type DealInboundMessage = typeof dealInboundMessages.$inferSelect;
+
+// ---- Form templates ---------------------------------------------------------------
+//
+// A blank AREA form (PDF) with boxes drawn on it once: fill boxes bound to
+// deal data (shared/form-bindings.ts) and sign boxes keyed by signer slot.
+// "New document from template" on a deal prints the values into the blank,
+// creates the draft with its signers and boxes already in place, and the
+// document then goes through the ordinary signing flow.
+export const FORM_TEMPLATE_KINDS = ["purchase", "amendment", "listing", "disclosure", "other"] as const;
+
+export const formTemplates = sqliteTable("form_templates", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  // One of FORM_TEMPLATE_KINDS: groups the picker and decides who the
+  // default parties are.
+  kind: text("kind").notNull().default("other"),
+  description: text("description"),
+  storageKey: text("storage_key").notNull(), // templates/<id>/blank.pdf under DOCUMENTS_ROOT
+  sha256: text("sha256").notNull(),
+  bytes: integer("bytes").notNull(),
+  pageCount: integer("page_count").notNull(),
+  pageSizes: text("page_sizes").notNull(), // JSON [{w,h}]
+  fields: text("fields").notNull().default("[]"), // JSON FormTemplateField[]
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+  updatedAt: text("updated_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+});
+export type FormTemplate = typeof formTemplates.$inferSelect;
+
+const boxGeometry = {
+  key: z.string().min(1).max(40),
+  page: z.number().int().min(1),
+  x: z.number().min(0).max(1),
+  y: z.number().min(0).max(1),
+  w: z.number().min(0.005).max(1),
+  h: z.number().min(0.005).max(1),
+};
+
+export const formFillFieldSchema = z.object({
+  kind: z.literal("fill"),
+  ...boxGeometry,
+  // The value key: a catalogue key (property.address, buyer.1.name,
+  // offer.price…) or custom.<slug> for a box typed on the review screen.
+  name: z.string().min(1).max(80),
+  label: z.string().max(80).nullable(),
+  dataType: z.enum(["text", "multiline", "money", "date", "checkbox"]),
+  align: z.enum(["left", "center", "right"]).optional(),
+  // Points; null = fit the box.
+  fontSize: z.number().min(4).max(24).nullable().optional(),
+});
+export type FormFillField = z.infer<typeof formFillFieldSchema>;
+
+export const formSignFieldSchema = z.object({
+  kind: z.literal("sign"),
+  ...boxGeometry,
+  role: z.enum(SIGNER_ROLES),
+  roleIndex: z.number().int().min(0).max(11),
+  type: z.enum(FIELD_TYPES),
+  required: z.boolean(),
+  label: z.string().max(80).nullable(),
+  format: z.string().max(20).nullable().optional(),
+});
+export type FormSignField = z.infer<typeof formSignFieldSchema>;
+
+export const formTemplateFieldSchema = z.discriminatedUnion("kind", [formFillFieldSchema, formSignFieldSchema]);
+export type FormTemplateField = z.infer<typeof formTemplateFieldSchema>;
+
+export const formTemplatePatchSchema = z.object({
+  name: z.string().trim().min(1, "Give the form a name").max(120).optional(),
+  kind: z.enum(FORM_TEMPLATE_KINDS).optional(),
+  description: z.string().trim().max(500).nullable().optional(),
+  fields: z.array(formTemplateFieldSchema).max(600).optional(),
+});

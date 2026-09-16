@@ -9,7 +9,7 @@
 // Field positions are fractions of the page, so what is placed here is what
 // server/signing.ts stamps.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
@@ -41,6 +41,7 @@ import {
 import { apiErrorMessage, apiRequest, apiUrl, getAuthToken } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { PdfPages } from "@/components/pdf-pages";
+import { PlacedBox } from "@/components/placed-box";
 import {
   FIELD_DEFAULT_SIZE,
   FIELD_LABELS,
@@ -924,35 +925,6 @@ function FieldBox({
   onChange: (patch: Partial<LocalField>) => void;
   onRemove: () => void;
 }) {
-  const drag = useRef<{ mode: "move" | "resize"; startX: number; startY: number; orig: LocalField; rect: DOMRect } | null>(null);
-
-  const onPointerDown = (mode: "move" | "resize") => (e: React.PointerEvent) => {
-    if (!editable) return;
-    e.stopPropagation();
-    e.preventDefault();
-    onSelect();
-    const pageEl = (e.currentTarget as HTMLElement).closest("[data-page]") as HTMLElement | null;
-    const rect = (pageEl ?? (e.currentTarget as HTMLElement).parentElement!).getBoundingClientRect();
-    drag.current = { mode, startX: e.clientX, startY: e.clientY, orig: { ...field }, rect };
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-  };
-  const onPointerMove = (e: React.PointerEvent) => {
-    const d = drag.current;
-    if (!d) return;
-    const dx = (e.clientX - d.startX) / d.rect.width;
-    const dy = (e.clientY - d.startY) / d.rect.height;
-    if (d.mode === "move") {
-      onChange({ x: clamp(d.orig.x + dx, 0, 1 - d.orig.w), y: clamp(d.orig.y + dy, 0, 1 - d.orig.h) });
-    } else {
-      const w = clamp(d.orig.w + dx, 0.01, 1 - d.orig.x);
-      const h = clamp(d.orig.h + dy, 0.008, 1 - d.orig.y);
-      onChange({ w, h });
-    }
-  };
-  const onPointerUp = () => {
-    drag.current = null;
-  };
-
   const label =
     field.type === "signature"
       ? "Sign"
@@ -963,61 +935,21 @@ function FieldBox({
           : field.type === "checkbox"
             ? ""
             : field.label || "Text";
+  const text = filled && field.type !== "signature" && field.type !== "initials" ? (field.type === "checkbox" ? (filled === "true" ? "✓" : "") : filled) : label;
   return (
-    <div
-      data-field={field.key}
-      className={`absolute select-none ${editable ? "cursor-move" : ""}`}
-      style={{
-        left: `${field.x * 100}%`,
-        top: `${field.y * 100}%`,
-        width: `${field.w * 100}%`,
-        height: `${field.h * 100}%`,
-        background: `${colour}22`,
-        border: `${selected ? 2 : 1.5}px ${selected ? "solid" : "dashed"} ${colour}`,
-        boxShadow: selected ? `0 0 0 3px ${colour}33` : undefined,
-        zIndex: selected ? 3 : 2,
-      }}
-      onPointerDown={onPointerDown("move")}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onClick={(e) => {
-        e.stopPropagation();
-        onSelect();
-      }}
+    <PlacedBox
+      id={field.key}
+      box={field}
+      colour={colour}
+      tag={signerName.split(" ")[0]}
+      text={text}
       title={`${signerName} · ${FIELD_LABELS[field.type]}${field.required ? "" : " (optional)"}`}
-    >
-      <div className="absolute inset-0 flex items-center px-1 overflow-hidden pointer-events-none">
-        <span className="text-[10px] leading-none truncate" style={{ color: colour }}>
-          {filled && field.type !== "signature" && field.type !== "initials" ? (field.type === "checkbox" ? (filled === "true" ? "✓" : "") : filled) : label}
-        </span>
-      </div>
-      <div className="absolute -top-4 left-0 text-[9px] leading-none px-1 py-0.5 whitespace-nowrap pointer-events-none" style={{ background: colour, color: "#fff" }}>
-        {signerName.split(" ")[0]}
-      </div>
-      {editable ? (
-        <>
-          <div
-            className="absolute -right-1.5 -bottom-1.5 w-3 h-3 rounded-sm cursor-nwse-resize"
-            style={{ background: colour }}
-            onPointerDown={onPointerDown("resize")}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-          />
-          {selected ? (
-            <button
-              className="absolute -top-4 -right-1 w-4 h-4 rounded-sm bg-foreground text-background flex items-center justify-center"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                e.stopPropagation();
-                onRemove();
-              }}
-            >
-              <Trash2 className="h-2.5 w-2.5" />
-            </button>
-          ) : null}
-        </>
-      ) : null}
-    </div>
+      editable={editable}
+      selected={selected}
+      onSelect={onSelect}
+      onChange={onChange}
+      onRemove={onRemove}
+    />
   );
 }
 

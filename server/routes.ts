@@ -563,6 +563,10 @@ export async function registerRoutes(
   try {
     const { registerDealRoutes } = await import("./deal-routes");
     registerDealRoutes(app, { requireAuth, rateLimit });
+    // Form templates: blank AREA forms filled from the deal, so a contract
+    // can be produced here instead of in WEBForms. See server/form-templates.ts.
+    const { registerFormTemplateRoutes } = await import("./form-template-routes");
+    registerFormTemplateRoutes(app, { requireAuth });
   } catch (e) {
     console.error("[esign] failed to register deal routes:", e);
   }

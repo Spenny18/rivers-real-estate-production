@@ -59,7 +59,8 @@ export interface DocumentSummary {
   dealId: number;
   title: string;
   originalFilename: string | null;
-  source: "upload" | "email";
+  source: "upload" | "email" | "template";
+  formTemplateId: number | null;
   status: "draft" | "sent" | "completed" | "declined" | "voided";
   pageCount: number;
   signingOrder: "parallel" | "sequential";
@@ -79,6 +80,7 @@ export interface DocumentSummary {
 export interface DocumentDetail extends DocumentSummary {
   message: string | null;
   voidReason: string | null;
+  formValues: Record<string, string> | null;
   pageSizes: PageSize[];
   deal: { id: number; title: string; address: string | null };
   signers: SignerView[];
@@ -293,4 +295,77 @@ export interface PortalDocument {
   signUrl: string;
   downloadUrl: string | null;
   others: Array<{ name: string; role: SignerRole; status: SignerView["status"] }>;
+}
+
+// ---- Form templates ---------------------------------------------------------------
+
+export type FormTemplateKind = "purchase" | "amendment" | "listing" | "disclosure" | "other";
+
+export const FORM_KIND_LABELS: Record<FormTemplateKind, string> = {
+  purchase: "Purchase contract",
+  amendment: "Amendment / counter",
+  listing: "Listing",
+  disclosure: "Disclosure",
+  other: "Other",
+};
+
+interface FormBoxBase {
+  key: string;
+  page: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface FormFillBox extends FormBoxBase {
+  kind: "fill";
+  name: string;
+  label: string | null;
+  dataType: "text" | "multiline" | "money" | "date" | "checkbox";
+  align?: "left" | "center" | "right";
+  fontSize?: number | null;
+}
+
+export interface FormSignBox extends FormBoxBase {
+  kind: "sign";
+  role: SignerRole;
+  roleIndex: number;
+  type: FieldType;
+  required: boolean;
+  label: string | null;
+  format?: string | null;
+}
+
+export type FormBox = FormFillBox | FormSignBox;
+
+export interface FormTemplateSummary {
+  id: number;
+  name: string;
+  kind: FormTemplateKind;
+  description: string | null;
+  pageCount: number;
+  pageSizes: PageSize[];
+  bytes: number;
+  sha256: string;
+  fillCount: number;
+  signCount: number;
+  slots: { buyer: number; seller: number };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FormTemplateDetail extends FormTemplateSummary {
+  fields: FormBox[];
+}
+
+export type PrefillSource = "deal" | "listing" | "agent" | "contact" | "previous" | "auto";
+
+export interface FormPrefill {
+  template: FormTemplateDetail;
+  values: Record<string, string>;
+  sources: Record<string, PrefillSource>;
+  carriedFrom: { id: number; title: string; createdAt: string } | null;
+  listing: { id: string; mlsNumber: string; address: string } | null;
+  slots: { buyer: number; seller: number };
 }

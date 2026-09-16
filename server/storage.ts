@@ -865,6 +865,8 @@ sqlite.exec(`
     title TEXT NOT NULL,
     original_filename TEXT,
     source TEXT NOT NULL DEFAULT 'upload',
+    form_template_id INTEGER,
+    form_values TEXT,
     status TEXT NOT NULL DEFAULT 'draft',
     storage_key TEXT NOT NULL,
     original_sha256 TEXT NOT NULL,
@@ -962,6 +964,20 @@ sqlite.exec(`
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS form_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'other',
+    description TEXT,
+    storage_key TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    bytes INTEGER NOT NULL,
+    page_count INTEGER NOT NULL,
+    page_sizes TEXT NOT NULL,
+    fields TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS deal_inbound_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     provider TEXT NOT NULL DEFAULT 'gmail',
@@ -1011,6 +1027,12 @@ try {
   if (docCols.size > 0 && !docCols.has("source")) {
     sqlite.exec("ALTER TABLE deal_documents ADD COLUMN source TEXT NOT NULL DEFAULT 'upload'");
     console.log("[migration] added source to deal_documents");
+  }
+  // Form templates: which template a document came from and the values printed.
+  if (docCols.size > 0 && !docCols.has("form_template_id")) {
+    sqlite.exec("ALTER TABLE deal_documents ADD COLUMN form_template_id INTEGER");
+    sqlite.exec("ALTER TABLE deal_documents ADD COLUMN form_values TEXT");
+    console.log("[migration] added form_template_id/form_values to deal_documents");
   }
 } catch (e) {
   console.error("[migration] deals phase two:", e);

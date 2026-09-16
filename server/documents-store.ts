@@ -11,6 +11,7 @@
 //   deals/<dealId>/<documentId>/signed.pdf       stamped + certificate
 //   deals/<dealId>/<documentId>/sig-<signerId>.png
 //   deals/<dealId>/<documentId>/ini-<signerId>.png
+//   templates/<templateId>/blank.pdf             a form template's blank PDF
 //
 // Nothing is rewritten in place; the backup job (server/backup.ts) relies on
 // that to copy each file offsite exactly once.
@@ -68,6 +69,10 @@ export function sha256Hex(bytes: Buffer | Uint8Array): string {
 
 export function documentKey(dealId: number, documentId: number, file: string): string {
   return path.posix.join("deals", String(dealId), String(documentId), file);
+}
+
+export function templateKey(templateId: number, file: string): string {
+  return path.posix.join("templates", String(templateId), file);
 }
 
 /** Every file under the root, as keys relative to it. */
