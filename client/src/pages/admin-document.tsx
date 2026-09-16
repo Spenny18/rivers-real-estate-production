@@ -47,6 +47,7 @@ import {
   ROLE_LABELS,
   fmtBytes,
   fmtDateTime,
+  isAutoField,
   signerColour,
   type DocumentDetail,
   type FieldTemplate,
@@ -56,6 +57,7 @@ import {
   type SignerView,
 } from "@/lib/esign-types";
 import { DOC_STATUS_LABELS, DOC_STATUS_STYLES } from "./admin-deal";
+import { DATE_FORMATS, TIME_FORMATS, DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT, formatStamp } from "@shared/esign-format";
 
 interface LocalField {
   key: string;
@@ -69,6 +71,7 @@ interface LocalField {
   h: number;
   required: boolean;
   label: string | null;
+  format: string | null;
 }
 
 interface LocalSigner {
@@ -80,7 +83,7 @@ interface LocalSigner {
 }
 
 const PAGE_WIDTH = 720;
-const FIELD_TYPES: FieldType[] = ["signature", "initials", "date", "text", "checkbox"];
+const FIELD_TYPES: FieldType[] = ["signature", "initials", "date", "time", "text", "checkbox"];
 
 function clamp(n: number, lo: number, hi: number) {
   return Math.min(hi, Math.max(lo, n));
@@ -91,7 +94,7 @@ function uid() {
 }
 
 function fromServerFields(fields: FieldView[]): LocalField[] {
-  return fields.map((f) => ({ key: `f${f.id}`, id: f.id, signerId: f.signerId, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required, label: f.label }));
+  return fields.map((f) => ({ key: `f${f.id}`, id: f.id, signerId: f.signerId, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required, label: f.label, format: f.format }));
 }
 
 function fromServerSigners(signers: SignerView[]): LocalSigner[] {
@@ -192,7 +195,7 @@ export default function AdminDocumentPage() {
       const res = await apiRequest(
         "PUT",
         `/api/admin/documents/${id}/fields`,
-        (fields ?? []).map((f) => ({ id: f.id, signerId: f.signerId, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required, label: f.label })),
+        (fields ?? []).map((f) => ({ id: f.id, signerId: f.signerId, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required, label: f.label, format: f.format })),
       );
       return (await res.json()) as DocumentDetail;
     },
@@ -341,6 +344,7 @@ export default function AdminDocumentPage() {
       h,
       required: true,
       label: null,
+      format: null,
     };
     setFields((fs) => [...(fs ?? []), f]);
     setFieldsDirty(true);
@@ -671,7 +675,8 @@ export default function AdminDocumentPage() {
                     ))}
                   </div>
                   <div className="text-[11px] text-muted-foreground leading-relaxed">
-                    Pick a type, then click on the page where it goes. Drag boxes to move them, drag the corner to resize, Delete to remove.
+                    Pick a type, then click on the page where it goes. Drag boxes to move them, drag the corner to resize, Delete to remove. Date and time
+                    boxes fill themselves with the moment the person signs.
                   </div>
                   {missingSignature.length > 0 ? (
                     <div className="text-[11px] text-amber-700">Needs a signature box: {missingSignature.map((s) => s.name || "unnamed").join(", ")}</div>
@@ -948,7 +953,16 @@ function FieldBox({
     drag.current = null;
   };
 
-  const label = field.type === "signature" ? "Sign" : field.type === "initials" ? "Initials" : field.type === "date" ? "Date" : field.type === "checkbox" ? "" : field.label || "Text";
+  const label =
+    field.type === "signature"
+      ? "Sign"
+      : field.type === "initials"
+        ? "Initials"
+        : isAutoField(field.type)
+          ? formatStamp(field.type as "date" | "time", field.format, new Date())
+          : field.type === "checkbox"
+            ? ""
+            : field.label || "Text";
   return (
     <div
       data-field={field.key}
@@ -1019,13 +1033,34 @@ function SelectedFieldEditor({ field, onChange, onRemove }: { field: LocalField;
             <Trash2 className="h-3.5 w-3.5 mr-1" /> Remove
           </Button>
         </div>
-        {field.type === "text" || field.type === "checkbox" || field.type === "date" ? (
+        {isAutoField(field.type) ? (
           <div className="space-y-1">
-            <Label className="text-[11px]">Label</Label>
-            <Input className="h-8 text-[12px]" value={field.label ?? ""} onChange={(e) => onChange({ label: e.target.value || null })} placeholder={field.type === "date" ? "Date signed" : "e.g. Deposit amount"} />
+            <Label className="text-[11px]">Printed as</Label>
+            <Select
+              value={field.format ?? (field.type === "date" ? DEFAULT_DATE_FORMAT : DEFAULT_TIME_FORMAT)}
+              onValueChange={(v) => onChange({ format: v })}
+            >
+              <SelectTrigger className="h-8 text-[12px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(field.type === "date" ? DATE_FORMATS : TIME_FORMATS).map((f) => (
+                  <SelectItem key={f.id} value={f.id}>
+                    {f.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="text-[11px] text-muted-foreground">Filled with the moment the signer signs, in Calgary time. Not editable by them.</div>
           </div>
         ) : null}
-        {field.type === "text" || field.type === "date" ? (
+        {field.type === "text" || field.type === "checkbox" ? (
+          <div className="space-y-1">
+            <Label className="text-[11px]">Label</Label>
+            <Input className="h-8 text-[12px]" value={field.label ?? ""} onChange={(e) => onChange({ label: e.target.value || null })} placeholder="e.g. Deposit amount" />
+          </div>
+        ) : null}
+        {field.type === "text" ? (
           <div className="flex items-center justify-between">
             <Label className="text-[11px]">Required</Label>
             <Switch checked={field.required} onCheckedChange={(v) => onChange({ required: v })} />

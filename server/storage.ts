@@ -920,6 +920,7 @@ sqlite.exec(`
     h REAL NOT NULL,
     required INTEGER NOT NULL DEFAULT 1,
     label TEXT,
+    format TEXT,
     value TEXT,
     filled_at TEXT
   );
@@ -1001,6 +1002,11 @@ try {
   const missing = sqlite.prepare("SELECT id FROM deals WHERE inbox_token IS NULL").all() as Array<{ id: number }>;
   const setTok = sqlite.prepare("UPDATE deals SET inbox_token = ? WHERE id = ?");
   for (const row of missing) setTok.run(randomBytes(5).toString("hex"), row.id);
+  const fieldCols = new Set((sqlite.prepare("PRAGMA table_info(deal_fields)").all() as Array<{ name: string }>).map((c) => c.name));
+  if (fieldCols.size > 0 && !fieldCols.has("format")) {
+    sqlite.exec("ALTER TABLE deal_fields ADD COLUMN format TEXT");
+    console.log("[migration] added format to deal_fields");
+  }
   const docCols = new Set((sqlite.prepare("PRAGMA table_info(deal_documents)").all() as Array<{ name: string }>).map((c) => c.name));
   if (docCols.size > 0 && !docCols.has("source")) {
     sqlite.exec("ALTER TABLE deal_documents ADD COLUMN source TEXT NOT NULL DEFAULT 'upload'");

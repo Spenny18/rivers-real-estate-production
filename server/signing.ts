@@ -16,6 +16,7 @@
 import { PDFDocument, PDFFont, PDFImage, PDFPage, StandardFonts, rgb, degrees } from "pdf-lib";
 import type { DealDocument, DealEvent, DealField, DealSigner, Deal } from "@shared/schema";
 import { AGENT } from "./brand";
+import { signatureCaption } from "@shared/esign-format";
 
 export interface PageSize {
   w: number;
@@ -207,13 +208,26 @@ export async function buildSignedPdf(input: SignedPdfInput): Promise<Uint8Array>
       case "initials": {
         const key = f.type === "signature" ? signer.signatureKey : signer.initialsKey;
         const img = key ? images.get(key) : undefined;
-        if (img) drawImageInBox(page, img, r);
+        if (!img) break;
+        if (f.type === "signature" && signer.signedAt && r.rotate === 0) {
+          // Like a wet signature on a stamped line: the image sits above a
+          // small caption with the moment it was recorded and the document id.
+          const capSize = Math.max(3.5, Math.min(5.5, r.h * 0.16));
+          const capH = capSize * 1.5;
+          drawImageInBox(page, img, { ...r, y: r.y + capH, h: r.h - capH });
+          const caption = safe(signatureCaption(new Date(signer.signedAt), `RRE-${input.deal.id}-${input.document.id}`));
+          const size = fitText(ctx.font, caption, r.w - 2, capSize, 3);
+          page.drawText(caption, { x: r.x + 1, y: r.y + 1, size, font: ctx.font, color: MUTE });
+        } else {
+          drawImageInBox(page, img, r);
+        }
         break;
       }
       case "checkbox":
         if (f.value === "true") drawCheck(page, r);
         break;
       case "date":
+      case "time":
       case "text":
         if (f.value) drawTextInBox(page, ctx, f.value, r);
         break;
