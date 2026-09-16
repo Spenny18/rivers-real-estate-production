@@ -15,8 +15,21 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { asc, desc, eq, inArray } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { db, storage } from "./storage";
+import {
+  type Bundle,
+  addEvent,
+  dealInboxAddress,
+  getDeal,
+  importPdfDocument,
+  loadBundle,
+  newInboxToken,
+  nowIso,
+  signersWhoCanSignNow,
+  touchDeal,
+  touchDocument,
+} from "./deal-store";
 import {
   deals,
   dealDocuments,
@@ -31,7 +44,6 @@ import {
   type DealDocument,
   type DealSigner,
   type DealField,
-  type DealEvent,
 } from "@shared/schema";
 import { z } from "zod";
 import {
@@ -44,22 +56,21 @@ import {
   sha256Hex,
   writeDocument,
 } from "./documents-store";
-import { buildSignedPdf, inspectPdf } from "./signing";
+import { buildSignedPdf } from "./signing";
 import { sendEmail, buildSignRequestHtml, buildSignedCopyHtml, buildSignAgentNoticeHtml } from "./email";
 import { publicOrigin } from "./origin";
 import { backupStatus, queueDocumentsBackup, runBackup } from "./backup";
 import { AGENT } from "./brand";
+import { inboxStatus, pollDealInbox, recentInboundForDeal } from "./deal-inbox";
+import { FUB_PERSON_URL, noteOnFub } from "./deal-fub";
+import { requireAccount, type AccountReq } from "./account";
+import { dealFieldTemplates, templateFieldSchema, type TemplateField } from "@shared/schema";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
 type RateLimit = (opts: { windowMs: number; max: number; key: string }) => Middleware;
 
-const MAX_PDF_BYTES = 10 * 1024 * 1024;
 const MAX_SIGNATURE_PNG_BYTES = 400 * 1024;
 const ATTACH_LIMIT_BYTES = 5 * 1024 * 1024;
-
-function nowIso(): string {
-  return new Date().toISOString();
-}
 
 function clientIp(req: Request): string {
   return (
@@ -89,71 +100,14 @@ function firstIssue(err: z.ZodError): string {
   return err.issues[0]?.message ?? "Invalid input";
 }
 
-// ---- Data access ----------------------------------------------------------------
-
-interface Bundle {
-  deal: Deal;
-  document: DealDocument;
-  signers: DealSigner[];
-  fields: DealField[];
-  events: DealEvent[];
-}
-
-function loadBundle(documentId: number): Bundle | null {
-  const document = db.select().from(dealDocuments).where(eq(dealDocuments.id, documentId)).get();
-  if (!document) return null;
-  const deal = db.select().from(deals).where(eq(deals.id, document.dealId)).get();
-  if (!deal) return null;
-  const signers = db
-    .select()
-    .from(dealSigners)
-    .where(eq(dealSigners.documentId, documentId))
-    .orderBy(asc(dealSigners.orderIndex), asc(dealSigners.id))
-    .all();
-  const fields = db.select().from(dealFields).where(eq(dealFields.documentId, documentId)).orderBy(asc(dealFields.id)).all();
-  const events = db.select().from(dealEvents).where(eq(dealEvents.documentId, documentId)).orderBy(asc(dealEvents.id)).all();
-  return { deal, document, signers, fields, events };
-}
-
-function addEvent(
-  documentId: number,
-  type: string,
-  opts: { signerId?: number | null; detail?: string | null; req?: Request } = {},
-): void {
-  db.insert(dealEvents)
-    .values({
-      documentId,
-      signerId: opts.signerId ?? null,
-      type,
-      detail: opts.detail ?? null,
-      ip: opts.req ? clientIp(opts.req) : null,
-      userAgent: opts.req ? userAgent(opts.req) : null,
-      at: nowIso(),
-    })
-    .run();
-}
-
-function touchDocument(id: number, patch: Partial<DealDocument>): DealDocument {
-  db.update(dealDocuments)
-    .set({ ...patch, updatedAt: nowIso() })
-    .where(eq(dealDocuments.id, id))
-    .run();
-  return db.select().from(dealDocuments).where(eq(dealDocuments.id, id)).get()!;
-}
-
-function touchDeal(id: number, patch: Partial<Deal>): Deal {
-  db.update(deals)
-    .set({ ...patch, updatedAt: nowIso() })
-    .where(eq(deals.id, id))
-    .run();
-  return db.select().from(deals).where(eq(deals.id, id)).get()!;
-}
-
-/** Whose turn it is. Parallel: everyone still pending. Sequential: the first. */
-function signersWhoCanSignNow(b: Bundle): DealSigner[] {
-  const open = b.signers.filter((s) => s.status !== "signed" && s.status !== "declined");
-  if (b.document.signingOrder === "sequential") return open.slice(0, 1);
-  return open;
+/** addEvent with the request's network details attached. */
+function addEventFromReq(documentId: number, type: string, opts: { signerId?: number | null; detail?: string | null; req?: Request } = {}) {
+  addEvent(documentId, type, {
+    signerId: opts.signerId,
+    detail: opts.detail,
+    ip: opts.req ? clientIp(opts.req) : null,
+    userAgent: opts.req ? userAgent(opts.req) : null,
+  });
 }
 
 // ---- Views ------------------------------------------------------------------------
@@ -203,6 +157,7 @@ function documentSummary(d: DealDocument, signers: DealSigner[]) {
     dealId: d.dealId,
     title: d.title,
     originalFilename: d.originalFilename,
+    source: d.source,
     status: d.status,
     pageCount: d.pageCount,
     signingOrder: d.signingOrder,
@@ -248,6 +203,8 @@ function dealView(d: Deal) {
   const signers = docIds.length ? db.select().from(dealSigners).where(inArray(dealSigners.documentId, docIds)).all() : [];
   const lead = d.leadId ? storage.getLead(d.leadId) : undefined;
   const awaiting = docs.filter((x) => x.status === "sent").length;
+  const contact = d.crmContactFubId ? storage.getCrmContact(d.crmContactFubId) : undefined;
+  const crmDeal = d.crmDealFubId ? storage.listCrmDeals({ contactFubId: d.crmContactFubId ?? undefined, limit: 200 }).find((x) => x.fubId === d.crmDealFubId) : undefined;
   return {
     id: d.id,
     title: d.title,
@@ -256,9 +213,26 @@ function dealView(d: Deal) {
     status: d.status,
     leadId: d.leadId,
     leadName: lead?.name ?? null,
+    leadEmail: lead?.email ?? null,
     listingId: d.listingId,
     mlsNumber: d.mlsNumber,
     notes: d.notes,
+    crmContactFubId: d.crmContactFubId,
+    crmContact: contact
+      ? { fubId: contact.fubId, name: contact.name, email: contact.email, phone: contact.phone, stage: contact.stage, url: FUB_PERSON_URL(contact.fubId) }
+      : null,
+    crmDealFubId: d.crmDealFubId,
+    crmDeal: crmDeal ? { fubId: crmDeal.fubId, name: crmDeal.name, stageName: crmDeal.stageName, value: crmDeal.value, status: crmDeal.status } : null,
+    inboxAddress: dealInboxAddress(d),
+    inbound: recentInboundForDeal(d.id).map((m) => ({
+      id: m.id,
+      from: m.fromAddress,
+      subject: m.subject,
+      receivedAt: m.receivedAt,
+      status: m.status,
+      detail: m.detail,
+      documentIds: JSON.parse(m.documentIds) as number[],
+    })),
     createdAt: d.createdAt,
     updatedAt: d.updatedAt,
     documentCount: docs.length,
@@ -294,9 +268,9 @@ async function emailSigner(b: Bundle, s: DealSigner, opts: { reminder?: boolean 
       .set({ lastEmailAt: nowIso(), status: s.status === "pending" ? "sent" : s.status })
       .where(eq(dealSigners.id, s.id))
       .run();
-    addEvent(b.document.id, opts.reminder ? "reminder" : "email_sent", { signerId: s.id, detail: s.email });
+    addEventFromReq(b.document.id, opts.reminder ? "reminder" : "email_sent", { signerId: s.id, detail: s.email });
   } else {
-    addEvent(b.document.id, "email_failed", { signerId: s.id, detail: r.error ?? "send failed" });
+    addEventFromReq(b.document.id, "email_failed", { signerId: s.id, detail: r.error ?? "send failed" });
     console.error(`[esign] email to ${s.email} failed:`, r.error);
   }
   return r.ok;
@@ -340,7 +314,7 @@ async function finalize(documentId: number): Promise<Bundle> {
   }
   const completedAt = nowIso();
   b.document = { ...b.document, completedAt };
-  addEvent(documentId, "completed");
+  addEventFromReq(documentId, "completed");
   b.events = loadBundle(documentId)!.events;
   const bytes = await buildSignedPdf({
     deal: b.deal,
@@ -391,6 +365,11 @@ async function finalize(documentId: number): Promise<Bundle> {
     if (!r.ok) console.error(`[esign] signed copy to ${s.email} failed:`, r.error);
   }
   await notifyAgent(b, "completed");
+  void noteOnFub(
+    b.deal,
+    `Signed: ${b.document.title}`,
+    `${b.document.title} was signed by all parties (${b.signers.map((s) => s.name).join(", ")}) on ${new Date(completedAt).toLocaleString("en-CA", { timeZone: "America/Edmonton" })}.\nDeal: ${b.deal.title}${b.deal.address ? ` — ${b.deal.address}` : ""}\nSigned file SHA-256: ${signedSha256}\n${origin}/admin/deals/${b.deal.id}/documents/${b.document.id}`,
+  );
   return loadBundle(documentId)!;
 }
 
@@ -433,6 +412,9 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
         listingId: v.listingId || null,
         mlsNumber: v.mlsNumber || null,
         notes: v.notes || null,
+        crmContactFubId: v.crmContactFubId || null,
+        crmDealFubId: v.crmDealFubId || null,
+        inboxToken: newInboxToken(),
         createdAt: nowIso(),
         updatedAt: nowIso(),
       })
@@ -462,6 +444,12 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
     if (v.listingId !== undefined) patch.listingId = v.listingId || null;
     if (v.mlsNumber !== undefined) patch.mlsNumber = v.mlsNumber || null;
     if (v.notes !== undefined) patch.notes = v.notes || null;
+    if (v.crmContactFubId !== undefined) {
+      patch.crmContactFubId = v.crmContactFubId || null;
+      // A deal belongs to a person; changing the person drops the FUB deal.
+      if ((v.crmContactFubId || null) !== deal.crmContactFubId) patch.crmDealFubId = null;
+    }
+    if (v.crmDealFubId !== undefined) patch.crmDealFubId = v.crmDealFubId || null;
     res.json(dealView(touchDeal(deal.id, patch)));
   });
 
@@ -486,7 +474,7 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
   });
 
   app.post("/api/admin/deals/:id/documents", requireAuth, async (req, res) => {
-    const deal = db.select().from(deals).where(eq(deals.id, Number(req.params.id))).get();
+    const deal = getDeal(Number(req.params.id));
     if (!deal) return bad(res, 404, "Deal not found");
     const parsed = uploadSchema.safeParse(req.body ?? {});
     if (!parsed.success) return bad(res, 400, firstIssue(parsed.error));
@@ -494,39 +482,14 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
     const m = /^data:application\/pdf;base64,([A-Za-z0-9+/=\s]+)$/.exec(dataUrl);
     if (!m) return bad(res, 400, "Only PDF files can be uploaded.");
     const bytes = Buffer.from(m[1].replace(/\s+/g, ""), "base64");
-    if (bytes.length < 100 || bytes.subarray(0, 5).toString("latin1") !== "%PDF-") return bad(res, 400, "That file is not a PDF.");
-    if (bytes.length > MAX_PDF_BYTES) return bad(res, 413, "PDFs must be 10 MB or smaller.");
-    let info: { pageCount: number; pageSizes: Array<{ w: number; h: number }> };
+    let doc: DealDocument;
     try {
-      info = await inspectPdf(bytes);
+      doc = await importPdfDocument({ dealId: deal.id, title, filename, bytes, source: "upload", ip: clientIp(req), userAgent: userAgent(req) });
     } catch (e: any) {
-      return bad(res, 400, e?.message ?? "Could not read that PDF.");
+      const msg = String(e?.message ?? "Could not read that PDF.");
+      return bad(res, /10 MB/.test(msg) ? 413 : 400, msg);
     }
-    const created = db
-      .insert(dealDocuments)
-      .values({
-        dealId: deal.id,
-        title,
-        originalFilename: filename || null,
-        status: "draft",
-        storageKey: "pending",
-        originalSha256: sha256Hex(bytes),
-        originalBytes: bytes.length,
-        pageCount: info.pageCount,
-        pageSizes: JSON.stringify(info.pageSizes),
-        signingOrder: "parallel",
-        createdAt: nowIso(),
-        updatedAt: nowIso(),
-      })
-      .run();
-    const id = Number(created.lastInsertRowid);
-    const key = documentKey(deal.id, id, "original.pdf");
-    writeDocument(key, bytes);
-    touchDocument(id, { storageKey: key });
-    addEvent(id, "created", { req, detail: `${info.pageCount} page(s), ${bytes.length} bytes` });
-    touchDeal(deal.id, {});
-    queueDocumentsBackup();
-    res.status(201).json(documentDetail(loadBundle(id)!, publicOrigin()));
+    res.status(201).json(documentDetail(loadBundle(doc.id)!, publicOrigin()));
   });
 
   app.get("/api/admin/documents/:id", requireAuth, (req, res) => {
@@ -650,7 +613,7 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
     if (!process.env.RESEND_API_KEY) return bad(res, 503, "Email is not configured (RESEND_API_KEY), so signing links cannot be sent.");
     const sentAt = nowIso();
     touchDocument(b.document.id, { status: "sent", sentAt });
-    addEvent(b.document.id, "sent", { req, detail: `${b.signers.length} signer(s), ${b.document.signingOrder}` });
+    addEventFromReq(b.document.id, "sent", { req, detail: `${b.signers.length} signer(s), ${b.document.signingOrder}` });
     const fresh = loadBundle(b.document.id)!;
     const targets = signersWhoCanSignNow(fresh);
     let failures = 0;
@@ -683,7 +646,7 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
     if (b.document.status === "voided") return bad(res, 409, "Already voided.");
     const reason = String(req.body?.reason ?? "").trim().slice(0, 500) || null;
     touchDocument(b.document.id, { status: "voided", voidedAt: nowIso(), voidReason: reason });
-    addEvent(b.document.id, "voided", { req, detail: reason });
+    addEventFromReq(b.document.id, "voided", { req, detail: reason });
     touchDeal(b.deal.id, {});
     res.json(documentDetail(loadBundle(b.document.id)!, publicOrigin()));
   });
@@ -710,6 +673,157 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
     const b = loadBundle(Number(req.params.id));
     if (!b) return bad(res, 404, "Document not found");
     sendSignatureImage(res, b, Number(req.params.signerId), req.query.kind === "initials" ? "initials" : "signature");
+  });
+
+  // ---- Inbox (forms emailed from WEBForms) ---------------------------------------------
+
+  app.get("/api/admin/deals/inbox/status", requireAuth, (_req, res) => {
+    res.json(inboxStatus());
+  });
+
+  app.post("/api/admin/deals/inbox/check", requireAuth, async (_req, res) => {
+    const result = await pollDealInbox();
+    res.status(result.ok ? 200 : 502).json({ result, status: inboxStatus() });
+  });
+
+  /** FUB deals for a contact, from the mirror — for the deal page's picker. */
+  app.get("/api/admin/crm-deals", requireAuth, (req, res) => {
+    const contactFubId = typeof req.query.contactFubId === "string" ? req.query.contactFubId : "";
+    if (!contactFubId) return res.json([]);
+    res.json(
+      storage.listCrmDeals({ contactFubId, limit: 100 }).map((d) => ({ fubId: d.fubId, name: d.name, stageName: d.stageName, value: d.value, status: d.status })),
+    );
+  });
+
+  // ---- Saved layouts ---------------------------------------------------------------------
+
+  function templateView(t: typeof dealFieldTemplates.$inferSelect) {
+    const fields = JSON.parse(t.fields) as TemplateField[];
+    return {
+      id: t.id,
+      name: t.name,
+      pageCount: t.pageCount,
+      pageSizes: JSON.parse(t.pageSizes) as Array<{ w: number; h: number }>,
+      fieldCount: fields.length,
+      slots: Array.from(new Set(fields.map((f) => `${f.role}:${f.roleIndex}`))).map((k) => {
+        const [role, idx] = k.split(":");
+        return { role, roleIndex: Number(idx) };
+      }),
+      createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
+    };
+  }
+
+  app.get("/api/admin/field-templates", requireAuth, (_req, res) => {
+    res.json(db.select().from(dealFieldTemplates).orderBy(desc(dealFieldTemplates.updatedAt)).all().map(templateView));
+  });
+
+  /** Save the current document's boxes as a reusable layout, keyed by signer slot. */
+  app.post("/api/admin/field-templates", requireAuth, (req, res) => {
+    const name = String(req.body?.name ?? "").trim().slice(0, 120);
+    const documentId = Number(req.body?.documentId);
+    if (!name) return bad(res, 400, "Give the layout a name.");
+    const b = loadBundle(documentId);
+    if (!b) return bad(res, 404, "Document not found");
+    if (!b.fields.length) return bad(res, 400, "Place at least one box before saving a layout.");
+    // Slot = position among signers with the same role, in signing order.
+    const slotOf = new Map<number, { role: string; roleIndex: number }>();
+    const counts: Record<string, number> = {};
+    for (const s of b.signers) {
+      const idx = counts[s.role] ?? 0;
+      counts[s.role] = idx + 1;
+      slotOf.set(s.id, { role: s.role, roleIndex: idx });
+    }
+    const fields: TemplateField[] = b.fields
+      .filter((f) => slotOf.has(f.signerId))
+      .map((f) => ({ ...slotOf.get(f.signerId)!, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required, label: f.label } as TemplateField));
+    const parsed = z.array(templateFieldSchema).safeParse(fields);
+    if (!parsed.success) return bad(res, 400, firstIssue(parsed.error));
+    const existing = db.select().from(dealFieldTemplates).where(eq(dealFieldTemplates.name, name)).get();
+    if (existing) {
+      db.update(dealFieldTemplates)
+        .set({ pageCount: b.document.pageCount, pageSizes: b.document.pageSizes, fields: JSON.stringify(parsed.data), updatedAt: nowIso() })
+        .where(eq(dealFieldTemplates.id, existing.id))
+        .run();
+      return res.json({ ...templateView(db.select().from(dealFieldTemplates).where(eq(dealFieldTemplates.id, existing.id)).get()!), replaced: true });
+    }
+    const r = db
+      .insert(dealFieldTemplates)
+      .values({ name, pageCount: b.document.pageCount, pageSizes: b.document.pageSizes, fields: JSON.stringify(parsed.data), createdAt: nowIso(), updatedAt: nowIso() })
+      .run();
+    res.status(201).json(templateView(db.select().from(dealFieldTemplates).where(eq(dealFieldTemplates.id, Number(r.lastInsertRowid))).get()!));
+  });
+
+  app.delete("/api/admin/field-templates/:id", requireAuth, (req, res) => {
+    const r = db.delete(dealFieldTemplates).where(eq(dealFieldTemplates.id, Number(req.params.id))).run();
+    if (!r.changes) return bad(res, 404, "Layout not found");
+    res.json({ ok: true });
+  });
+
+  /** Replace a draft's boxes with a saved layout, mapped onto its current signers. */
+  app.post("/api/admin/documents/:id/apply-template", requireAuth, (req, res) => {
+    const b = loadBundle(Number(req.params.id));
+    if (!b) return bad(res, 404, "Document not found");
+    if (b.document.status !== "draft") return bad(res, 409, "Boxes can only be changed on a draft.");
+    if (!b.signers.length) return bad(res, 400, "Add and save the signers first, then apply a layout.");
+    const t = db.select().from(dealFieldTemplates).where(eq(dealFieldTemplates.id, Number(req.body?.templateId))).get();
+    if (!t) return bad(res, 404, "Layout not found");
+    const fields = JSON.parse(t.fields) as TemplateField[];
+    const bySlot = new Map<string, number>();
+    const counts: Record<string, number> = {};
+    for (const s of b.signers) {
+      const idx = counts[s.role] ?? 0;
+      counts[s.role] = idx + 1;
+      bySlot.set(`${s.role}:${idx}`, s.id);
+    }
+    let skipped = 0;
+    const rows = fields
+      .filter((f) => f.page <= b.document.pageCount)
+      .map((f) => {
+        const signerId = bySlot.get(`${f.role}:${f.roleIndex}`);
+        if (!signerId) {
+          skipped += 1;
+          return null;
+        }
+        return { documentId: b.document.id, signerId, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required, label: f.label };
+      })
+      .filter((r): r is NonNullable<typeof r> => r !== null);
+    db.delete(dealFields).where(eq(dealFields.documentId, b.document.id)).run();
+    for (const row of rows) db.insert(dealFields).values(row).run();
+    touchDocument(b.document.id, {});
+    const pageMismatch = t.pageCount !== b.document.pageCount;
+    res.json({ ...documentDetail(loadBundle(b.document.id)!, publicOrigin()), applied: rows.length, skipped, pageMismatch });
+  });
+
+  // ---- Client portal: my documents --------------------------------------------------------
+
+  app.get("/api/account/documents", requireAccount, (req: AccountReq, res) => {
+    const email = req.accountUser!.email.toLowerCase();
+    const origin = publicOrigin();
+    const mine = db.select().from(dealSigners).all().filter((s) => s.email.toLowerCase() === email);
+    const out = mine
+      .map((s) => {
+        const b = loadBundle(s.documentId);
+        if (!b || b.document.status === "draft") return null;
+        return {
+          id: b.document.id,
+          title: b.document.title,
+          dealTitle: b.deal.title,
+          address: b.deal.address,
+          status: b.document.status,
+          signerStatus: s.status,
+          sentAt: b.document.sentAt,
+          signedAt: s.signedAt,
+          completedAt: b.document.completedAt,
+          canSignNow: b.document.status === "sent" && signersWhoCanSignNow(b).some((x) => x.id === s.id),
+          signUrl: `${origin}/sign/${s.token}`,
+          downloadUrl: b.document.status === "completed" ? `/api/sign/${s.token}/file?which=signed&download=1` : null,
+          others: b.signers.filter((x) => x.id !== s.id).map((x) => ({ name: x.name, role: x.role, status: x.status })),
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null)
+      .sort((a, b) => (b.sentAt ?? "").localeCompare(a.sentAt ?? ""));
+    res.json(out);
   });
 
   // ---- Backups -----------------------------------------------------------------------
@@ -786,7 +900,7 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
     // First open is evidence: record it once, and move sent → viewed.
     if (b.document.status === "sent" && (signer.status === "sent" || signer.status === "pending")) {
       db.update(dealSigners).set({ status: "viewed" }).where(eq(dealSigners.id, signer.id)).run();
-      addEvent(b.document.id, "viewed", { signerId: signer.id, req });
+      addEventFromReq(b.document.id, "viewed", { signerId: signer.id, req });
     }
     const fresh = bySignerToken(String(req.params.token))!;
     res.setHeader("Cache-Control", "no-store");
@@ -798,7 +912,7 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
     if (!hit) return bad(res, 404, "This signing link is not valid.");
     const which = req.query.which === "signed" ? "signed" : "original";
     if (which === "signed" && hit.b.document.status === "completed" && req.query.download === "1") {
-      addEvent(hit.b.document.id, "downloaded", { signerId: hit.signer.id, req });
+      addEventFromReq(hit.b.document.id, "downloaded", { signerId: hit.signer.id, req });
     }
     sendPdf(res, hit.b, which, req.query.download === "1");
   });
@@ -819,7 +933,7 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
         .set({ consentAt: nowIso(), ip: clientIp(req), userAgent: userAgent(req) })
         .where(eq(dealSigners.id, signer.id))
         .run();
-      addEvent(b.document.id, "consented", { signerId: signer.id, req, detail: "Agreed to use electronic records and signatures" });
+      addEventFromReq(b.document.id, "consented", { signerId: signer.id, req, detail: "Agreed to use electronic records and signatures" });
     }
     const fresh = bySignerToken(String(req.params.token))!;
     res.json(signerPageView(fresh.b, fresh.signer));
@@ -894,7 +1008,7 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
       })
       .where(eq(dealSigners.id, signer.id))
       .run();
-    addEvent(b.document.id, "signed", { signerId: signer.id, req, detail: `${signature.kind} signature, ${mine.length} field(s)` });
+    addEventFromReq(b.document.id, "signed", { signerId: signer.id, req, detail: `${signature.kind} signature, ${mine.length} field(s)` });
 
     let fresh = loadBundle(b.document.id)!;
     const allSigned = fresh.signers.every((s) => s.status === "signed");
@@ -903,7 +1017,7 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
         fresh = await finalize(b.document.id);
       } catch (e: any) {
         console.error("[esign] finalize failed:", e);
-        addEvent(b.document.id, "finalize_failed", { detail: String(e?.message ?? e) });
+        addEventFromReq(b.document.id, "finalize_failed", { detail: String(e?.message ?? e) });
         // The signature is recorded; the agent can retry from the admin.
       }
     } else {
@@ -933,9 +1047,10 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
       .where(eq(dealSigners.id, signer.id))
       .run();
     touchDocument(b.document.id, { status: "declined" });
-    addEvent(b.document.id, "declined", { signerId: signer.id, req, detail: reason });
+    addEventFromReq(b.document.id, "declined", { signerId: signer.id, req, detail: reason });
     const fresh = loadBundle(b.document.id)!;
     void notifyAgent(fresh, "declined", fresh.signers.find((s) => s.id === signer.id));
+    void noteOnFub(fresh.deal, `Declined: ${fresh.document.title}`, `${signer.name} declined to sign ${fresh.document.title}.${reason ? ` Reason: ${reason}` : ""}`);
     touchDeal(b.deal.id, {});
     const out = bySignerToken(String(req.params.token))!;
     res.json(signerPageView(out.b, out.signer));

@@ -1122,6 +1122,15 @@ export const deals = sqliteTable("deals", {
   listingId: text("listing_id"),
   mlsNumber: text("mls_number"),
   notes: text("notes"),
+  // The Follow Up Boss person and deal this transaction belongs to (fub ids,
+  // as strings — see crm_contacts / crm_deals). Optional; set from the deal
+  // page. When set, a completed signing posts a note on the FUB person.
+  crmContactFubId: text("crm_contact_fub_id"),
+  crmDealFubId: text("crm_deal_fub_id"),
+  // Short unguessable id in the deal's inbound address
+  // (<mailbox>+deal-<token>@<domain>): forms emailed there from WEBForms are
+  // imported as draft documents by server/deal-inbox.ts.
+  inboxToken: text("inbox_token"),
   createdAt: text("created_at")
     .notNull()
     .$defaultFn(() => new Date().toISOString()),
@@ -1137,6 +1146,8 @@ export const dealDocuments = sqliteTable("deal_documents", {
   dealId: integer("deal_id").notNull(),
   title: text("title").notNull(),
   originalFilename: text("original_filename"),
+  // 'upload' | 'email' — how the PDF arrived.
+  source: text("source").notNull().default("upload"),
   // 'draft' | 'sent' | 'completed' | 'declined' | 'voided'
   status: text("status").notNull().default("draft"),
   storageKey: text("storage_key").notNull(),
@@ -1244,6 +1255,8 @@ export const createDealSchema = z.object({
   listingId: z.string().trim().max(64).nullable().optional(),
   mlsNumber: z.string().trim().max(32).nullable().optional(),
   notes: z.string().max(5000).nullable().optional(),
+  crmContactFubId: z.string().trim().max(32).nullable().optional(),
+  crmDealFubId: z.string().trim().max(32).nullable().optional(),
 });
 export type CreateDealInput = z.infer<typeof createDealSchema>;
 
@@ -1268,3 +1281,54 @@ export const fieldInputSchema = z.object({
   label: z.string().trim().max(80).nullable().optional(),
 });
 export type FieldInput = z.infer<typeof fieldInputSchema>;
+
+// A saved box layout, so the second Residential Purchase Contract takes one
+// click instead of twenty. Boxes are keyed by signer *slot* (role + index:
+// the first buyer, the second buyer, the first seller) rather than by a
+// person, and stored as fractions like deal_fields.
+export const dealFieldTemplates = sqliteTable("deal_field_templates", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  pageCount: integer("page_count").notNull(),
+  pageSizes: text("page_sizes").notNull(), // JSON [{w,h}]
+  fields: text("fields").notNull(), // JSON TemplateField[]
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+  updatedAt: text("updated_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+});
+export type DealFieldTemplate = typeof dealFieldTemplates.$inferSelect;
+
+export const templateFieldSchema = z.object({
+  role: z.enum(SIGNER_ROLES),
+  roleIndex: z.number().int().min(0).max(11),
+  type: z.enum(FIELD_TYPES),
+  page: z.number().int().min(1),
+  x: z.number().min(0).max(1),
+  y: z.number().min(0).max(1),
+  w: z.number().min(0.005).max(1),
+  h: z.number().min(0.005).max(1),
+  required: z.boolean(),
+  label: z.string().max(80).nullable(),
+});
+export type TemplateField = z.infer<typeof templateFieldSchema>;
+
+// Every email the inbox poller looked at, matched to a deal or not, so a
+// message is never imported twice and the deal page can show what arrived.
+export const dealInboundMessages = sqliteTable("deal_inbound_messages", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  provider: text("provider").notNull().default("gmail"),
+  messageId: text("message_id").notNull().unique(),
+  dealId: integer("deal_id"),
+  fromAddress: text("from_address"),
+  subject: text("subject"),
+  receivedAt: text("received_at"),
+  // 'imported' | 'unmatched' | 'no_pdf' | 'error'
+  status: text("status").notNull(),
+  detail: text("detail"),
+  documentIds: text("document_ids").notNull().default("[]"), // JSON number[]
+  processedAt: text("processed_at").notNull(),
+});
+export type DealInboundMessage = typeof dealInboundMessages.$inferSelect;

@@ -178,6 +178,12 @@ app.use((req, res, next) => {
     console.error("[backup] failed to start cron:", err);
   }
   try {
+    const { startDealInboxCron } = await import("./deal-inbox");
+    startDealInboxCron();
+  } catch (err) {
+    console.error("[deal-inbox] failed to start cron:", err);
+  }
+  try {
     const { scheduleSitemapSubmit } = await import("./search-console");
     scheduleSitemapSubmit();
   } catch (err) {

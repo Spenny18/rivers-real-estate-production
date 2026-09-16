@@ -16,10 +16,20 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, CheckCircle2, Clock, FileText, Loader2, Plus, Save, Trash2, Upload, XCircle } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Clock, Copy, ExternalLink, FileText, Inbox, Loader2, Mail, Plus, RefreshCw, Save, Search, Trash2, Upload, X, XCircle } from "lucide-react";
 import { apiErrorMessage, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { fmtBytes, fmtDateTime, type DealView, type DocumentDetail, type DocumentSummary } from "@/lib/esign-types";
+import {
+  fmtBytes,
+  fmtDateTime,
+  type CrmContactLite,
+  type CrmDealLite,
+  type DealView,
+  type DocumentDetail,
+  type DocumentSummary,
+  type InboxStatus,
+} from "@/lib/esign-types";
+import type { Lead } from "@shared/schema";
 
 export const DOC_STATUS_STYLES: Record<DocumentSummary["status"], string> = {
   draft: "bg-secondary text-secondary-foreground border-border",
@@ -177,6 +187,7 @@ export default function AdminDealPage() {
                     </Link>
                     <div className="text-[12px] text-muted-foreground">
                       {d.pageCount} {d.pageCount === 1 ? "page" : "pages"} · {fmtBytes(d.originalBytes)}
+                      {d.source === "email" ? " · arrived by email" : ""}
                       {d.signerCount ? ` · ${d.signedCount}/${d.signerCount} signed` : " · no signers yet"}
                       {d.status === "sent" && d.sentAt ? ` · sent ${fmtDateTime(d.sentAt)}` : ""}
                       {d.status === "completed" && d.completedAt ? ` · completed ${fmtDateTime(d.completedAt)}` : ""}
@@ -210,7 +221,9 @@ export default function AdminDealPage() {
 
         {/* Details */}
         <div className="space-y-3">
-          <div className="font-display text-[10px] tracking-[0.2em] text-muted-foreground">DETAILS</div>
+          <InboxCard deal={deal} />
+          <ClientCard deal={deal} onSaved={(d) => qc.setQueryData(key, d)} />
+          <div className="font-display text-[10px] tracking-[0.2em] text-muted-foreground pt-2">DETAILS</div>
           <Card>
             <CardContent className="p-4 space-y-3">
               <div className="space-y-1.5">
@@ -340,5 +353,251 @@ export default function AdminDealPage() {
         </DialogContent>
       </Dialog>
     </AppShell>
+  );
+}
+
+
+// ---- Inbox: the deal's email address for WEBForms ------------------------------------------
+
+function InboxCard({ deal }: { deal: DealView }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const { data: status } = useQuery<InboxStatus>({ queryKey: ["/api/admin/deals/inbox/status"] });
+  const check = useMutation({
+    mutationFn: async () => (await apiRequest("POST", "/api/admin/deals/inbox/check", {})).json() as Promise<{ result: NonNullable<InboxStatus["lastPoll"]> }>,
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["/api/admin/deals/inbox/status"] });
+      qc.invalidateQueries({ queryKey: [`/api/admin/deals/${deal.id}`] });
+    },
+    onSuccess: (r) =>
+      toast({
+        title: r.result.imported ? `Imported ${r.result.documents} PDF(s) from ${r.result.imported} email(s)` : "Inbox checked",
+        description: r.result.imported ? undefined : `${r.result.checked} new email(s) looked at, nothing for this deal yet.`,
+      }),
+    onError: (e) => toast({ title: "Couldn't check the inbox", description: apiErrorMessage(e), variant: "destructive" }),
+  });
+  const address = deal.inboxAddress;
+  return (
+    <>
+      <div className="font-display text-[10px] tracking-[0.2em] text-muted-foreground">SEND FORMS HERE</div>
+      <Card>
+        <CardContent className="p-4 space-y-2">
+          <div className="flex items-start gap-2">
+            <Inbox className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
+            <div className="min-w-0 flex-1">
+              <div className="text-[12px] text-muted-foreground leading-snug">
+                In CREA WEBForms, email the finished forms to this address and they appear above as drafts.
+              </div>
+              {address ? (
+                <div className="mt-2 flex items-center gap-1">
+                  <code className="text-[12px] bg-secondary px-2 py-1 rounded-sm break-all">{address}</code>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7 shrink-0"
+                    title="Copy address"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(address);
+                      toast({ title: "Address copied" });
+                    }}
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+          {status ? (
+            status.ready ? (
+              <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                <span>
+                  Reading {status.accountEmail ?? status.mailbox}
+                  {status.lastPoll ? ` · checked ${fmtDateTime(status.lastPoll.at)}` : " · not checked yet"}
+                  {status.lastPoll && !status.lastPoll.ok ? <span className="text-destructive"> · {status.lastPoll.error}</span> : null}
+                </span>
+                <Button size="sm" variant="outline" className="h-7 text-[11px]" disabled={check.isPending || status.polling} onClick={() => check.mutate()}>
+                  {check.isPending || status.polling ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />} Check now
+                </Button>
+              </div>
+            ) : (
+              <div className="text-[11px] text-amber-700">{status.reason}</div>
+            )
+          ) : null}
+          {deal.inbound.length ? (
+            <div className="pt-1 space-y-1">
+              {deal.inbound.map((m) => (
+                <div key={m.id} className="text-[11px] border-l-2 border-border pl-2 leading-snug">
+                  <Mail className="inline h-3 w-3 mr-1 text-muted-foreground" />
+                  <span className="font-medium">{m.subject || "(no subject)"}</span>
+                  <div className="text-muted-foreground">
+                    {m.from} · {fmtDateTime(m.receivedAt)} ·{" "}
+                    {m.status === "imported" ? (
+                      <span className="text-emerald-700">{m.documentIds.length} PDF(s) imported</span>
+                    ) : (
+                      <span className="text-destructive">{m.status}{m.detail ? `: ${m.detail}` : ""}</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+    </>
+  );
+}
+
+// ---- Client: Follow Up Boss person + deal, and the site lead -------------------------------
+
+function ClientCard({ deal, onSaved }: { deal: DealView; onSaved: (d: DealView) => void }) {
+  const { toast } = useToast();
+  const [q, setQ] = useState("");
+  const [leadQ, setLeadQ] = useState("");
+  const [pickingLead, setPickingLead] = useState(false);
+  const { data: matches = [] } = useQuery<CrmContactLite[]>({
+    queryKey: [`/api/admin/crm/contacts?q=${encodeURIComponent(q.trim())}&limit=8`],
+    enabled: q.trim().length >= 2,
+  });
+  const { data: fubDeals = [] } = useQuery<CrmDealLite[]>({
+    queryKey: [`/api/admin/crm-deals?contactFubId=${encodeURIComponent(deal.crmContactFubId ?? "")}`],
+    enabled: !!deal.crmContactFubId,
+  });
+  const { data: leads = [] } = useQuery<Lead[]>({ queryKey: ["/api/leads"], enabled: pickingLead });
+
+  const link = useMutation({
+    mutationFn: async (patch: { crmContactFubId?: string | null; crmDealFubId?: string | null; leadId?: number | null }) =>
+      (await apiRequest("PATCH", `/api/admin/deals/${deal.id}`, patch)).json() as Promise<DealView>,
+    onSuccess: (d) => {
+      onSaved(d);
+      setQ("");
+      setPickingLead(false);
+    },
+    onError: (e) => toast({ title: "Didn't save", description: apiErrorMessage(e), variant: "destructive" }),
+  });
+
+  const leadMatches = leads
+    .filter((l) => {
+      const needle = leadQ.trim().toLowerCase();
+      return !needle || l.name.toLowerCase().includes(needle) || l.email.toLowerCase().includes(needle);
+    })
+    .slice(0, 8);
+
+  return (
+    <>
+      <div className="font-display text-[10px] tracking-[0.2em] text-muted-foreground pt-2">CLIENT</div>
+      <Card>
+        <CardContent className="p-4 space-y-3">
+          {/* Follow Up Boss person */}
+          {deal.crmContact ? (
+            <div className="flex items-start gap-2">
+              <div className="flex-1 min-w-0">
+                <div className="text-[13px] font-medium truncate">{deal.crmContact.name || deal.crmContact.email}</div>
+                <div className="text-[11px] text-muted-foreground truncate">
+                  {deal.crmContact.email}
+                  {deal.crmContact.phone ? ` · ${deal.crmContact.phone}` : ""}
+                  {deal.crmContact.stage ? ` · ${deal.crmContact.stage}` : ""}
+                </div>
+                <a href={deal.crmContact.url} target="_blank" rel="noreferrer" className="text-[11px] inline-flex items-center gap-1 underline underline-offset-2 mt-1">
+                  Open in Follow Up Boss <ExternalLink className="h-3 w-3" />
+                </a>
+              </div>
+              <Button size="icon" variant="ghost" className="h-7 w-7" title="Unlink" onClick={() => link.mutate({ crmContactFubId: null })}>
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              <Label className="text-[11px]">Follow Up Boss contact</Label>
+              <div className="relative">
+                <Search className="h-3.5 w-3.5 absolute left-2 top-2.5 text-muted-foreground" />
+                <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by name, email or phone" className="h-8 pl-7 text-[12px]" />
+              </div>
+              {q.trim().length >= 2 ? (
+                <div className="border border-border rounded-sm divide-y divide-border">
+                  {matches.length === 0 ? <div className="text-[11px] text-muted-foreground p-2">No matches in the CRM mirror.</div> : null}
+                  {matches.map((c) => (
+                    <button key={c.fubId} className="w-full text-left p-2 hover:bg-secondary text-[12px]" onClick={() => link.mutate({ crmContactFubId: c.fubId })}>
+                      <div className="font-medium">{c.name || c.email}</div>
+                      <div className="text-[11px] text-muted-foreground">
+                        {c.email}
+                        {c.phone ? ` · ${c.phone}` : ""}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          {/* Follow Up Boss deal */}
+          {deal.crmContact ? (
+            <div className="space-y-1.5">
+              <Label className="text-[11px]">Follow Up Boss deal</Label>
+              <Select value={deal.crmDealFubId ?? "none"} onValueChange={(v) => link.mutate({ crmDealFubId: v === "none" ? null : v })}>
+                <SelectTrigger className="h-8 text-[12px]">
+                  <SelectValue placeholder="None" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">None</SelectItem>
+                  {fubDeals.map((d) => (
+                    <SelectItem key={d.fubId} value={d.fubId}>
+                      {d.name || `Deal ${d.fubId}`}
+                      {d.stageName ? ` · ${d.stageName}` : ""}
+                      {d.value ? ` · $${Math.round(d.value).toLocaleString("en-CA")}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {deal.crmDeal ? (
+                <div className="text-[11px] text-muted-foreground">
+                  {deal.crmDeal.stageName ?? "—"}
+                  {deal.crmDeal.value ? ` · $${Math.round(deal.crmDeal.value).toLocaleString("en-CA")}` : ""}
+                  {deal.crmDeal.status ? ` · ${deal.crmDeal.status}` : ""}
+                </div>
+              ) : null}
+              <div className="text-[11px] text-muted-foreground">Completed and declined signings post a note on this person in FUB.</div>
+            </div>
+          ) : null}
+
+          {/* Site lead */}
+          <div className="space-y-1.5">
+            <Label className="text-[11px]">Website lead</Label>
+            {deal.leadName && !pickingLead ? (
+              <div className="flex items-center gap-2 text-[12px]">
+                <span className="flex-1 truncate">
+                  {deal.leadName} <span className="text-muted-foreground">{deal.leadEmail}</span>
+                </span>
+                <Button size="sm" variant="ghost" className="h-7 text-[11px]" onClick={() => setPickingLead(true)}>
+                  Change
+                </Button>
+                <Button size="icon" variant="ghost" className="h-7 w-7" title="Unlink" onClick={() => link.mutate({ leadId: null })}>
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ) : pickingLead ? (
+              <div className="space-y-1.5">
+                <Input value={leadQ} onChange={(e) => setLeadQ(e.target.value)} placeholder="Search leads" className="h-8 text-[12px]" autoFocus />
+                <div className="border border-border rounded-sm divide-y divide-border max-h-48 overflow-auto">
+                  {leadMatches.map((l) => (
+                    <button key={l.id} className="w-full text-left p-2 hover:bg-secondary text-[12px]" onClick={() => link.mutate({ leadId: l.id })}>
+                      <div className="font-medium">{l.name}</div>
+                      <div className="text-[11px] text-muted-foreground">{l.email}</div>
+                    </button>
+                  ))}
+                  {leadMatches.length === 0 ? <div className="text-[11px] text-muted-foreground p-2">No leads match.</div> : null}
+                </div>
+                <Button size="sm" variant="ghost" className="h-7 text-[11px]" onClick={() => setPickingLead(false)}>
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <Button size="sm" variant="outline" className="h-8 text-[12px]" onClick={() => setPickingLead(true)}>
+                Link a lead
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    </>
   );
 }

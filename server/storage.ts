@@ -850,6 +850,9 @@ sqlite.exec(`
     listing_id TEXT,
     mls_number TEXT,
     notes TEXT,
+    crm_contact_fub_id TEXT,
+    crm_deal_fub_id TEXT,
+    inbox_token TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -861,6 +864,7 @@ sqlite.exec(`
     deal_id INTEGER NOT NULL,
     title TEXT NOT NULL,
     original_filename TEXT,
+    source TEXT NOT NULL DEFAULT 'upload',
     status TEXT NOT NULL DEFAULT 'draft',
     storage_key TEXT NOT NULL,
     original_sha256 TEXT NOT NULL,
@@ -948,6 +952,30 @@ sqlite.exec(`
     started_at TEXT NOT NULL,
     finished_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS deal_field_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    page_count INTEGER NOT NULL,
+    page_sizes TEXT NOT NULL,
+    fields TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS deal_inbound_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL DEFAULT 'gmail',
+    message_id TEXT NOT NULL UNIQUE,
+    deal_id INTEGER,
+    from_address TEXT,
+    subject TEXT,
+    received_at TEXT,
+    status TEXT NOT NULL,
+    detail TEXT,
+    document_ids TEXT NOT NULL DEFAULT '[]',
+    processed_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_deal_inbound_deal ON deal_inbound_messages(deal_id);
+
   CREATE TABLE IF NOT EXISTS backup_files (
     path TEXT PRIMARY KEY,         -- relative to DOCUMENTS_ROOT
     sha256 TEXT NOT NULL,
@@ -956,6 +984,31 @@ sqlite.exec(`
     uploaded_at TEXT NOT NULL
   );
 `);
+
+// Migration: phase-two deal columns (CRM link, inbox address, document source).
+try {
+  const dealCols = new Set((sqlite.prepare("PRAGMA table_info(deals)").all() as Array<{ name: string }>).map((c) => c.name));
+  if (dealCols.size > 0) {
+    if (!dealCols.has("crm_contact_fub_id")) sqlite.exec("ALTER TABLE deals ADD COLUMN crm_contact_fub_id TEXT");
+    if (!dealCols.has("crm_deal_fub_id")) sqlite.exec("ALTER TABLE deals ADD COLUMN crm_deal_fub_id TEXT");
+    if (!dealCols.has("inbox_token")) {
+      sqlite.exec("ALTER TABLE deals ADD COLUMN inbox_token TEXT");
+      console.log("[migration] added crm/inbox columns to deals");
+    }
+  }
+  sqlite.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_deals_inbox_token ON deals(inbox_token)");
+  // Every deal gets an inbox token, including those created before the column.
+  const missing = sqlite.prepare("SELECT id FROM deals WHERE inbox_token IS NULL").all() as Array<{ id: number }>;
+  const setTok = sqlite.prepare("UPDATE deals SET inbox_token = ? WHERE id = ?");
+  for (const row of missing) setTok.run(randomBytes(5).toString("hex"), row.id);
+  const docCols = new Set((sqlite.prepare("PRAGMA table_info(deal_documents)").all() as Array<{ name: string }>).map((c) => c.name));
+  if (docCols.size > 0 && !docCols.has("source")) {
+    sqlite.exec("ALTER TABLE deal_documents ADD COLUMN source TEXT NOT NULL DEFAULT 'upload'");
+    console.log("[migration] added source to deal_documents");
+  }
+} catch (e) {
+  console.error("[migration] deals phase two:", e);
+}
 
 // Migration: add account_user_id to saved_searches so portal users own
 // their own rows separately from admin-created searches.

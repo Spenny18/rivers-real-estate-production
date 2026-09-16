@@ -58,6 +58,7 @@ export interface DocumentSummary {
   dealId: number;
   title: string;
   originalFilename: string | null;
+  source: "upload" | "email";
   status: "draft" | "sent" | "completed" | "declined" | "voided";
   pageCount: number;
   signingOrder: "parallel" | "sequential";
@@ -94,9 +95,16 @@ export interface DealView {
   status: "active" | "closed" | "archived";
   leadId: number | null;
   leadName: string | null;
+  leadEmail: string | null;
   listingId: string | null;
   mlsNumber: string | null;
   notes: string | null;
+  crmContactFubId: string | null;
+  crmContact: { fubId: string; name: string | null; email: string | null; phone: string | null; stage: string | null; url: string } | null;
+  crmDealFubId: string | null;
+  crmDeal: { fubId: string; name: string | null; stageName: string | null; value: number | null; status: string | null } | null;
+  inboxAddress: string | null;
+  inbound: InboundMessage[];
   createdAt: string;
   updatedAt: string;
   documentCount: number;
@@ -214,4 +222,67 @@ export function fmtDateTime(iso: string | null | undefined): string {
     hour: "numeric",
     minute: "2-digit",
   }).format(d);
+}
+
+export interface InboundMessage {
+  id: number;
+  from: string | null;
+  subject: string | null;
+  receivedAt: string | null;
+  status: "imported" | "unmatched" | "no_pdf" | "rejected" | "error";
+  detail: string | null;
+  documentIds: number[];
+}
+
+export interface InboxStatus {
+  ready: boolean;
+  reason: string | null;
+  accountEmail: string | null;
+  mailbox: string;
+  lastPoll: { ok: boolean; checked: number; imported: number; documents: number; error?: string; at: string } | null;
+  polling: boolean;
+}
+
+export interface FieldTemplate {
+  id: number;
+  name: string;
+  pageCount: number;
+  pageSizes: PageSize[];
+  fieldCount: number;
+  slots: Array<{ role: SignerRole; roleIndex: number }>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CrmContactLite {
+  fubId: string;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  stage: string | null;
+}
+
+export interface CrmDealLite {
+  fubId: string;
+  name: string | null;
+  stageName: string | null;
+  value: number | null;
+  status: string | null;
+}
+
+/** What the client portal lists for a signed-in person. */
+export interface PortalDocument {
+  id: number;
+  title: string;
+  dealTitle: string;
+  address: string | null;
+  status: DocumentSummary["status"];
+  signerStatus: SignerView["status"];
+  sentAt: string | null;
+  signedAt: string | null;
+  completedAt: string | null;
+  canSignNow: boolean;
+  signUrl: string;
+  downloadUrl: string | null;
+  others: Array<{ name: string; role: SignerRole; status: SignerView["status"] }>;
 }

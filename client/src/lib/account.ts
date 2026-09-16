@@ -416,3 +416,19 @@ export function useDeleteMarketReport() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/account/market-reports"] }),
   });
 }
+
+// ---- Documents to sign (deals & e-signature) --------------------------------
+import type { PortalDocument } from "./esign-types";
+
+export function usePortalDocuments() {
+  return useQuery<PortalDocument[]>({
+    queryKey: ["/api/account/documents"],
+    queryFn: async () => {
+      const r = await fetch("/api/account/documents", { credentials: "include" });
+      if (r.status === 401) return [];
+      if (!r.ok) throw new Error(`/api/account/documents → ${r.status}`);
+      return r.json();
+    },
+    staleTime: 30_000,
+  });
+}

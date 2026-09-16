@@ -49,6 +49,7 @@ import {
   fmtDateTime,
   signerColour,
   type DocumentDetail,
+  type FieldTemplate,
   type FieldType,
   type FieldView,
   type SignerRole,
@@ -140,6 +141,10 @@ export default function AdminDocumentPage() {
   const [voiding, setVoiding] = useState(false);
   const [voidReason, setVoidReason] = useState("");
   const [sending, setSending] = useState(false);
+  const [savingLayout, setSavingLayout] = useState(false);
+  const [layoutName, setLayoutName] = useState("");
+  const [applyId, setApplyId] = useState<string>("");
+  const { data: templates = [] } = useQuery<FieldTemplate[]>({ queryKey: ["/api/admin/field-templates"] });
 
   useEffect(() => {
     if (!doc) return;
@@ -208,6 +213,50 @@ export default function AdminDocumentPage() {
     },
     onSuccess: (d) => qc.setQueryData(key, d),
     onError: fail("Settings didn't save"),
+  });
+
+  const saveLayout = useMutation({
+    mutationFn: async () => {
+      if (fieldsDirty) await saveFields.mutateAsync();
+      const res = await apiRequest("POST", "/api/admin/field-templates", { name: layoutName.trim(), documentId: id });
+      return (await res.json()) as FieldTemplate & { replaced?: boolean };
+    },
+    onSuccess: (t) => {
+      qc.invalidateQueries({ queryKey: ["/api/admin/field-templates"] });
+      setSavingLayout(false);
+      setLayoutName("");
+      toast({ title: t.replaced ? `Layout "${t.name}" updated` : `Layout "${t.name}" saved`, description: `${t.fieldCount} boxes. Apply it to the next ${t.pageCount}-page form.` });
+    },
+    onError: fail("Layout didn't save"),
+  });
+
+  const applyLayout = useMutation({
+    mutationFn: async (templateId: number) => {
+      if (signersDirty) await saveSigners.mutateAsync();
+      const res = await apiRequest("POST", `/api/admin/documents/${id}/apply-template`, { templateId });
+      return (await res.json()) as DocumentDetail & { applied: number; skipped: number; pageMismatch: boolean };
+    },
+    onSuccess: (d) => {
+      qc.setQueryData(key, d);
+      setFieldsDirty(false);
+      setFields(fromServerFields(d.fields));
+      setSelected(null);
+      toast({
+        title: `${d.applied} box${d.applied === 1 ? "" : "es"} placed`,
+        description: [d.skipped ? `${d.skipped} skipped — no signer in that slot (e.g. a second buyer).` : "", d.pageMismatch ? "This form has a different page count than the layout; check the pages." : ""].filter(Boolean).join(" ") || undefined,
+        variant: d.skipped || d.pageMismatch ? "destructive" : undefined,
+      });
+    },
+    onError: fail("Couldn't apply the layout"),
+  });
+
+  const deleteLayout = useMutation({
+    mutationFn: async (templateId: number) => apiRequest("DELETE", `/api/admin/field-templates/${templateId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/admin/field-templates"] });
+      setApplyId("");
+    },
+    onError: fail("Couldn't delete the layout"),
   });
 
   const send = useMutation({
@@ -640,6 +689,58 @@ export default function AdminDocumentPage() {
             </section>
           ) : null}
 
+          {/* Saved layouts */}
+          {isDraft ? (
+            <section className="space-y-2">
+              <div className="font-display text-[10px] tracking-[0.2em] text-muted-foreground">SAVED LAYOUTS</div>
+              {templates.length ? (
+                <div className="flex gap-1.5">
+                  <Select value={applyId} onValueChange={setApplyId}>
+                    <SelectTrigger className="h-8 text-[12px] flex-1">
+                      <SelectValue placeholder="Choose a layout" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {templates
+                        .slice()
+                        .sort((a, b) => Number(b.pageCount === doc.pageCount) - Number(a.pageCount === doc.pageCount))
+                        .map((t) => (
+                          <SelectItem key={t.id} value={String(t.id)}>
+                            {t.name} · {t.pageCount}p · {t.fieldCount} boxes
+                            {t.pageCount !== doc.pageCount ? " (different page count)" : ""}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                  <Button size="sm" className="h-8" disabled={!applyId || applyLayout.isPending || doc.signers.length === 0} onClick={() => applyLayout.mutate(Number(applyId))}>
+                    Apply
+                  </Button>
+                  {applyId ? (
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-8 w-8 text-muted-foreground"
+                      title="Delete this layout"
+                      onClick={() => {
+                        const t = templates.find((x) => String(x.id) === applyId);
+                        if (t && window.confirm(`Delete the layout "${t.name}"?`)) deleteLayout.mutate(t.id);
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="text-[11px] text-muted-foreground">None yet. Place the boxes once, save them as a layout, and the next copy of this form is one click.</div>
+              )}
+              {applyId && doc.signers.length === 0 ? <div className="text-[11px] text-amber-700">Save the signers first — boxes are mapped to the first buyer, first seller, and so on.</div> : null}
+              {fields.length ? (
+                <Button size="sm" variant="outline" className="w-full h-8 text-[12px]" onClick={() => setSavingLayout(true)}>
+                  Save these boxes as a layout
+                </Button>
+              ) : null}
+            </section>
+          ) : null}
+
           {/* Settings */}
           <section className="space-y-2">
             <div className="font-display text-[10px] tracking-[0.2em] text-muted-foreground">SENDING</div>
@@ -741,6 +842,30 @@ export default function AdminDocumentPage() {
             </Button>
             <Button onClick={() => send.mutate()} disabled={send.isPending}>
               {send.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Send className="h-4 w-4 mr-1" />} Send
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Save layout */}
+      <Dialog open={savingLayout} onOpenChange={(o) => !o && setSavingLayout(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Save as a layout</DialogTitle>
+            <DialogDescription>
+              The {fields.length} box{fields.length === 1 ? "" : "es"} on this {doc.pageCount}-page form, remembered by signer slot (first buyer, first seller…). Saving under an existing name replaces it.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label>Layout name</Label>
+            <Input value={layoutName} onChange={(e) => setLayoutName(e.target.value)} placeholder="e.g. AREA Residential Purchase Contract (2 buyers, 2 sellers)" autoFocus />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSavingLayout(false)}>
+              Cancel
+            </Button>
+            <Button disabled={!layoutName.trim() || saveLayout.isPending} onClick={() => saveLayout.mutate()}>
+              {saveLayout.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null} Save layout
             </Button>
           </DialogFooter>
         </DialogContent>

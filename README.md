@@ -183,6 +183,52 @@ send. Nothing is subscribed to.
   voided (not completed ones), and a deal with such documents can be archived
   but not deleted.
 
+### Getting forms in from WEBForms
+
+Every deal has its own address, shown on the deal page:
+
+```
+spencer+deal-3f9a1c2b7d@riversrealestate.ca
+```
+
+Gmail ignores everything after the `+`, so mail to it lands in Spencer's
+ordinary inbox. In WEBForms, email the finished forms to that address (or put
+`[deal-3f9a1c2b7d]` in the subject) and `server/deal-inbox.ts` imports each
+PDF attachment as a draft document within five minutes — or at once with
+*Check now* on the deal page. It reads the mailbox through the Google
+connection already used for Calendar, with the `gmail.readonly` scope added:
+**reconnect Google once from `/admin/scheduling`** and the deal page stops
+saying the connection predates the inbox. Read-only: nothing is labelled,
+moved or deleted; what has been looked at is recorded in
+`deal_inbound_messages` so nothing imports twice.
+
+| Env                          | What it's for |
+|------------------------------|---------------|
+| `DEAL_INBOX_MAILBOX`         | The mailbox the Google connection reads, default `spencer@riversrealestate.ca` |
+| `DEAL_INBOX_ALLOWED_SENDERS` | Optional, comma-separated addresses or `@domains`; mail from anyone else is recorded as rejected. Unset = accept any sender (the address itself is unguessable) |
+
+### Saved layouts
+
+Boxes are placed once per form and saved as a layout, keyed by signer slot
+(first buyer, second buyer, first seller…). Applying a layout to the next copy
+of that form maps the slots onto its signers; slots with no matching signer
+are skipped and reported. Saving under an existing name replaces it.
+
+### Client portal
+
+`/account/documents` lists every document whose signer email matches the
+portal user's address (drafts never appear): the private signing link, who
+else is signing, and the signed copy once complete. The dashboard card counts
+what is waiting on them.
+
+### Follow Up Boss
+
+A deal can be linked to a FUB person (searched in the CRM mirror) and one of
+their FUB deals, and to a website lead. This is the one place the app writes
+to FUB on its own: when a document completes or a party declines, a note is
+posted on the linked person (`server/deal-fub.ts`), so the CRM timeline shows
+it without anyone retyping. Needs `FUB_API_KEY`; silently skipped otherwise.
+
 ### Offsite backup (required before contracts go in)
 
 Signed contracts are legal records the brokerage must be able to produce for

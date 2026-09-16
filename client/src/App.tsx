@@ -89,6 +89,7 @@ const AccountNotesPage = lazy(() => import("@/pages/account-notes"));
 const AccountToursPage = lazy(() => import("@/pages/account-tours"));
 const AccountReportsPage = lazy(() => import("@/pages/account-reports"));
 const AccountCalendarPage = lazy(() => import("@/pages/account-calendar"));
+const AccountDocumentsPage = lazy(() => import("@/pages/account-documents"));
 
 function ProtectedRoute({ component: Component }: { component: React.ComponentType<any> }) {
   const { user, loading } = useAuth();
@@ -165,6 +166,7 @@ function AppRouter() {
       <Route path="/account/tours" component={AccountToursPage} />
       <Route path="/account/reports" component={AccountReportsPage} />
       <Route path="/account/calendar" component={AccountCalendarPage} />
+      <Route path="/account/documents" component={AccountDocumentsPage} />
 
       {/* ADMIN — agent back office */}
       <Route path="/admin" component={() => <AuthGate component={AuthPage} />} />

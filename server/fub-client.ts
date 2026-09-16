@@ -131,6 +131,34 @@ export async function fubGet<T = any>(
   return { ok: false, status: 0, error: lastError || "exhausted retries" };
 }
 
+/**
+ * One POST. No retry: a write that timed out may still have landed, and a
+ * duplicate note is worse than a missing one. Callers log and move on.
+ */
+export async function fubPost<T = any>(path: string, body: unknown, opts: { timeoutMs?: number } = {}): Promise<FubResponse<T>> {
+  if (!fubConfigured()) return { ok: false, status: 0, error: "FUB_API_KEY not set" };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 20_000);
+  try {
+    const res = await fetch(`${BASE}${path.startsWith("/") ? path : `/${path}`}`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return { ok: false, status: res.status, error: text.slice(0, 500) || `HTTP ${res.status}` };
+    }
+    const data = (await res.json().catch(() => null)) as T;
+    return { ok: true, status: res.status, data: data ?? (undefined as any) };
+  } catch (e: any) {
+    return { ok: false, status: 0, error: e?.name === "AbortError" ? "timeout" : e?.message ?? "fetch failed" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ---- Envelope handling -----------------------------------------------------
 
 /** Metadata keys a paged response might carry, whatever the envelope shape. */
