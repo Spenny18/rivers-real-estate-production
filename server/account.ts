@@ -176,7 +176,7 @@ export interface AccountReq extends Request {
   accountUser?: AccountUser;
 }
 
-function requireAccount(req: AccountReq, res: Response, next: NextFunction) {
+export function requireAccount(req: AccountReq, res: Response, next: NextFunction) {
   const user = resolveSession(parseCookie(req));
   if (!user) return res.status(401).json({ error: "not_signed_in" });
   req.accountUser = user;

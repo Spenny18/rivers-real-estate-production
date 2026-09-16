@@ -172,6 +172,18 @@ app.use((req, res, next) => {
     console.error("[crm-sync] failed to start cron:", err);
   }
   try {
+    const { startBackupCron } = await import("./backup");
+    startBackupCron();
+  } catch (err) {
+    console.error("[backup] failed to start cron:", err);
+  }
+  try {
+    const { startDealInboxCron } = await import("./deal-inbox");
+    startDealInboxCron();
+  } catch (err) {
+    console.error("[deal-inbox] failed to start cron:", err);
+  }
+  try {
     const { scheduleSitemapSubmit } = await import("./search-console");
     scheduleSitemapSubmit();
   } catch (err) {

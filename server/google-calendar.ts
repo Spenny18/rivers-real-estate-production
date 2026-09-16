@@ -42,10 +42,16 @@ import { googleRedirectUri } from "./origin";
 // webmasters lets the app submit the sitemap to Search Console after a deploy
 // and read back what Google made of it — see server/search-console.ts. It also
 // needs the "Google Search Console API" enabled in the Cloud project.
+// gmail.readonly lets the deal inbox (server/deal-inbox.ts) find forms that
+// CREA WEBForms emailed to a deal's +deal-<token> address and import the PDFs.
+// Same restricted-scope story as gmail.send: Internal consent screen, no
+// review. Read-only on purpose — the app never moves or deletes mail; what it
+// has already imported is tracked in its own table.
 const SCOPE = [
   "https://www.googleapis.com/auth/calendar.events",
   "https://www.googleapis.com/auth/calendar.freebusy",
   "https://www.googleapis.com/auth/gmail.send",
+  "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/webmasters",
 ].join(" ");
 const TOKEN_URL = "https://oauth2.googleapis.com/token";

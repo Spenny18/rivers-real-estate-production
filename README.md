@@ -53,7 +53,8 @@ fly deploy
 | `PILLAR9_USER` / `_PASS` | RETS feed credentials          |
 | `MAKE_WEBHOOK_URL`       | Social composer outbound hook  |
 | `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` | Calendar OAuth (bookings + free/busy) |
-| `PUBLIC_ORIGIN`          | Absolute origin used in booking links, emails and OAuth redirect |
+| `PUBLIC_ORIGIN`          | Absolute origin used in booking links, signing links, emails and OAuth redirect |
+| `BACKUP_*`               | Offsite backup of the database and signed contracts — see *Deals & e-signature* below |
 
 ## Project layout
 
@@ -139,6 +140,122 @@ The OAuth scopes are `calendar.events` (write the meeting) and
 `calendar.freebusy` (read busy blocks). A connection made before the
 `freebusy` scope existed keeps working but won't block slots against outside
 events; the admin card flags this and one reconnect fixes it.
+
+## Deals & e-signature
+
+The transaction file and the in-house replacement for Authentisign. Deals
+live at `/admin/deals`; each one holds the PDFs for a transaction, who signs
+them, and the evidence of what happened. CREA WEBForms stays the place forms
+are filled in — it has no API, so the bridge is its own *Save as PDF*: export
+the completed forms, upload the PDF to the deal, place the signature boxes,
+send. Nothing is subscribed to.
+
+- **Documents** (`deal_documents`) are stored under `DOCUMENTS_ROOT`
+  (`/data/documents` in production, `data/documents` locally), which is
+  deliberately *not* under the public `/uploads` mount: every download goes
+  through an authenticated admin route or the signer's token. The uploaded
+  original is never modified; its SHA-256 is recorded at upload.
+- **Signers** (`deal_signers`) each get a 256-bit token that is the only
+  credential in their emailed link, `/sign/<token>`. One token per signer per
+  document.
+- **Boxes** (`deal_fields`) — signature, initials, date, text, checkbox — are
+  placed on the pages in the admin (`/admin/deals/:id/documents/:docId`,
+  rendered with pdf.js) and stored as fractions of the page, so the same
+  layout survives any render size or DPI. Signing order is "everyone at once"
+  or "one at a time, in order".
+- **The signer's page** asks for consent to sign electronically before
+  anything is recorded (Alberta's *Electronic Transactions Act* turns on
+  attribution, consent and an unaltered record), then collects the boxes and a
+  drawn or typed signature — both become a PNG. They can decline with a
+  reason. After everyone signs, the same link serves the completed copy.
+- **Completion** (`server/signing.ts`) stamps every box onto a copy of the
+  original with pdf-lib and appends a *Signature Certificate*: the deal, the
+  original's SHA-256, each party's consent time, signed time, IP, device and
+  signature image, and the full audit trail (`deal_events`). The SHA-256 of
+  the final file is stored on the row and shown on the document page and in
+  the emails, so any copy can be checked against what was signed. Everyone
+  is emailed the signed copy (attached when under 5 MB, linked always).
+- **Emails** (Resend): the signing request, reminders, the signed copy, and
+  notices to the agent on each signature, decline and completion. See the
+  `buildSign*Html` builders in `server/email.ts`. Signing links are never
+  CC'd to the agent.
+- **Records are kept.** A sent or completed document cannot be deleted, only
+  voided (not completed ones), and a deal with such documents can be archived
+  but not deleted.
+
+### Getting forms in from WEBForms
+
+Every deal has its own address, shown on the deal page:
+
+```
+spencer+deal-3f9a1c2b7d@riversrealestate.ca
+```
+
+Gmail ignores everything after the `+`, so mail to it lands in Spencer's
+ordinary inbox. In WEBForms, email the finished forms to that address (or put
+`[deal-3f9a1c2b7d]` in the subject) and `server/deal-inbox.ts` imports each
+PDF attachment as a draft document within five minutes — or at once with
+*Check now* on the deal page. It reads the mailbox through the Google
+connection already used for Calendar, with the `gmail.readonly` scope added:
+**reconnect Google once from `/admin/scheduling`** and the deal page stops
+saying the connection predates the inbox. Read-only: nothing is labelled,
+moved or deleted; what has been looked at is recorded in
+`deal_inbound_messages` so nothing imports twice.
+
+| Env                          | What it's for |
+|------------------------------|---------------|
+| `DEAL_INBOX_MAILBOX`         | The mailbox the Google connection reads, default `spencer@riversrealestate.ca` |
+| `DEAL_INBOX_ALLOWED_SENDERS` | Optional, comma-separated addresses or `@domains`; mail from anyone else is recorded as rejected. Unset = accept any sender (the address itself is unguessable) |
+
+### Saved layouts
+
+Boxes are placed once per form and saved as a layout, keyed by signer slot
+(first buyer, second buyer, first seller…). Applying a layout to the next copy
+of that form maps the slots onto its signers; slots with no matching signer
+are skipped and reported. Saving under an existing name replaces it.
+
+### Client portal
+
+`/account/documents` lists every document whose signer email matches the
+portal user's address (drafts never appear): the private signing link, who
+else is signing, and the signed copy once complete. The dashboard card counts
+what is waiting on them.
+
+### Follow Up Boss
+
+A deal can be linked to a FUB person (searched in the CRM mirror) and one of
+their FUB deals, and to a website lead. This is the one place the app writes
+to FUB on its own: when a document completes or a party declines, a note is
+posted on the linked person (`server/deal-fub.ts`), so the CRM timeline shows
+it without anyone retyping. Needs `FUB_API_KEY`; silently skipped otherwise.
+
+### Offsite backup (required before contracts go in)
+
+Signed contracts are legal records the brokerage must be able to produce for
+years, and the SQLite database and every document live on one Fly volume.
+`server/backup.ts` copies both to an S3-compatible bucket (Cloudflare R2,
+Backblaze B2 or AWS S3) every night at 03:15 Calgary time and whenever a
+document completes, encrypted with AES-256-GCM before upload. The status and
+a *Back up now* button are at the top of `/admin/deals`; the page shouts if
+it is not configured.
+
+| Fly secret               | What it's for |
+|--------------------------|---------------|
+| `BACKUP_S3_ENDPOINT`     | e.g. `https://<account>.r2.cloudflarestorage.com` |
+| `BACKUP_S3_BUCKET`       | bucket name |
+| `BACKUP_S3_ACCESS_KEY` / `BACKUP_S3_SECRET_KEY` | a key scoped to that bucket |
+| `BACKUP_S3_REGION`       | `auto` for R2 (default), else the bucket's region |
+| `BACKUP_S3_PREFIX`       | key prefix, default `rivers` |
+| `BACKUP_ENCRYPTION_KEY`  | 64 hex chars from `openssl rand -hex 32`. **Keep a copy somewhere other than Fly** — without it the backups are unreadable |
+| `BACKUP_KEEP_DAYS`       | database snapshots older than this are pruned (default 90; the newest three are always kept) |
+
+Restore on a laptop with the same variables in a local `.env`:
+
+```sh
+npx tsx script/restore-backup.ts list
+npx tsx script/restore-backup.ts db <object-key> ./rivers.sqlite     # then copy to DB_PATH with the app stopped
+npx tsx script/restore-backup.ts documents ./documents               # rebuilds DOCUMENTS_ROOT
+```
 
 ## CRM mirror (Follow Up Boss)
 

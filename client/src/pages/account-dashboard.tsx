@@ -1,7 +1,7 @@
 import { Link } from "wouter";
-import { Heart, Search, FileText, Calendar, BarChart3, LogOut } from "lucide-react";
+import { Heart, Search, FileText, Calendar, BarChart3, LogOut, FileSignature } from "lucide-react";
 import { PublicLayout } from "@/components/public-layout";
-import { useAccount, useLogout, useFavorites, useSavedSearches, useNotes, useTours, useMarketReports } from "@/lib/account";
+import { useAccount, useLogout, useFavorites, useSavedSearches, useNotes, useTours, useMarketReports, usePortalDocuments } from "@/lib/account";
 
 const CARDS: Array<{
   href: string;
@@ -52,6 +52,13 @@ const CARDS: Array<{
     description: "Month-view of your tour schedule.",
     phase: "live",
   },
+  {
+    href: "/account/documents",
+    icon: FileSignature,
+    label: "Documents",
+    description: "Contracts to sign and your completed copies.",
+    phase: "live",
+  },
 ];
 
 export default function AccountDashboardPage() {
@@ -61,7 +68,9 @@ export default function AccountDashboardPage() {
   const { data: notes } = useNotes();
   const { data: tours } = useTours();
   const { data: reports } = useMarketReports();
+  const { data: portalDocs } = usePortalDocuments();
   const logout = useLogout();
+  const docsToSign = (portalDocs ?? []).filter((d) => d.status === "sent" && d.canSignNow && d.signerStatus !== "signed").length;
   const pendingTours = (tours ?? []).filter((t) => t.status === "requested" || t.status === "confirmed").length;
   const activeReports = (reports ?? []).filter((r) => r.active).length;
 
@@ -153,6 +162,11 @@ export default function AccountDashboardPage() {
                   {card.href === "/account/reports" && card.phase === "live" && (
                     <div className="mt-4 font-display text-[10px] tracking-[0.22em] text-muted-foreground">
                       {activeReports} ACTIVE
+                    </div>
+                  )}
+                  {card.href === "/account/documents" && (
+                    <div className={`mt-4 font-display text-[10px] tracking-[0.22em] ${docsToSign ? "text-amber-700" : "text-muted-foreground"}`}>
+                      {docsToSign} TO SIGN
                     </div>
                   )}
                 

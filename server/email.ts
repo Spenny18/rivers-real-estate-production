@@ -14,6 +14,8 @@ export interface SendEmailInput {
   text?: string;
   cc?: string;
   replyTo?: string;
+  /** Resend attachments: base64 content. Keep the total under a few MB. */
+  attachments?: Array<{ filename: string; content: string }>;
 }
 
 export interface SendEmailResult {
@@ -41,6 +43,7 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
   if (input.text) body.text = input.text;
   if (cc && cc !== input.to) body.cc = [cc];
   if (input.replyTo) body.reply_to = input.replyTo;
+  if (input.attachments?.length) body.attachments = input.attachments;
 
   try {
     const r = await fetch("https://api.resend.com/emails", {
@@ -625,5 +628,106 @@ export function buildBookingRescheduleHtml(
       <tr><td style="padding:22px 36px 0;">
         <a href="${d.toAgent ? `${d.origin}/admin/scheduling` : d.manageUrl}" style="display:inline-block;background:${BRAND.black};color:#fff;text-decoration:none;font-size:12px;letter-spacing:0.16em;padding:14px 26px;text-transform:uppercase;">${d.toAgent ? "Open scheduling" : "Manage booking"}</a>
       </td></tr>`,
+  });
+}
+
+// ---- E-signature emails (server/deal-routes.ts) ------------------------------
+
+export interface SignEmailData {
+  recipientName: string;
+  documentTitle: string;
+  dealTitle: string;
+  address?: string | null;
+  /** The agent's note, shown verbatim (escaped). */
+  message?: string | null;
+  /** The signer's private link. */
+  signUrl: string;
+  origin: string;
+}
+
+function signButton(url: string, label: string): string {
+  return `<tr><td style="padding:22px 36px 0;">
+    <a href="${url}" style="display:inline-block;background:${BRAND.black};color:#fff;text-decoration:none;font-size:12px;letter-spacing:0.16em;padding:14px 26px;text-transform:uppercase;">${label}</a>
+  </td></tr>`;
+}
+
+function signDetailRows(d: { documentTitle: string; dealTitle: string; address?: string | null; message?: string | null }, accent: string): string {
+  const row = (label: string, value: string) =>
+    `<tr><td style="padding:7px 16px 7px 0;color:${BRAND.mute};font-size:12px;letter-spacing:0.08em;text-transform:uppercase;width:110px;vertical-align:top;">${label}</td><td style="padding:7px 0;font-size:14px;color:${BRAND.black};line-height:1.5;">${value}</td></tr>`;
+  return `
+    <tr><td style="padding:20px 36px 0;">
+      <div style="border:1px solid ${BRAND.border};border-left:4px solid ${accent};padding:18px 22px;background:#fafafa;">
+        <table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;">
+          ${row("Document", escapeAttr(d.documentTitle))}
+          ${row("Deal", escapeAttr(d.dealTitle))}
+          ${d.address ? row("Property", escapeAttr(d.address)) : ""}
+          ${d.message ? row("Note", escapeAttr(d.message).replace(/\n/g, "<br />")) : ""}
+        </table>
+      </div>
+    </td></tr>`;
+}
+
+/** "Please sign": sent to each signer when the document goes out, and on reminders. */
+export function buildSignRequestHtml(d: SignEmailData & { reminder?: boolean }): string {
+  const firstName = d.recipientName.trim().split(/\s+/)[0] || "there";
+  return bookingShell({
+    eyebrow: d.reminder ? "REMINDER · SIGNATURE REQUESTED" : "SIGNATURE REQUESTED",
+    heading: `${escapeAttr(firstName)}, a document is ready for your signature.`,
+    intro: `Spencer Rivers has sent you <strong style="color:${BRAND.black};">${escapeAttr(d.documentTitle)}</strong> to review and sign electronically. The link below is yours alone — please don't forward it.`,
+    accent: BRAND.gold,
+    origin: d.origin,
+    body: `
+      ${signDetailRows(d, BRAND.gold)}
+      ${signButton(d.signUrl, "Review & sign")}
+      <tr><td style="padding:18px 36px 0;">
+        <p style="font-size:12px;color:${BRAND.mute};line-height:1.6;margin:0;">You'll be asked to confirm that you agree to sign electronically before anything is recorded. Questions? Reply to this email or call (403) 966-9237.</p>
+      </td></tr>`,
+  });
+}
+
+/** "Everyone has signed": sent to every party with the final copy. */
+export function buildSignedCopyHtml(d: SignEmailData & { sha256: string; attached: boolean }): string {
+  const firstName = d.recipientName.trim().split(/\s+/)[0] || "there";
+  return bookingShell({
+    eyebrow: "DOCUMENT COMPLETED",
+    heading: `${escapeAttr(firstName)}, all parties have signed.`,
+    intro: `<strong style="color:${BRAND.black};">${escapeAttr(d.documentTitle)}</strong> is complete. ${d.attached ? "The signed copy is attached, and you can" : "You can"} download it any time from your private link.`,
+    accent: BRAND.forest,
+    origin: d.origin,
+    body: `
+      ${signDetailRows({ documentTitle: d.documentTitle, dealTitle: d.dealTitle, address: d.address }, BRAND.forest)}
+      ${signButton(d.signUrl, "Download signed copy")}
+      <tr><td style="padding:18px 36px 0;">
+        <p style="font-size:11px;color:${BRAND.mute};line-height:1.6;margin:0;">Signed file SHA-256: <span style="font-family:Menlo,Consolas,monospace;word-break:break-all;">${escapeAttr(d.sha256)}</span><br />A copy whose hash matches this value is unaltered.</p>
+      </td></tr>`,
+  });
+}
+
+/** To the agent: a signer signed, declined, or the document completed. */
+export function buildSignAgentNoticeHtml(d: {
+  kind: "signed" | "declined" | "completed";
+  signerName?: string;
+  reason?: string | null;
+  documentTitle: string;
+  dealTitle: string;
+  address?: string | null;
+  adminUrl: string;
+  origin: string;
+}): string {
+  const heading =
+    d.kind === "completed"
+      ? `${escapeAttr(d.documentTitle)} is fully signed.`
+      : d.kind === "signed"
+        ? `${escapeAttr(d.signerName ?? "A signer")} signed ${escapeAttr(d.documentTitle)}.`
+        : `${escapeAttr(d.signerName ?? "A signer")} declined to sign ${escapeAttr(d.documentTitle)}.`;
+  return bookingShell({
+    eyebrow: d.kind === "completed" ? "DOCUMENT COMPLETED" : d.kind === "signed" ? "SIGNATURE RECEIVED" : "SIGNATURE DECLINED",
+    heading,
+    intro: d.kind === "declined" && d.reason ? `Reason given: “${escapeAttr(d.reason)}”` : d.kind === "completed" ? "The signed copy and certificate are on the deal page." : "Waiting on the remaining parties.",
+    accent: d.kind === "declined" ? "#b91c1c" : BRAND.forest,
+    origin: d.origin,
+    body: `
+      ${signDetailRows({ documentTitle: d.documentTitle, dealTitle: d.dealTitle, address: d.address }, d.kind === "declined" ? "#b91c1c" : BRAND.forest)}
+      ${signButton(d.adminUrl, "Open deal")}`,
   });
 }

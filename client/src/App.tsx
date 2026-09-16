@@ -73,6 +73,12 @@ const AdminCrmPage = lazy(() => import("@/pages/admin-crm"));
 const AdminMarketPage = lazy(() => import("@/pages/admin-market"));
 const AdminMarketReportsPage = lazy(() => import("@/pages/admin-market-reports"));
 const AdminNewsletterPage = lazy(() => import("@/pages/admin-newsletter"));
+const AdminDealsPage = lazy(() => import("@/pages/admin-deals"));
+const AdminDealPage = lazy(() => import("@/pages/admin-deal"));
+const AdminDocumentPage = lazy(() => import("@/pages/admin-document"));
+
+// E-signature — the signer's private page (/sign/<token>)
+const SignPage = lazy(() => import("@/pages/sign"));
 
 // Consumer portal (/account/*) pages
 const AccountLoginPage = lazy(() => import("@/pages/account-login"));
@@ -83,6 +89,7 @@ const AccountNotesPage = lazy(() => import("@/pages/account-notes"));
 const AccountToursPage = lazy(() => import("@/pages/account-tours"));
 const AccountReportsPage = lazy(() => import("@/pages/account-reports"));
 const AccountCalendarPage = lazy(() => import("@/pages/account-calendar"));
+const AccountDocumentsPage = lazy(() => import("@/pages/account-documents"));
 
 function ProtectedRoute({ component: Component }: { component: React.ComponentType<any> }) {
   const { user, loading } = useAuth();
@@ -146,6 +153,9 @@ function AppRouter() {
       {/* Public-facing single-listing page (slug-based, agent's own listings) */}
       <Route path="/p/:slug" component={ListingPublicPage} />
 
+      {/* E-SIGNATURE — one signer's private page; the token is the credential */}
+      <Route path="/sign/:token" component={SignPage} />
+
       {/* CONSUMER PORTAL — /account/* */}
       <Route path="/account" component={AccountLoginPage} />
       <Route path="/account/login" component={AccountLoginPage} />
@@ -156,6 +166,7 @@ function AppRouter() {
       <Route path="/account/tours" component={AccountToursPage} />
       <Route path="/account/reports" component={AccountReportsPage} />
       <Route path="/account/calendar" component={AccountCalendarPage} />
+      <Route path="/account/documents" component={AccountDocumentsPage} />
 
       {/* ADMIN — agent back office */}
       <Route path="/admin" component={() => <AuthGate component={AuthPage} />} />
@@ -201,6 +212,18 @@ function AppRouter() {
       <Route
         path="/admin/newsletter"
         component={() => <ProtectedRoute component={AdminNewsletterPage} />}
+      />
+      <Route
+        path="/admin/deals"
+        component={() => <ProtectedRoute component={AdminDealsPage} />}
+      />
+      <Route
+        path="/admin/deals/:id"
+        component={() => <ProtectedRoute component={AdminDealPage} />}
+      />
+      <Route
+        path="/admin/deals/:dealId/documents/:id"
+        component={() => <ProtectedRoute component={AdminDocumentPage} />}
       />
       <Route
         path="/admin/marketing"
