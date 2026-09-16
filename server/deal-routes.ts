@@ -683,7 +683,7 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
 
   app.post("/api/admin/deals/inbox/check", requireAuth, async (_req, res) => {
     const result = await pollDealInbox();
-    res.status(result.ok ? 200 : 502).json({ result, status: inboxStatus() });
+    res.status(result.ok ? 200 : 502).json({ message: result.error ?? undefined, result, status: inboxStatus() });
   });
 
   /** FUB deals for a contact, from the mirror — for the deal page's picker. */
@@ -835,7 +835,8 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
   app.post("/api/admin/backups/run", requireAuth, async (req, res) => {
     const kind = req.body?.kind === "documents" ? "documents" : "full";
     const run = await runBackup(kind);
-    res.status(run.status === "ok" ? 200 : 502).json({ run, status: backupStatus() });
+    // `message` first: the admin's error toast shows it instead of the raw body.
+    res.status(run.status === "ok" ? 200 : 502).json({ message: run.error ?? undefined, run, status: backupStatus() });
   });
 
   // ---- Public: the signer's page ----------------------------------------------------------

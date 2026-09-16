@@ -150,10 +150,18 @@ export async function s3PutFile(cfg: BackupConfig, key: string, filePath: string
     contentType: "application/octet-stream",
   });
   const r = await request(url, "PUT", headers, fs.createReadStream(filePath));
-  if (r.status < 200 || r.status >= 300) throw new Error(`S3 PUT ${key} failed: ${r.status} ${r.body.slice(0, 300)}`);
+  if (r.status < 200 || r.status >= 300) throw new Error(`S3 PUT failed (${r.status}): ${s3ErrorText(r.body)}`);
 }
 
 const EMPTY_SHA = createHash("sha256").update("").digest("hex");
+
+/** "<Code>InvalidArgument</Code><Message>…</Message>" → "InvalidArgument: …". */
+function s3ErrorText(body: string): string {
+  const code = /<Code>([^<]*)<\/Code>/.exec(body)?.[1];
+  const msg = /<Message>([^<]*)<\/Message>/.exec(body)?.[1];
+  if (code || msg) return [code, msg].filter(Boolean).join(": ");
+  return body.replace(/\s+/g, " ").slice(0, 200) || "no response body";
+}
 
 export async function s3List(cfg: BackupConfig, prefix: string): Promise<Array<{ key: string; lastModified: string; size: number }>> {
   const out: Array<{ key: string; lastModified: string; size: number }> = [];
@@ -164,7 +172,7 @@ export async function s3List(cfg: BackupConfig, prefix: string): Promise<Array<{
     if (token) query["continuation-token"] = token;
     const { url, headers } = signedHeaders(cfg, { method: "GET", key: "", query, payloadSha256: EMPTY_SHA });
     const r = await request(url, "GET", headers);
-    if (r.status !== 200) throw new Error(`S3 LIST failed: ${r.status} ${r.body.slice(0, 300)}`);
+    if (r.status !== 200) throw new Error(`S3 LIST failed (${r.status}): ${s3ErrorText(r.body)}`);
     const xml = parser.parse(r.body);
     const result = xml?.ListBucketResult ?? {};
     const contents = result.Contents ? (Array.isArray(result.Contents) ? result.Contents : [result.Contents]) : [];
