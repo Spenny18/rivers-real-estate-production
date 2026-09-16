@@ -65,6 +65,7 @@ import { inboxStatus, pollDealInbox, recentInboundForDeal } from "./deal-inbox";
 import { FUB_PERSON_URL, noteOnFub } from "./deal-fub";
 import { requireAccount, type AccountReq } from "./account";
 import { dealFieldTemplates, templateFieldSchema, type TemplateField } from "@shared/schema";
+import { formatStamp } from "@shared/esign-format";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
 type RateLimit = (opts: { windowMs: number; max: number; key: string }) => Middleware;
@@ -146,6 +147,7 @@ function fieldView(f: DealField) {
     h: f.h,
     required: f.required,
     label: f.label,
+    format: f.format,
     value: f.value,
     filledAt: f.filledAt,
   };
@@ -592,6 +594,7 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
           h: f.h,
           required: f.required ?? true,
           label: f.label || null,
+          format: f.format || null,
         })
         .run();
     }
@@ -736,7 +739,7 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
     }
     const fields: TemplateField[] = b.fields
       .filter((f) => slotOf.has(f.signerId))
-      .map((f) => ({ ...slotOf.get(f.signerId)!, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required, label: f.label } as TemplateField));
+      .map((f) => ({ ...slotOf.get(f.signerId)!, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required, label: f.label, format: f.format } as TemplateField));
     const parsed = z.array(templateFieldSchema).safeParse(fields);
     if (!parsed.success) return bad(res, 400, firstIssue(parsed.error));
     const existing = db.select().from(dealFieldTemplates).where(eq(dealFieldTemplates.name, name)).get();
@@ -785,7 +788,7 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
           skipped += 1;
           return null;
         }
-        return { documentId: b.document.id, signerId, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required, label: f.label };
+        return { documentId: b.document.id, signerId, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required, label: f.label, format: f.format ?? null };
       })
       .filter((r): r is NonNullable<typeof r> => r !== null);
     db.delete(dealFields).where(eq(dealFields.documentId, b.document.id)).run();
@@ -970,11 +973,9 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
     const needsInitials = mine.some((f) => f.type === "initials");
     if (needsInitials && !initials) return bad(res, 400, "Please add your initials as well.");
     for (const f of mine) {
-      if (!f.required) continue;
-      if (f.type === "signature" || f.type === "initials") continue;
+      if (!f.required || f.type !== "text") continue; // only typed boxes can be left empty
       const v = values[String(f.id)];
-      if (f.type === "checkbox") continue; // an unchecked required box is a choice, not an omission
-      if (!v || !v.trim()) return bad(res, 400, `Please fill in ${f.label || (f.type === "date" ? "the date" : "every text box")}.`);
+      if (!v || !v.trim()) return bad(res, 400, `Please fill in ${f.label || "every text box"}.`);
     }
 
     const sigBytes = Buffer.from(signature.png.split(",")[1], "base64");
@@ -990,10 +991,15 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
     }
 
     const at = nowIso();
+    const signedAt = new Date(at);
     for (const f of mine) {
       let value: string | null;
       if (f.type === "signature" || f.type === "initials") value = "signed";
       else if (f.type === "checkbox") value = values[String(f.id)] === "true" ? "true" : "false";
+      // Date and time come from the server clock at this moment, never from
+      // the browser: the printed date is evidence of when the signature was
+      // recorded, in the signing time zone.
+      else if (f.type === "date" || f.type === "time") value = formatStamp(f.type, f.format, signedAt);
       else value = (values[String(f.id)] ?? "").trim() || null;
       db.update(dealFields).set({ value, filledAt: at }).where(eq(dealFields.id, f.id)).run();
     }

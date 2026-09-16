@@ -1,6 +1,6 @@
 // Mirrors of the JSON the deal / e-signature API returns (server/deal-routes.ts).
 
-export type FieldType = "signature" | "initials" | "date" | "text" | "checkbox";
+export type FieldType = "signature" | "initials" | "date" | "time" | "text" | "checkbox";
 export type SignerRole = "buyer" | "seller" | "agent" | "witness" | "other";
 
 export interface PageSize {
@@ -19,6 +19,7 @@ export interface FieldView {
   h: number;
   required: boolean;
   label: string | null;
+  format: string | null;
   value: string | null;
   filledAt: string | null;
 }
@@ -174,10 +175,16 @@ export interface SignerPage {
 export const FIELD_LABELS: Record<FieldType, string> = {
   signature: "Signature",
   initials: "Initials",
-  date: "Date",
+  date: "Date (auto)",
+  time: "Time (auto)",
   text: "Text",
   checkbox: "Checkbox",
 };
+
+/** Filled by the server at the moment of signing; the signer never types these. */
+export function isAutoField(type: FieldType): boolean {
+  return type === "date" || type === "time";
+}
 
 export const ROLE_LABELS: Record<SignerRole, string> = {
   buyer: "Buyer",
@@ -192,6 +199,7 @@ export const FIELD_DEFAULT_SIZE: Record<FieldType, { w: number; h: number }> = {
   signature: { w: 0.26, h: 0.045 },
   initials: { w: 0.08, h: 0.035 },
   date: { w: 0.16, h: 0.028 },
+  time: { w: 0.07, h: 0.028 },
   text: { w: 0.22, h: 0.028 },
   checkbox: { w: 0.022, h: 0.017 },
 };

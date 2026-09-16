@@ -158,11 +158,17 @@ send. Nothing is subscribed to.
 - **Signers** (`deal_signers`) each get a 256-bit token that is the only
   credential in their emailed link, `/sign/<token>`. One token per signer per
   document.
-- **Boxes** (`deal_fields`) — signature, initials, date, text, checkbox — are
-  placed on the pages in the admin (`/admin/deals/:id/documents/:docId`,
-  rendered with pdf.js) and stored as fractions of the page, so the same
-  layout survives any render size or DPI. Signing order is "everyone at once"
-  or "one at a time, in order".
+- **Boxes** (`deal_fields`) — signature, initials, date, time, text,
+  checkbox — are placed on the pages in the admin
+  (`/admin/deals/:id/documents/:docId`, rendered with pdf.js) and stored as
+  fractions of the page, so the same layout survives any render size or DPI.
+  Date and time boxes are automatic: the server fills them with the moment
+  the signature was recorded (Calgary time), in a format chosen per box to
+  fit the form's blank — `shared/esign-format.ts` has the list, including
+  "September 16" for AREA's ", 20__" lines and "3:45 p" for its ". m." lines.
+  Each stamped signature also carries a small caption with the date, time
+  and document id. Signing order is "everyone at once" or "one at a time, in
+  order".
 - **The signer's page** asks for consent to sign electronically before
   anything is recorded (Alberta's *Electronic Transactions Act* turns on
   attribution, consent and an unaltered record), then collects the boxes and a

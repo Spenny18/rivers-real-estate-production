@@ -1210,7 +1210,9 @@ export const dealFields = sqliteTable("deal_fields", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   documentId: integer("document_id").notNull(),
   signerId: integer("signer_id").notNull(),
-  // 'signature' | 'initials' | 'date' | 'text' | 'checkbox'
+  // 'signature' | 'initials' | 'date' | 'time' | 'text' | 'checkbox'.
+  // date and time are automatic: filled by the server with the moment the
+  // signer signed, never typed.
   type: text("type").notNull(),
   page: integer("page").notNull(), // 1-based
   x: real("x").notNull(), // fraction of page width, from the left
@@ -1219,6 +1221,9 @@ export const dealFields = sqliteTable("deal_fields", {
   h: real("h").notNull(),
   required: integer("required", { mode: "boolean" }).notNull().default(true),
   label: text("label"),
+  // For automatic date/time boxes: which DATE_FORMATS / TIME_FORMATS id
+  // (shared/esign-format.ts). Null = the default for the type.
+  format: text("format"),
   value: text("value"),
   filledAt: text("filled_at"),
 });
@@ -1243,7 +1248,7 @@ export type InsertDealEvent = typeof dealEvents.$inferInsert;
 export const DEAL_KINDS = ["purchase", "listing", "lease", "other"] as const;
 export const DEAL_STATUSES = ["active", "closed", "archived"] as const;
 export const SIGNER_ROLES = ["buyer", "seller", "agent", "witness", "other"] as const;
-export const FIELD_TYPES = ["signature", "initials", "date", "text", "checkbox"] as const;
+export const FIELD_TYPES = ["signature", "initials", "date", "time", "text", "checkbox"] as const;
 export const SIGNING_ORDERS = ["parallel", "sequential"] as const;
 
 export const createDealSchema = z.object({
@@ -1279,6 +1284,7 @@ export const fieldInputSchema = z.object({
   h: z.number().min(0.005).max(1),
   required: z.boolean().optional(),
   label: z.string().trim().max(80).nullable().optional(),
+  format: z.string().trim().max(20).nullable().optional(),
 });
 export type FieldInput = z.infer<typeof fieldInputSchema>;
 
@@ -1312,6 +1318,7 @@ export const templateFieldSchema = z.object({
   h: z.number().min(0.005).max(1),
   required: z.boolean(),
   label: z.string().max(80).nullable(),
+  format: z.string().max(20).nullable().optional(),
 });
 export type TemplateField = z.infer<typeof templateFieldSchema>;
 

@@ -21,7 +21,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { PdfPages } from "@/components/pdf-pages";
 import { SignaturePad, type SignatureResult } from "@/components/signature-pad";
 import { apiErrorMessage, apiRequest, apiUrl } from "@/lib/queryClient";
-import { fmtDateTime, signerColour, type FieldView, type SignerPage } from "@/lib/esign-types";
+import { fmtDateTime, isAutoField, signerColour, type FieldView, type SignerPage } from "@/lib/esign-types";
+import { formatStamp } from "@shared/esign-format";
 import { SeoHead } from "@/components/seo-head";
 
 function initialsOf(name: string): string {
@@ -32,10 +33,6 @@ function initialsOf(name: string): string {
     .join("")
     .toUpperCase()
     .slice(0, 4);
-}
-
-function todayLocal(): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Edmonton", year: "numeric", month: "long", day: "numeric" }).format(new Date());
 }
 
 export default function SignPage() {
@@ -60,18 +57,6 @@ export default function SignPage() {
     window.addEventListener("resize", update);
     return () => window.removeEventListener("resize", update);
   }, []);
-
-  // Dates default to today; the signer can change them.
-  useEffect(() => {
-    if (!data) return;
-    setValues((v) => {
-      const next = { ...v };
-      for (const f of data.fields) {
-        if (f.mine && f.type === "date" && next[String(f.id)] === undefined) next[String(f.id)] = todayLocal();
-      }
-      return next;
-    });
-  }, [data]);
 
   const consent = useMutation({
     mutationFn: async () => (await apiRequest("POST", `/api/sign/${token}/consent`, {})).json() as Promise<SignerPage>,
@@ -118,7 +103,8 @@ export default function SignPage() {
     [data],
   );
 
-  const missing = mine.filter((f) => f.required && (f.type === "text" || f.type === "date") && !(values[String(f.id)] ?? "").trim());
+  const missing = mine.filter((f) => f.required && f.type === "text" && !(values[String(f.id)] ?? "").trim());
+  const toDo = mine.filter((f) => !isAutoField(f.type));
   const ready = !!signature && (!needsInitials || !!initials) && missing.length === 0;
 
   if (isLoading) {
@@ -202,8 +188,9 @@ export default function SignPage() {
     );
   } else {
     banner = (
-      <Notice tone="info" icon={<PenLine className="h-5 w-5" />} title={`${mine.length} item${mine.length === 1 ? "" : "s"} for you to complete.`}>
-        Fill in the highlighted boxes, then sign at the bottom. Boxes belonging to other parties are shown in grey.
+      <Notice tone="info" icon={<PenLine className="h-5 w-5" />} title={`${toDo.length} item${toDo.length === 1 ? "" : "s"} for you to complete.`}>
+        Fill in the highlighted boxes, then sign at the bottom. Dates and times are stamped automatically when you sign. Boxes belonging to other parties are
+        shown in grey.
       </Notice>
     );
   }
@@ -429,7 +416,23 @@ function SignerFieldBox({
     );
   }
 
-  // text / date
+  // date / time: never typed — a preview of what will be stamped, then the stamped value.
+  if (isAutoField(field.type)) {
+    const text = value || (editable ? formatStamp(field.type as "date" | "time", field.format, new Date()) : "");
+    return (
+      <div
+        className="absolute flex items-center px-1 overflow-hidden"
+        style={{ ...style, background: editable ? `${colour}14` : "transparent", border: editable ? `1px dashed ${colour}` : "none" }}
+        title={editable ? "Filled automatically when you sign" : undefined}
+      >
+        <span className="text-[10px] leading-none truncate" style={{ color: editable && !value ? colour : undefined, opacity: editable && !value ? 0.8 : 1 }}>
+          {text}
+        </span>
+      </div>
+    );
+  }
+
+  // text
   if (!editable) {
     return (
       <div className="absolute flex items-center px-0.5 overflow-hidden" style={style}>
@@ -442,7 +445,7 @@ function SignerFieldBox({
       <Input
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={field.label || (field.type === "date" ? "Date" : "Type here")}
+        placeholder={field.label || "Type here"}
         className="h-full w-full rounded-none px-1 text-[11px] leading-none"
         style={{ background: `${colour}18`, borderColor: colour, minHeight: 0 }}
       />
