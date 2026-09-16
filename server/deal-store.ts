@@ -19,6 +19,7 @@ import {
 } from "@shared/schema";
 import { documentKey, sha256Hex, writeDocument } from "./documents-store";
 import { inspectPdf } from "./signing";
+import { decryptPdfIfNeeded } from "./pdf-decrypt";
 import { queueDocumentsBackup } from "./backup";
 import { AGENT } from "./brand";
 
@@ -148,9 +149,12 @@ export interface ImportPdfInput {
  * user-facing message when the bytes are not a usable PDF.
  */
 export async function importPdfDocument(input: ImportPdfInput): Promise<DealDocument> {
-  const { bytes } = input;
-  if (bytes.length < 100 || bytes.subarray(0, 5).toString("latin1") !== "%PDF-") throw new Error("That file is not a PDF.");
-  if (bytes.length > MAX_PDF_BYTES) throw new Error("PDFs must be 10 MB or smaller.");
+  if (input.bytes.length < 100 || input.bytes.subarray(0, 5).toString("latin1") !== "%PDF-") throw new Error("That file is not a PDF.");
+  if (input.bytes.length > MAX_PDF_BYTES) throw new Error("PDFs must be 10 MB or smaller.");
+  // WEBForms exports carry an owner password (no editing/copying). Strip it so
+  // the signature stamping can write to the pages; the stored original is the
+  // decrypted copy and looks identical.
+  const { bytes, decrypted } = await decryptPdfIfNeeded(input.bytes);
   const info = await inspectPdf(bytes);
   const created = db
     .insert(dealDocuments)
@@ -175,7 +179,7 @@ export async function importPdfDocument(input: ImportPdfInput): Promise<DealDocu
   writeDocument(key, bytes);
   const doc = touchDocument(id, { storageKey: key });
   addEvent(id, "created", {
-    detail: `${info.pageCount} page(s), ${bytes.length} bytes${input.detail ? ` — ${input.detail}` : ""}`,
+    detail: `${info.pageCount} page(s), ${bytes.length} bytes${decrypted ? ", owner-password encryption removed" : ""}${input.detail ? ` — ${input.detail}` : ""}`,
     ip: input.ip,
     userAgent: input.userAgent,
   });
