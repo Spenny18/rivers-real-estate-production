@@ -1085,3 +1085,186 @@ export const CRM_RESOURCES = [
   "appointments",
 ] as const;
 export type CrmResource = (typeof CRM_RESOURCES)[number];
+
+// ---- Deals & e-signature ---------------------------------------------------
+//
+// The transaction file: one deal per property transaction, holding the PDFs
+// that need signing (exported from CREA WEBForms), who signs them, where the
+// signature boxes go, and the evidence of what happened.
+//
+//   deals            the transaction: an address, a buyer/seller side, a
+//                    lead and a listing it hangs off.
+//   deal_documents   one PDF each. `storage_key` is the untouched original,
+//                    `signed_key` the final stamped copy with the completion
+//                    certificate appended. Both are hashed (SHA-256) so a
+//                    copy can later be checked against what was signed.
+//   deal_signers     the people asked to sign one document. `token` is the
+//                    only credential in their signing link (256 bits).
+//   deal_fields      the boxes placed on the pages: signature, initials,
+//                    date, text, checkbox. Positions are fractions of the
+//                    page width/height so they survive any render scale.
+//   deal_events      the audit trail: sent, viewed, consented, signed,
+//                    declined, voided, completed — with IP and user agent.
+//
+// Files live under DOCUMENTS_ROOT (server/documents-store.ts), which is NOT
+// under the public /uploads static root: every download goes through an
+// authenticated or token-checked route.
+
+export const deals = sqliteTable("deals", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  title: text("title").notNull(),
+  address: text("address"),
+  // 'purchase' | 'listing' | 'lease' | 'other'
+  kind: text("kind").notNull().default("purchase"),
+  // 'active' | 'closed' | 'archived'
+  status: text("status").notNull().default("active"),
+  leadId: integer("lead_id"),
+  listingId: text("listing_id"),
+  mlsNumber: text("mls_number"),
+  notes: text("notes"),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+  updatedAt: text("updated_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+});
+export type Deal = typeof deals.$inferSelect;
+export type InsertDeal = typeof deals.$inferInsert;
+
+export const dealDocuments = sqliteTable("deal_documents", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  dealId: integer("deal_id").notNull(),
+  title: text("title").notNull(),
+  originalFilename: text("original_filename"),
+  // 'draft' | 'sent' | 'completed' | 'declined' | 'voided'
+  status: text("status").notNull().default("draft"),
+  storageKey: text("storage_key").notNull(),
+  originalSha256: text("original_sha256").notNull(),
+  originalBytes: integer("original_bytes").notNull(),
+  signedKey: text("signed_key"),
+  signedSha256: text("signed_sha256"),
+  signedBytes: integer("signed_bytes"),
+  pageCount: integer("page_count").notNull(),
+  // JSON [{w,h}] in PDF points per page, so field fractions map to points.
+  pageSizes: text("page_sizes").notNull(),
+  // 'parallel' — everyone is emailed at once. 'sequential' — one at a time,
+  // in signer order, each notified when the previous one signs.
+  signingOrder: text("signing_order").notNull().default("parallel"),
+  message: text("message"),
+  sentAt: text("sent_at"),
+  completedAt: text("completed_at"),
+  voidedAt: text("voided_at"),
+  voidReason: text("void_reason"),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+  updatedAt: text("updated_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+});
+export type DealDocument = typeof dealDocuments.$inferSelect;
+export type InsertDealDocument = typeof dealDocuments.$inferInsert;
+
+export const dealSigners = sqliteTable("deal_signers", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  documentId: integer("document_id").notNull(),
+  name: text("name").notNull(),
+  email: text("email").notNull(),
+  // 'buyer' | 'seller' | 'agent' | 'witness' | 'other'
+  role: text("role").notNull().default("buyer"),
+  orderIndex: integer("order_index").notNull().default(0),
+  token: text("token").notNull().unique(),
+  // 'pending' | 'sent' | 'viewed' | 'signed' | 'declined'
+  status: text("status").notNull().default("pending"),
+  consentAt: text("consent_at"),
+  signedAt: text("signed_at"),
+  declinedAt: text("declined_at"),
+  declineReason: text("decline_reason"),
+  // 'drawn' | 'typed'
+  signatureKind: text("signature_kind"),
+  signatureKey: text("signature_key"),
+  initialsKey: text("initials_key"),
+  ip: text("ip"),
+  userAgent: text("user_agent"),
+  lastEmailAt: text("last_email_at"),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+});
+export type DealSigner = typeof dealSigners.$inferSelect;
+export type InsertDealSigner = typeof dealSigners.$inferInsert;
+
+export const dealFields = sqliteTable("deal_fields", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  documentId: integer("document_id").notNull(),
+  signerId: integer("signer_id").notNull(),
+  // 'signature' | 'initials' | 'date' | 'text' | 'checkbox'
+  type: text("type").notNull(),
+  page: integer("page").notNull(), // 1-based
+  x: real("x").notNull(), // fraction of page width, from the left
+  y: real("y").notNull(), // fraction of page height, from the top
+  w: real("w").notNull(),
+  h: real("h").notNull(),
+  required: integer("required", { mode: "boolean" }).notNull().default(true),
+  label: text("label"),
+  value: text("value"),
+  filledAt: text("filled_at"),
+});
+export type DealField = typeof dealFields.$inferSelect;
+export type InsertDealField = typeof dealFields.$inferInsert;
+
+export const dealEvents = sqliteTable("deal_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  documentId: integer("document_id").notNull(),
+  signerId: integer("signer_id"),
+  type: text("type").notNull(),
+  detail: text("detail"),
+  ip: text("ip"),
+  userAgent: text("user_agent"),
+  at: text("at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+});
+export type DealEvent = typeof dealEvents.$inferSelect;
+export type InsertDealEvent = typeof dealEvents.$inferInsert;
+
+export const DEAL_KINDS = ["purchase", "listing", "lease", "other"] as const;
+export const DEAL_STATUSES = ["active", "closed", "archived"] as const;
+export const SIGNER_ROLES = ["buyer", "seller", "agent", "witness", "other"] as const;
+export const FIELD_TYPES = ["signature", "initials", "date", "text", "checkbox"] as const;
+export const SIGNING_ORDERS = ["parallel", "sequential"] as const;
+
+export const createDealSchema = z.object({
+  title: z.string().trim().min(1, "Give the deal a name").max(200),
+  address: z.string().trim().max(300).optional(),
+  kind: z.enum(DEAL_KINDS).optional(),
+  status: z.enum(DEAL_STATUSES).optional(),
+  leadId: z.number().int().positive().nullable().optional(),
+  listingId: z.string().trim().max(64).nullable().optional(),
+  mlsNumber: z.string().trim().max(32).nullable().optional(),
+  notes: z.string().max(5000).nullable().optional(),
+});
+export type CreateDealInput = z.infer<typeof createDealSchema>;
+
+export const signerInputSchema = z.object({
+  id: z.number().int().positive().optional(),
+  name: z.string().trim().min(1, "Signer needs a name").max(120),
+  email: z.string().trim().email("Signer needs a valid email").max(200),
+  role: z.enum(SIGNER_ROLES).optional(),
+});
+export type SignerInput = z.infer<typeof signerInputSchema>;
+
+export const fieldInputSchema = z.object({
+  id: z.number().int().positive().optional(),
+  signerId: z.number().int().positive(),
+  type: z.enum(FIELD_TYPES),
+  page: z.number().int().min(1),
+  x: z.number().min(0).max(1),
+  y: z.number().min(0).max(1),
+  w: z.number().min(0.005).max(1),
+  h: z.number().min(0.005).max(1),
+  required: z.boolean().optional(),
+  label: z.string().trim().max(80).nullable().optional(),
+});
+export type FieldInput = z.infer<typeof fieldInputSchema>;

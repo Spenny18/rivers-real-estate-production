@@ -736,8 +736,10 @@ export function metaForPath(path: string): SeoMeta | null {
     }
   }
 
-  // Account & admin pages — noindex (they are user-private flows)
-  if (p.startsWith("/account") || p.startsWith("/admin")) {
+  // Account & admin pages — noindex (they are user-private flows). A signing
+  // link (/sign/<token>) is one person's private contract: noindex, and never
+  // a 404 shell, since the link arrives by email and must open cleanly.
+  if (p.startsWith("/account") || p.startsWith("/admin") || p.startsWith("/sign/")) {
     return {
       title: SITE_NAME,
       description: "",

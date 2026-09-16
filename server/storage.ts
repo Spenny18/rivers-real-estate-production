@@ -837,6 +837,124 @@ sqlite.exec(`
     json TEXT NOT NULL,
     fetched_at TEXT NOT NULL
   );
+
+  -- Deals and e-signature. See the "Deals & e-signature" section of
+  -- shared/schema.ts for what each table is.
+  CREATE TABLE IF NOT EXISTS deals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    address TEXT,
+    kind TEXT NOT NULL DEFAULT 'purchase',
+    status TEXT NOT NULL DEFAULT 'active',
+    lead_id INTEGER,
+    listing_id TEXT,
+    mls_number TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_deals_status ON deals(status);
+  CREATE INDEX IF NOT EXISTS idx_deals_lead ON deals(lead_id);
+
+  CREATE TABLE IF NOT EXISTS deal_documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    deal_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    original_filename TEXT,
+    status TEXT NOT NULL DEFAULT 'draft',
+    storage_key TEXT NOT NULL,
+    original_sha256 TEXT NOT NULL,
+    original_bytes INTEGER NOT NULL,
+    signed_key TEXT,
+    signed_sha256 TEXT,
+    signed_bytes INTEGER,
+    page_count INTEGER NOT NULL,
+    page_sizes TEXT NOT NULL,
+    signing_order TEXT NOT NULL DEFAULT 'parallel',
+    message TEXT,
+    sent_at TEXT,
+    completed_at TEXT,
+    voided_at TEXT,
+    void_reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_deal_documents_deal ON deal_documents(deal_id);
+
+  CREATE TABLE IF NOT EXISTS deal_signers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'buyer',
+    order_index INTEGER NOT NULL DEFAULT 0,
+    token TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'pending',
+    consent_at TEXT,
+    signed_at TEXT,
+    declined_at TEXT,
+    decline_reason TEXT,
+    signature_kind TEXT,
+    signature_key TEXT,
+    initials_key TEXT,
+    ip TEXT,
+    user_agent TEXT,
+    last_email_at TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_deal_signers_document ON deal_signers(document_id);
+
+  CREATE TABLE IF NOT EXISTS deal_fields (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER NOT NULL,
+    signer_id INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    page INTEGER NOT NULL,
+    x REAL NOT NULL,
+    y REAL NOT NULL,
+    w REAL NOT NULL,
+    h REAL NOT NULL,
+    required INTEGER NOT NULL DEFAULT 1,
+    label TEXT,
+    value TEXT,
+    filled_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_deal_fields_document ON deal_fields(document_id);
+
+  CREATE TABLE IF NOT EXISTS deal_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER NOT NULL,
+    signer_id INTEGER,
+    type TEXT NOT NULL,
+    detail TEXT,
+    ip TEXT,
+    user_agent TEXT,
+    at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_deal_events_document ON deal_events(document_id);
+
+  -- Offsite backup bookkeeping (server/backup.ts). One row per run, and one
+  -- per document file already copied offsite so the nightly job only
+  -- uploads what is new.
+  CREATE TABLE IF NOT EXISTS backup_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,            -- full | documents
+    status TEXT NOT NULL,          -- running | ok | error
+    db_bytes INTEGER,
+    db_key TEXT,
+    files_uploaded INTEGER NOT NULL DEFAULT 0,
+    files_bytes INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS backup_files (
+    path TEXT PRIMARY KEY,         -- relative to DOCUMENTS_ROOT
+    sha256 TEXT NOT NULL,
+    bytes INTEGER NOT NULL,
+    object_key TEXT NOT NULL,
+    uploaded_at TEXT NOT NULL
+  );
 `);
 
 // Migration: add account_user_id to saved_searches so portal users own

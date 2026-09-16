@@ -14,3 +14,6 @@ dist/
 node_modules/
 {node_modules,dist,.vite,*.log,.DS_Store,.env,.env.*,\!.env.example,data.db*,.github/workflows/*.local}
 .vercel
+
+# Local document store (server/documents-store.ts) and dev database
+/data/

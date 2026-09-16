@@ -557,6 +557,16 @@ export async function registerRoutes(
     console.error("[newsletter] failed to register routes:", e);
   }
 
+  // Deals + e-signature — /api/admin/deals/*, /api/admin/documents/* and the
+  // public /api/sign/:token/* the signing emails point at. See
+  // server/deal-routes.ts.
+  try {
+    const { registerDealRoutes } = await import("./deal-routes");
+    registerDealRoutes(app, { requireAuth, rateLimit });
+  } catch (e) {
+    console.error("[esign] failed to register deal routes:", e);
+  }
+
   // Home evaluation widget — POST /api/home-value proxies to Gnowise's AVM
   // API and captures a lead. See server/home-value.ts.
   try {
@@ -972,7 +982,9 @@ export async function registerRoutes(
     `Disallow: /api/\n` +
     `Disallow: /api/admin/\n` +
     `Disallow: /api/account/\n` +
-    `Disallow: /api/auth/\n`;
+    `Disallow: /api/auth/\n` +
+    `Disallow: /api/sign/\n` +
+    `Disallow: /sign/\n`;
 
   app.get("/robots.txt", (_req, res) => {
     const origin = publicOrigin();

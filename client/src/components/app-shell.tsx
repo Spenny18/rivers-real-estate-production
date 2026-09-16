@@ -26,6 +26,7 @@ import {
   Contact,
   TrendingUp,
   FileBarChart,
+  FileSignature,
   Mail,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -47,6 +48,7 @@ const primaryNav: NavItem[] = [
   { label: "CRM", icon: Contact, href: "/admin/crm" },
   { label: "Calendar", icon: Calendar, href: "/admin/calendar" },
   { label: "Scheduling", icon: CalendarClock, href: "/admin/scheduling" },
+  { label: "Deals & E-Sign", icon: FileSignature, href: "/admin/deals" },
   { label: "Market Report", icon: TrendingUp, href: "/admin/market" },
   { label: "Community Reports", icon: FileBarChart, href: "/admin/market-reports" },
   { label: "Newsletter", icon: Mail, href: "/admin/newsletter" },
