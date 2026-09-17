@@ -4,19 +4,22 @@
  * Google only shows a video rich result (and only lists the page in video
  * search) when the page's markup carries `name`, `thumbnailUrl`, `uploadDate`
  * and one of `contentUrl` / `embedUrl`, and when the video is actually
- * watchable on that page. The homepage video block is; a blog post that
- * merely links to YouTube is not, so nothing here is emitted for those.
+ * watchable on that page. The homepage video block is, and so is a blog
+ * post whose body links to a YouTube video: the post page renders that
+ * link as a player (client/src/pages/blog-detail.tsx), and the same
+ * parser (shared/youtube.ts) decides which video both sides mean.
  *
  * Nothing is fetched from YouTube at request time. YouTube's watch page and
  * its player API answer datacenter IPs with a bot check (verified from the
  * build environment; a Fly machine is no better placed), and the oEmbed
  * endpoint that does answer carries no upload date or duration. Both come
  * from the CMS instead — the editor reads them off YouTube Studio once — and
- * the title, description and poster fall back to what the block already
- * shows on the page, so the markup never claims more than the page does.
+ * the title, description and poster fall back to what the page already
+ * shows, so the markup never claims more than the page does.
  */
 
 import { IDS, type SchemaNode } from "./entities";
+import { youtubeIdFrom, youtubeThumbnails } from "@shared/youtube";
 
 /** Accept "5:53", "1:02:03", "353" (seconds) or an ISO 8601 duration
  * ("PT5M53S") and return the ISO form, or undefined when it isn't one. */
@@ -49,17 +52,9 @@ export function isoUploadDate(raw: unknown): string | undefined {
   return v;
 }
 
-/** A YouTube id is 11 URL-safe base64 characters. The CMS field says "the
- * part after watch?v=", but a pasted URL is an easy mistake — pull the id
- * out of the common URL shapes too. */
-export function youtubeId(raw: unknown): string | undefined {
-  if (typeof raw !== "string") return undefined;
-  const v = raw.trim();
-  if (!v) return undefined;
-  if (/^[A-Za-z0-9_-]{11}$/.test(v)) return v;
-  const m = v.match(/(?:youtu\.be\/|[?&]v=|\/embed\/|\/shorts\/)([A-Za-z0-9_-]{11})/);
-  return m?.[1];
-}
+/** The CMS field says "the part after watch?v=", but a pasted URL is an easy
+ * mistake — shared/youtube.ts pulls the id out of the common URL shapes. */
+export const youtubeId = youtubeIdFrom;
 
 export interface YouTubeVideoInput {
   /** The page the video is embedded on (absolute). Anchors the @id. */
@@ -80,11 +75,10 @@ export function youtubeVideoNode(input: YouTubeVideoInput): SchemaNode | null {
   const name = input.name?.trim();
   if (!id || !name) return null;
 
-  const maxres = `https://i.ytimg.com/vi/${id}/maxresdefault.jpg`;
-  const hq = `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+  const [maxres, hq] = youtubeThumbnails(id);
   const poster = input.thumbnail?.trim();
-  // The CMS poster first (it is what the page shows), then YouTube's own
-  // frames: maxres isn't rendered for every upload, hqdefault always is.
+  // The page's own poster first (it is what the visitor sees), then
+  // YouTube's frames: maxres isn't rendered for every upload, hqdefault is.
   const thumbnailUrl = Array.from(new Set([poster || maxres, maxres, hq]));
 
   const node: SchemaNode = {

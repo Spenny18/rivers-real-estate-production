@@ -295,6 +295,13 @@ export const blogPosts = sqliteTable("blog_posts", {
   publishedAt: text("published_at")
     .notNull()
     .$defaultFn(() => new Date().toISOString()),
+  // When the body links to a YouTube video, the page embeds it and describes
+  // it to search engines (VideoObject). YouTube won't tell a server when the
+  // video went live or how long it is, so the editor records both here:
+  // ISO date (or timestamp) and m:ss / ISO 8601 duration. Null = unknown;
+  // the schema then falls back to publishedAt and omits the length.
+  videoUploadDate: text("video_upload_date"),
+  videoDuration: text("video_duration"),
 });
 
 export type BlogPost = typeof blogPosts.$inferSelect;

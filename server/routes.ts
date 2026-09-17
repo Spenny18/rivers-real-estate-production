@@ -2780,6 +2780,8 @@ export async function registerRoutes(
         readMinutes: Number(body.readMinutes) || Math.max(3, Math.ceil(String(body.body).split(/\s+/).length / 220)),
         status: body.status === "published" ? "published" : "draft",
         publishedAt: typeof body.publishedAt === "string" ? body.publishedAt : new Date().toISOString(),
+        videoUploadDate: typeof body.videoUploadDate === "string" && body.videoUploadDate.trim() ? body.videoUploadDate.trim() : null,
+        videoDuration: typeof body.videoDuration === "string" && body.videoDuration.trim() ? body.videoDuration.trim() : null,
       } as any);
       res.status(201).json(created);
     } catch (err: any) {
@@ -2806,6 +2808,15 @@ export async function registerRoutes(
         readMinutes: typeof body.readMinutes === "number" ? body.readMinutes : existing.readMinutes,
         status: body.status === "draft" || body.status === "published" ? body.status : (existing as any).status,
         publishedAt: typeof body.publishedAt === "string" ? body.publishedAt : existing.publishedAt,
+        // Empty string clears the value (the editor sends "" for a blanked box).
+        videoUploadDate:
+          typeof body.videoUploadDate === "string" || body.videoUploadDate === null
+            ? (body.videoUploadDate?.trim() || null)
+            : existing.videoUploadDate,
+        videoDuration:
+          typeof body.videoDuration === "string" || body.videoDuration === null
+            ? (body.videoDuration?.trim() || null)
+            : existing.videoDuration,
       } as any);
       res.json(updated);
     } catch (err: any) {
