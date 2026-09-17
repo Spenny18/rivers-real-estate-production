@@ -84,7 +84,13 @@ needed to edit its copy, images, section order, or metadata.
   page in `shared/home-content.ts` is served, so the site is never blank.
 - **SEO:** the page's title/description/canonical/OG image feed
   `server/seo-inject.ts`, so crawlers get the edited metadata in the
-  server-rendered `<head>`. An FAQ block also emits FAQPage schema.
+  server-rendered `<head>`. An FAQ block also emits FAQPage schema, and a
+  Video block emits a VideoObject (`server/schema/video.ts`) for its YouTube
+  embed. Google needs the upload date to list the page in video results, so
+  the block carries *Published on YouTube*, *Video length* and a search-only
+  description alongside the video ID — fill them from YouTube Studio, and
+  update them whenever the video ID changes. Nothing is fetched from YouTube
+  at request time (its pages answer server IPs with a bot check).
 - **Live preview:** the editor embeds the real homepage at `/?cmsPreview=1`
   and pushes the unsaved draft over `postMessage`. That URL is served as the
   CSR shell (see `server/ssr.ts`) because the preview wraps each section in a
