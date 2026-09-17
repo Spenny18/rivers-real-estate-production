@@ -285,6 +285,10 @@ export const blogPosts = sqliteTable("blog_posts", {
   // SEO alt text for the hero image — the post's focus keyword. Falls back
   // to the post title in the client when null.
   heroImageAlt: text("hero_image_alt"),
+  // Optional video attached to the post (YouTube/Vimeo page URL or a direct
+  // .mp4). Rendered in the hero slot with the hero image as its poster, and
+  // emitted as schema.org VideoObject markup — see shared/video.ts.
+  videoUrl: text("video_url"),
   authorName: text("author_name").notNull().default("Spencer Rivers"),
   authorAvatar: text("author_avatar"),
   readMinutes: integer("read_minutes").notNull().default(4),

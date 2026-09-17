@@ -11,6 +11,8 @@ import {
   SPENCER_EMAIL_HREF,
 } from "@/lib/format";
 import type { PublicBlogPost } from "@/lib/mls-types";
+import { parseVideoUrl } from "@shared/video";
+import { VideoEmbed } from "@/components/video-embed";
 
 const BLOG_FALLBACK_HERO =
   "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?w=1600&h=900&fit=crop&q=80";
@@ -31,12 +33,23 @@ function fmtDate(iso: string) {
 
 // Render the blog body. Posts may be plain text with double-newline paragraphs,
 // or simple markdown-flavored content (## headings, **bold**, etc).
-// We support: paragraphs, h2 (## ), h3 (### ), and a blockquote (> ).
-function renderBody(body: string) {
+// We support: paragraphs, h2 (## ), h3 (### ), a blockquote (> ), and a
+// video URL on its own line (YouTube / Vimeo / .mp4), which becomes an
+// embedded player. The server emits VideoObject schema for exactly these —
+// keep the paragraph split and parseVideoUrl in step with shared/video.ts.
+function renderBody(body: string, postTitle: string) {
   const blocks = body.split(/\n\s*\n/);
   return blocks.map((raw, i) => {
     const block = raw.trim();
     if (!block) return null;
+    const video = parseVideoUrl(block);
+    if (video) {
+      return (
+        <figure key={i} className="my-10">
+          <VideoEmbed video={video} title={postTitle} className="shadow-lg" />
+        </figure>
+      );
+    }
     if (block.startsWith("## ")) {
       return (
         <h2
@@ -163,6 +176,8 @@ export default function BlogDetailPage() {
   const related = (allPosts ?? [])
     .filter((p) => p.slug !== post.slug)
     .slice(0, 3);
+  // An attached video takes the hero slot, with the hero image as its poster.
+  const heroVideo = parseVideoUrl(post.videoUrl);
 
   return (
     <PublicLayout>
@@ -199,21 +214,30 @@ export default function BlogDetailPage() {
           </div>
         </section>
 
-        {/* Hero image */}
+        {/* Hero image, or the attached video with the hero image as poster */}
         <section className="max-w-[1100px] mx-auto px-4 lg:px-8 mt-12">
-          <div className="aspect-[16/9] rounded-sm overflow-hidden bg-secondary">
-            <img
-              src={heroFor(post)}
-              onError={(e) => ((e.target as HTMLImageElement).src = BLOG_FALLBACK_HERO)}
-              alt={post.heroImageAlt || post.title}
-              className="w-full h-full object-cover"
+          {heroVideo ? (
+            <VideoEmbed
+              video={heroVideo}
+              title={post.title}
+              poster={heroFor(post)}
+              className="shadow-2xl"
             />
-          </div>
+          ) : (
+            <div className="aspect-[16/9] rounded-sm overflow-hidden bg-secondary">
+              <img
+                src={heroFor(post)}
+                onError={(e) => ((e.target as HTMLImageElement).src = BLOG_FALLBACK_HERO)}
+                alt={post.heroImageAlt || post.title}
+                className="w-full h-full object-cover"
+              />
+            </div>
+          )}
         </section>
 
         {/* Body */}
         <section className="max-w-[720px] mx-auto px-6 mt-14 lg:mt-20">
-          <div data-testid="blog-body">{renderBody(post.body)}</div>
+          <div data-testid="blog-body">{renderBody(post.body, post.title)}</div>
         </section>
 
         {/* Author / CTA */}

@@ -256,6 +256,7 @@ sqlite.exec(`
     body TEXT NOT NULL,
     category TEXT NOT NULL DEFAULT 'Market',
     hero_image TEXT NOT NULL,
+    video_url TEXT,
     author_name TEXT NOT NULL DEFAULT 'Spencer Rivers',
     author_avatar TEXT,
     read_minutes INTEGER NOT NULL DEFAULT 4,
@@ -1074,6 +1075,18 @@ try {
   }
 } catch (e) {
   console.error("[migration] blog_posts hero_image_alt:", e);
+}
+
+// Migration: add video_url to blog_posts — an optional attached video
+// (YouTube/Vimeo/.mp4). Nullable; posts without one are unaffected.
+try {
+  const cols = sqlite.prepare("PRAGMA table_info(blog_posts)").all() as Array<{ name: string }>;
+  if (cols.length > 0 && !cols.some((c) => c.name === "video_url")) {
+    sqlite.exec("ALTER TABLE blog_posts ADD COLUMN video_url TEXT");
+    console.log("[migration] added video_url to blog_posts");
+  }
+} catch (e) {
+  console.error("[migration] blog_posts video_url:", e);
 }
 
 // One-time backfill (2026-07-31): the BOFU cluster cadence assigned one shared
@@ -2796,6 +2809,7 @@ export class DatabaseStorage implements IStorage {
         category: blogPosts.category,
         heroImage: blogPosts.heroImage,
         heroImageAlt: blogPosts.heroImageAlt,
+        videoUrl: blogPosts.videoUrl,
         authorName: blogPosts.authorName,
         authorAvatar: blogPosts.authorAvatar,
         readMinutes: blogPosts.readMinutes,

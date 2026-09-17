@@ -24,6 +24,7 @@ interface AdminBlogPost {
   category: string;
   heroImage: string;
   heroImageAlt: string | null;
+  videoUrl: string | null;
   authorName: string;
   authorAvatar: string | null;
   readMinutes: number;
@@ -315,6 +316,23 @@ export default function AdminBlogPage() {
                     className="mt-1 h-10"
                     placeholder="e.g. Calgary luxury home staging"
                   />
+                </div>
+
+                <div>
+                  <Label className="text-xs font-display tracking-[0.18em] text-muted-foreground">
+                    VIDEO (YOUTUBE / VIMEO / .MP4 URL — OPTIONAL)
+                  </Label>
+                  <Input
+                    value={draft.videoUrl || ""}
+                    onChange={(e) => setDraft({ ...draft, videoUrl: e.target.value || null })}
+                    className="mt-1 h-10"
+                    placeholder="https://www.youtube.com/watch?v=…"
+                  />
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Plays in the hero slot with the hero image as its poster, and gets
+                    VideoObject schema automatically. A YouTube, Vimeo or .mp4 link on its
+                    own line in the body is embedded (and marked up) the same way.
+                  </p>
                 </div>
 
                 <div>

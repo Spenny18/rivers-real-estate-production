@@ -29,6 +29,7 @@ import {
   CMS_PAGES,
 } from "./page-content";
 import { normalizeBlocks, normalizeSeo } from "@shared/home-content";
+import { parseVideoUrl } from "@shared/video";
 import { invalidateSsrCache } from "./ssr";
 
 import { publicOrigin } from "./origin";
@@ -2775,6 +2776,10 @@ export async function registerRoutes(
         category: String(body.category ?? "Guide"),
         heroImage,
         heroImageAlt: typeof body.heroImageAlt === "string" ? body.heroImageAlt : altFromTitle(String(body.title)),
+        // Attached video (YouTube/Vimeo/.mp4 URL). Anything unrecognised is
+        // dropped rather than stored: the page would render nothing for it
+        // and the schema must describe only what the page shows.
+        videoUrl: parseVideoUrl(body.videoUrl) ? String(body.videoUrl).trim() : null,
         authorName: String(body.authorName ?? "Spencer Rivers"),
         authorAvatar: body.authorAvatar ?? null,
         readMinutes: Number(body.readMinutes) || Math.max(3, Math.ceil(String(body.body).split(/\s+/).length / 220)),
@@ -2792,6 +2797,11 @@ export async function registerRoutes(
     const existing = storage.getBlogBySlug(req.params.slug);
     if (!existing) return res.status(404).json({ message: "Post not found" });
     const body = req.body || {};
+    if (typeof body.videoUrl === "string" && body.videoUrl.trim() && !parseVideoUrl(body.videoUrl)) {
+      return res.status(400).json({
+        message: "videoUrl must be a YouTube or Vimeo link, or a direct .mp4/.webm/.mov URL",
+      });
+    }
     try {
       const updated = storage.upsertBlogPost({
         slug: existing.slug, // never rename via PATCH
@@ -2801,6 +2811,14 @@ export async function registerRoutes(
         category: typeof body.category === "string" ? body.category : existing.category,
         heroImage: typeof body.heroImage === "string" ? body.heroImage : existing.heroImage,
         heroImageAlt: typeof body.heroImageAlt === "string" || body.heroImageAlt === null ? body.heroImageAlt : existing.heroImageAlt,
+        // "" or null clears the video; a recognised URL sets it; an
+        // unrecognised string is rejected below rather than silently kept.
+        videoUrl:
+          body.videoUrl === null || (typeof body.videoUrl === "string" && !body.videoUrl.trim())
+            ? null
+            : typeof body.videoUrl === "string"
+              ? body.videoUrl.trim()
+              : (existing as any).videoUrl ?? null,
         authorName: typeof body.authorName === "string" ? body.authorName : existing.authorName,
         authorAvatar: typeof body.authorAvatar === "string" ? body.authorAvatar : existing.authorAvatar,
         readMinutes: typeof body.readMinutes === "number" ? body.readMinutes : existing.readMinutes,

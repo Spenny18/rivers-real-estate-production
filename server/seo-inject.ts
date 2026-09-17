@@ -20,6 +20,7 @@ import { storage } from "./storage";
 import { buildGraph, IDS, type SchemaNode } from "./schema/entities";
 import { getPublicPageContent } from "./page-content";
 import { publicOrigin } from "./origin";
+import { collectPostVideos, parseVideoUrl, type VideoRef } from "@shared/video";
 
 const ORIGIN = publicOrigin();
 const SITE_NAME = "Rivers Real Estate";
@@ -178,6 +179,53 @@ function crumbs(...items: Array<[name: string, url: string]>): SchemaNode {
   };
 }
 
+/** ISO-8601 date/datetime, or undefined — never a synthesised or malformed one. */
+function isoDate(v: unknown): string | undefined {
+  if (typeof v !== "string") return undefined;
+  const s = v.trim();
+  if (!/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/.test(s)) return undefined;
+  return Number.isNaN(Date.parse(s)) ? undefined : s;
+}
+
+/**
+ * VideoObject node for a video the page actually renders (see
+ * shared/video.ts — the same parser decides what the client embeds, so the
+ * markup can never describe a video the visitor doesn't get). Google's video
+ * rich result needs name, thumbnailUrl, uploadDate and one of contentUrl /
+ * embedUrl; everything else is optional-guarded.
+ */
+function videoObject(o: {
+  id: string;
+  video: VideoRef;
+  name: string;
+  description?: string | null;
+  /** Our own poster (hero image). Provider thumbnails come first when they exist. */
+  poster?: string | null;
+  uploadDate?: string | null;
+  pageUrl: string;
+}): SchemaNode {
+  const v = o.video;
+  const thumbs = [...v.thumbnailUrls, ...(o.poster ? [o.poster] : [])].filter(
+    (t, i, arr) => arr.indexOf(t) === i,
+  );
+  const upload = isoDate(o.uploadDate);
+  return {
+    "@type": "VideoObject",
+    "@id": o.id,
+    name: o.name,
+    ...(o.description ? { description: o.description } : {}),
+    ...(thumbs.length ? { thumbnailUrl: thumbs.length === 1 ? thumbs[0] : thumbs } : {}),
+    ...(upload ? { uploadDate: upload } : {}),
+    url: v.url,
+    ...(v.embedUrl ? { embedUrl: v.embedUrl } : {}),
+    ...(v.contentUrl ? { contentUrl: absoluteUrl(v.contentUrl) } : {}),
+    inLanguage: "en-CA",
+    mainEntityOfPage: { "@id": o.pageUrl },
+    author: { "@id": IDS.person },
+    publisher: { "@id": IDS.agent },
+  };
+}
+
 /** Map a Pillar 9 property (sub)type string to the schema.org residence type. */
 function residenceType(subOrType: string | null | undefined): string {
   const s = (subOrType || "").toLowerCase();
@@ -301,6 +349,27 @@ export function metaForPath(path: string): SeoMeta | null {
           acceptedAnswer: { "@type": "Answer", text: q.answer },
         })),
       });
+    }
+    // Every enabled Video block (client/src/components/home-blocks.tsx
+    // VideoBlock) is a YouTube embed on the page — mark each one up.
+    let videoN = 0;
+    for (const b of home.blocks) {
+      if (b.type !== "video") continue;
+      const d = (b.data ?? {}) as Record<string, unknown>;
+      const video = parseVideoUrl(`https://www.youtube.com/watch?v=${String(d.youtubeId ?? "").trim()}`);
+      if (!video) continue;
+      videoN += 1;
+      jsonLd.push(
+        videoObject({
+          id: `${ORIGIN}/#video${videoN > 1 ? `-${videoN}` : ""}`,
+          video,
+          name: String(d.videoTitle || d.heading || home.seo.title),
+          description: typeof d.body === "string" && d.body ? d.body : home.seo.description,
+          poster: absoluteUrl(d.thumbnail),
+          uploadDate: typeof d.uploadDate === "string" ? d.uploadDate : undefined,
+          pageUrl: `${ORIGIN}/`,
+        }),
+      );
     }
     return {
       title: home.seo.title,
@@ -505,6 +574,24 @@ export function metaForPath(path: string): SeoMeta | null {
       }
       const blogUrl = `${ORIGIN}/blog/${slug}`;
       const heroImage = absoluteUrl(post.heroImage) || DEFAULT_IMAGE;
+      // Every video the article page renders — the attached one (hero
+      // slot) and any bare video URL paragraph in the body — gets its own
+      // VideoObject, and the BlogPosting points at them via `video`. The
+      // post's publish date is the closest real timestamp we hold for the
+      // video: the CMS has no separate upload date, and the video went live
+      // on this site with the post.
+      const videoNodes = collectPostVideos(post).map((video, i) =>
+        videoObject({
+          id: `${blogUrl}#video${i > 0 ? `-${i + 1}` : ""}`,
+          video,
+          name: post.title,
+          description: post.excerpt || undefined,
+          poster: heroImage,
+          uploadDate: post.publishedAt,
+          pageUrl: blogUrl,
+        }),
+      );
+      const videoRefs = videoNodes.map((n) => ({ "@id": n["@id"] }));
       return {
         title: `${post.title} — ${SITE_NAME}`,
         description:
@@ -534,7 +621,11 @@ export function metaForPath(path: string): SeoMeta | null {
                 ? { "@id": IDS.person }
                 : { "@type": "Person", name: post.authorName },
             publisher: { "@id": IDS.agent },
+            ...(videoRefs.length
+              ? { video: videoRefs.length === 1 ? videoRefs[0] : videoRefs }
+              : {}),
           },
+          ...videoNodes,
           {
             "@type": "BreadcrumbList",
             itemListElement: [

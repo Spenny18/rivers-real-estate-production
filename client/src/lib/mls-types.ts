@@ -93,6 +93,8 @@ export interface PublicBlogPost {
   category: string;
   heroImage: string;
   heroImageAlt: string | null;
+  /** Attached video (YouTube/Vimeo/.mp4 URL), shown in the hero slot. */
+  videoUrl?: string | null;
   authorName: string;
   authorAvatar: string | null;
   readMinutes: number;
