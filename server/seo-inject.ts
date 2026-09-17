@@ -547,6 +547,14 @@ export function metaForPath(path: string): SeoMeta | null {
       // own fields; a post that never had them filled in falls back to its
       // publish date — a repurposed-video post goes up the same day as the
       // video — and simply omits the length.
+      //
+      // The node stands on its own in the graph, exactly like the homepage
+      // one: it is not hung off the BlogPosting through `video`. Validators
+      // fold an @id-referenced node into the node that references it, so
+      // with the reference the video showed up only inside the article's
+      // details, not as a detected item of its own. Google doesn't need the
+      // link — it reads VideoObject wherever it sits — and a standalone
+      // item is what the page is trying to be listed for.
       const video = typeof post.body === "string" ? findYouTubeReferences(post.body)[0] : undefined;
       const videoNode = video
         ? youtubeVideoNode({
@@ -590,7 +598,6 @@ export function metaForPath(path: string): SeoMeta | null {
                 ? { "@id": IDS.person }
                 : { "@type": "Person", name: post.authorName },
             publisher: { "@id": IDS.agent },
-            ...(videoNode ? { video: { "@id": videoNode["@id"] } } : {}),
           },
           ...(videoNode ? [videoNode] : []),
           {
