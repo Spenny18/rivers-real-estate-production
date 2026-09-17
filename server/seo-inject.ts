@@ -19,6 +19,8 @@
 import { storage } from "./storage";
 import { buildGraph, IDS, type SchemaNode } from "./schema/entities";
 import { getPublicPageContent } from "./page-content";
+import { getBlockType } from "@shared/home-content";
+import { youtubeVideoNode } from "./schema/video";
 import { publicOrigin } from "./origin";
 
 const ORIGIN = publicOrigin();
@@ -302,6 +304,39 @@ export function metaForPath(path: string): SeoMeta | null {
         })),
       });
     }
+    // Every enabled video block is a YouTube embed the visitor can play
+    // right on the page, so each one is a VideoObject (Google's video rich
+    // result / video search). Title, poster and copy are what the block
+    // renders; upload date, length and the search-only description are the
+    // block's own fields (see shared/home-content.ts).
+    const homeUrl = `${ORIGIN}/`;
+    const videoDefaults = getBlockType("video")?.defaults ?? {};
+    for (const block of home.blocks) {
+      if (block.type !== "video") continue;
+      const d = block.data ?? {};
+      // normalizeBlock fills a missing field from the factory defaults, and
+      // the factory date/length/description describe the factory video. A
+      // page that swapped in another video without touching those fields
+      // would otherwise claim the old video's date for the new one — so
+      // when the id differs from the factory's, a value still equal to the
+      // factory's is treated as unset rather than emitted.
+      const own = (key: string): string | undefined => {
+        const v = d[key];
+        if (typeof v !== "string" || !v.trim()) return undefined;
+        if (d.youtubeId !== videoDefaults.youtubeId && v === videoDefaults[key]) return undefined;
+        return v;
+      };
+      const node = youtubeVideoNode({
+        pageUrl: homeUrl,
+        youtubeId: String(d.youtubeId ?? ""),
+        name: String(d.videoTitle || d.heading || ""),
+        description: own("videoDescription") ?? (typeof d.body === "string" ? d.body : undefined),
+        thumbnail: absoluteUrl(d.thumbnail),
+        uploadDate: own("videoUploadDate"),
+        duration: own("videoDuration"),
+      });
+      if (node) jsonLd.push(node);
+    }
     return {
       title: home.seo.title,
       description: home.seo.description,
@@ -309,8 +344,8 @@ export function metaForPath(path: string): SeoMeta | null {
       ogImage: home.seo.ogImage || undefined,
       ogType: "website",
       noindex: home.seo.noindex,
-      // WebSite + agent + person all live in the core graph — nothing else
-      // page-specific to add.
+      // WebSite + agent + person all live in the core graph; the page adds
+      // only what its blocks show (FAQ, video).
       jsonLd,
     };
   }

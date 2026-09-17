@@ -635,6 +635,31 @@ export const BLOCK_TYPES: BlockTypeDef[] = [
       },
       { key: "videoTitle", label: "Embed title (accessibility)", type: "text" },
       BODY,
+      // The three fields Google needs for a video rich result that the page
+      // itself doesn't show. They describe the YouTube upload, so they must
+      // change together with the video ID above. Read them off YouTube
+      // Studio (Content → the video → Details / Analytics).
+      {
+        key: "videoUploadDate",
+        label: "Published on YouTube",
+        type: "text",
+        placeholder: "2025-01-01",
+        help: "Date the video went live on YouTube, as YYYY-MM-DD. Search engines need it to list the page in video results. Update it when you change the video ID.",
+      },
+      {
+        key: "videoDuration",
+        label: "Video length",
+        type: "text",
+        placeholder: "5:53",
+        help: "Minutes:seconds (or h:mm:ss), as YouTube shows it.",
+      },
+      {
+        key: "videoDescription",
+        label: "Video description (search engines only)",
+        type: "textarea",
+        rows: 4,
+        help: "What the video is about, for search engines. Not shown on the page. Leave blank to use the paragraph above.",
+      },
       ...STYLE_FIELDS,
     ],
     defaults: {
@@ -644,6 +669,13 @@ export const BLOCK_TYPES: BlockTypeDef[] = [
       thumbnail: "",
       videoTitle: "Why Spencer Rivers is the best luxury realtor in Calgary",
       body: "With nearly 8,500 REALTORS® in Calgary, choosing the right one for your luxury home sale or purchase matters. Spencer has worked in Calgary real estate since 2015, with a primary focus on the city's prestige market and the local details that shape value.",
+      // From the YouTube upload TV0Rm0fZxI8 ("Not Using 1 Of The Top
+      // Realtors in Calgary Could Cost You Thousands!"), published
+      // 2025-01-01, 5:53 long.
+      videoUploadDate: "2025-01-01",
+      videoDuration: "5:53",
+      videoDescription:
+        "With nearly 8,500 REALTORS® in Calgary, finding the right one can feel overwhelming. Spencer Rivers, a top Calgary real estate agent specialising in luxury homes, explains what sets top REALTORS® apart, how to choose the right one, what certifications like Certified Negotiation Expert and Certified Condo Specialist mean for buyers and sellers, and the marketing — HDR photography, 3D tours, non-MLS exposure — that sells a luxury home in Calgary.",
       ...STYLE_DEFAULTS,
     },
   },
