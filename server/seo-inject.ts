@@ -21,6 +21,7 @@ import { buildGraph, IDS, type SchemaNode } from "./schema/entities";
 import { getPublicPageContent } from "./page-content";
 import { getBlockType } from "@shared/home-content";
 import { youtubeVideoNode } from "./schema/video";
+import { findYouTubeReferences, isYouTubeThumbnailFor } from "@shared/youtube";
 import { publicOrigin } from "./origin";
 
 const ORIGIN = publicOrigin();
@@ -540,6 +541,26 @@ export function metaForPath(path: string): SeoMeta | null {
       }
       const blogUrl = `${ORIGIN}/blog/${slug}`;
       const heroImage = absoluteUrl(post.heroImage) || DEFAULT_IMAGE;
+      // The first YouTube video the body links to is the one the page
+      // embeds (blog-detail.tsx renders that mention as a player), so it
+      // is the one described here. Upload date and length are the post's
+      // own fields; a post that never had them filled in falls back to its
+      // publish date — a repurposed-video post goes up the same day as the
+      // video — and simply omits the length.
+      const video = typeof post.body === "string" ? findYouTubeReferences(post.body)[0] : undefined;
+      const videoNode = video
+        ? youtubeVideoNode({
+            pageUrl: blogUrl,
+            youtubeId: video.id,
+            name: video.title || post.title,
+            description: post.excerpt || undefined,
+            // A hero that is already this video's YouTube frame adds nothing
+            // the node doesn't list itself.
+            thumbnail: isYouTubeThumbnailFor(heroImage, video.id) ? undefined : heroImage,
+            uploadDate: post.videoUploadDate || post.publishedAt,
+            duration: post.videoDuration || undefined,
+          })
+        : null;
       return {
         title: `${post.title} — ${SITE_NAME}`,
         description:
@@ -569,7 +590,9 @@ export function metaForPath(path: string): SeoMeta | null {
                 ? { "@id": IDS.person }
                 : { "@type": "Person", name: post.authorName },
             publisher: { "@id": IDS.agent },
+            ...(videoNode ? { video: { "@id": videoNode["@id"] } } : {}),
           },
+          ...(videoNode ? [videoNode] : []),
           {
             "@type": "BreadcrumbList",
             itemListElement: [

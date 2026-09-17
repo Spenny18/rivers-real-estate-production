@@ -11,6 +11,8 @@ import {
   SPENCER_EMAIL_HREF,
 } from "@/lib/format";
 import type { PublicBlogPost } from "@/lib/mls-types";
+import { YouTubeEmbed } from "@/components/youtube-embed";
+import { findYouTubeReferences } from "@shared/youtube";
 
 const BLOG_FALLBACK_HERO =
   "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?w=1600&h=900&fit=crop&q=80";
@@ -31,12 +33,35 @@ function fmtDate(iso: string) {
 
 // Render the blog body. Posts may be plain text with double-newline paragraphs,
 // or simple markdown-flavored content (## headings, **bold**, etc).
-// We support: paragraphs, h2 (## ), h3 (### ), and a blockquote (> ).
+// We support: paragraphs, h2 (## ), h3 (### ), a blockquote (> ), bullets,
+// [links](url), and a YouTube link — the first paragraph that carries one
+// becomes a player, with the paragraph as its caption. The server describes
+// that same video to search engines (server/seo-inject.ts), so the two must
+// keep agreeing on which mention is "the" video: the first, by document
+// order, per shared/youtube.ts.
 function renderBody(body: string) {
   const blocks = body.split(/\n\s*\n/);
+  const video = findYouTubeReferences(body)[0];
+  let videoPlaced = false;
   return blocks.map((raw, i) => {
     const block = raw.trim();
     if (!block) return null;
+    if (video && !videoPlaced && findYouTubeReferences(block).some((v) => v.id === video.id)) {
+      videoPlaced = true;
+      return (
+        <figure key={i} className="my-10">
+          <YouTubeEmbed
+            id={video.id}
+            title={video.title || "Video"}
+            className="rounded-sm shadow-xl"
+            testid="blog-video"
+          />
+          <figcaption className="mt-3 text-[14px] leading-[1.6] text-muted-foreground">
+            {inline(block)}
+          </figcaption>
+        </figure>
+      );
+    }
     if (block.startsWith("## ")) {
       return (
         <h2
@@ -88,8 +113,34 @@ function renderBody(body: string) {
   });
 }
 
-// Tiny inline-format helper for **bold** and *italic*.
+// Tiny inline-format helper for [links](url), **bold** and *italic*.
+// Links first, so the emphasis passes never see a URL (an underscore or an
+// asterisk inside one would otherwise be read as formatting).
+const MD_LINK = /(\[[^\]]*\]\(https?:\/\/[^\s)]+\))/g;
 function inline(text: string): React.ReactNode {
+  return text.split(MD_LINK).map((seg, i) => {
+    const link = seg.match(/^\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)$/);
+    if (link) {
+      const [, label, href] = link;
+      // This page is server-rendered, so no window here: our own host is
+      // matched by name. Anything else opens in a new tab.
+      const external = !/^https?:\/\/(?:www\.)?riversrealestate\.ca(?:[/?#]|$)/i.test(href);
+      return (
+        <a
+          key={i}
+          href={href}
+          className="underline underline-offset-4 decoration-foreground/40 hover:decoration-foreground text-foreground"
+          {...(external ? { target: "_blank", rel: "noopener" } : {})}
+        >
+          {emphasis(label || href)}
+        </a>
+      );
+    }
+    return <span key={i}>{emphasis(seg)}</span>;
+  });
+}
+
+function emphasis(text: string): React.ReactNode {
   // Bold first
   const parts = text.split(/(\*\*[^*]+\*\*)/g);
   return parts.map((p, i) => {

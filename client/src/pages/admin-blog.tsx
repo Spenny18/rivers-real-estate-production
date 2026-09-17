@@ -29,6 +29,8 @@ interface AdminBlogPost {
   readMinutes: number;
   status: "draft" | "published";
   publishedAt: string;
+  videoUploadDate: string | null;
+  videoDuration: string | null;
 }
 
 function fmtDate(iso: string) {
@@ -317,6 +319,39 @@ export default function AdminBlogPage() {
                   />
                 </div>
 
+                {/* A YouTube link in the body becomes a player on the page and a
+                    VideoObject for search engines. YouTube won't tell the server
+                    when the video went live or how long it is, so they're typed
+                    here (YouTube Studio → Content → the video). */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-xs font-display tracking-[0.18em] text-muted-foreground">
+                      VIDEO PUBLISHED ON YOUTUBE
+                    </Label>
+                    <Input
+                      value={draft.videoUploadDate || ""}
+                      onChange={(e) => setDraft({ ...draft, videoUploadDate: e.target.value })}
+                      className="mt-1 h-10"
+                      placeholder="YYYY-MM-DD"
+                    />
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      Only used when the body links to a YouTube video. Blank = the post date.
+                    </p>
+                  </div>
+                  <div>
+                    <Label className="text-xs font-display tracking-[0.18em] text-muted-foreground">
+                      VIDEO LENGTH
+                    </Label>
+                    <Input
+                      value={draft.videoDuration || ""}
+                      onChange={(e) => setDraft({ ...draft, videoDuration: e.target.value })}
+                      className="mt-1 h-10"
+                      placeholder="12:22"
+                    />
+                    <p className="mt-1 text-[11px] text-muted-foreground">Minutes:seconds, as YouTube shows it.</p>
+                  </div>
+                </div>
+
                 <div>
                   <Label className="text-xs font-display tracking-[0.18em] text-muted-foreground">
                     EXCERPT
@@ -332,7 +367,7 @@ export default function AdminBlogPage() {
 
                 <div>
                   <Label className="text-xs font-display tracking-[0.18em] text-muted-foreground">
-                    BODY (markdown: ## H2, ### H3, &gt; blockquote, **bold**)
+                    BODY (markdown: ## H2, ### H3, &gt; blockquote, **bold**, [link](url); a YouTube link embeds the video)
                   </Label>
                   <Textarea
                     rows={24}

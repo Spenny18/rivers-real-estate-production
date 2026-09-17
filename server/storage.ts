@@ -1076,6 +1076,34 @@ try {
   console.error("[migration] blog_posts hero_image_alt:", e);
 }
 
+// Migration: video_upload_date + video_duration on blog_posts — what the
+// VideoObject schema needs for a YouTube video the body links to and the
+// page embeds (shared/youtube.ts). Nullable; the schema falls back to the
+// post date and omits the length when unset.
+try {
+  const cols = sqlite.prepare("PRAGMA table_info(blog_posts)").all() as Array<{ name: string }>;
+  if (cols.length > 0 && !cols.some((c) => c.name === "video_upload_date")) {
+    sqlite.exec("ALTER TABLE blog_posts ADD COLUMN video_upload_date TEXT");
+    sqlite.exec("ALTER TABLE blog_posts ADD COLUMN video_duration TEXT");
+    console.log("[migration] added video_upload_date + video_duration to blog_posts");
+  }
+} catch (e) {
+  console.error("[migration] blog_posts video columns:", e);
+}
+
+// One-time backfill (2026-09-17): the one post that already linked a YouTube
+// video when the columns arrived, with the values YouTube reports for that
+// upload (FZXc9bluIlc). Guarded on video_upload_date IS NULL so it applies
+// once and never overrides a later edit from /admin/blog.
+try {
+  const r = sqlite
+    .prepare("UPDATE blog_posts SET video_upload_date = ?, video_duration = ? WHERE slug = ? AND video_upload_date IS NULL")
+    .run("2026-08-31T18:20:13Z", "PT12M22S", "the-3m-to-4m-sweet-spot-inside-calgarys-hottest-micro-market");
+  if (r.changes > 0) console.log("[migration] backfilled video date + length on the $3M-$4M post");
+} catch (e) {
+  console.error("[migration] blog_posts video backfill:", e);
+}
+
 // One-time backfill (2026-07-31): the BOFU cluster cadence assigned one shared
 // hero image per 3-post cluster, so recent posts repeated the same 7 images.
 // Give each of the 20 most recent posts a unique, topical hero + focus-keyword
@@ -1369,7 +1397,9 @@ export const db = drizzle(sqlite);
 
 // Convert raw row → public-shape (parse JSON arrays)
 /** A blog post as listings return it — everything but the article body. */
-export type BlogPostSummary = Omit<BlogPost, "body">;
+// Summaries carry neither the body nor the video fields: the cards and the
+// admin list show neither, and the article page fetches the full row.
+export type BlogPostSummary = Omit<BlogPost, "body" | "videoUploadDate" | "videoDuration">;
 
 /** List-view shapes: identity and metadata, without the long-form copy. */
 export type NeighbourhoodSummary = Pick<

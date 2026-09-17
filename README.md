@@ -91,6 +91,12 @@ needed to edit its copy, images, section order, or metadata.
   description alongside the video ID — fill them from YouTube Studio, and
   update them whenever the video ID changes. Nothing is fetched from YouTube
   at request time (its pages answer server IPs with a bot check).
+- **Blog videos:** a YouTube link in a post's body (`[title](https://www.youtube.com/watch?v=…)`)
+  renders as a click-to-play player where it first appears, and the post's
+  schema gains a VideoObject for it. The post's *Video published on YouTube*
+  and *Video length* fields in `/admin/blog` feed that markup (blank = the
+  post date, no length). `shared/youtube.ts` is the one parser both the
+  page and the schema use to decide which video a post shows.
 - **Live preview:** the editor embeds the real homepage at `/?cmsPreview=1`
   and pushes the unsaved draft over `postMessage`. That URL is served as the
   CSR shell (see `server/ssr.ts`) because the preview wraps each section in a

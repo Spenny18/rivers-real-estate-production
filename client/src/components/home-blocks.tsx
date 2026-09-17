@@ -37,7 +37,6 @@ import {
   Mail,
   MapPin,
   Phone,
-  Play,
   Search,
   Send,
   ShieldCheck,
@@ -49,6 +48,8 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ListingCard } from "@/components/listing-card";
+import { YouTubeEmbed } from "@/components/youtube-embed";
+import { youtubeIdFrom } from "@shared/youtube";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -867,11 +868,10 @@ function NumberedListBlock({ data }: { data: Data }) {
 }
 
 function VideoBlock({ data }: { data: Data }) {
-  const [playing, setPlaying] = useState(false);
   const dark = data.bg === "dark";
   const t = tone(dark);
-  const id = String(data.youtubeId || "").trim();
-  const poster = data.thumbnail || (id ? `https://i.ytimg.com/vi/${id}/maxresdefault.jpg` : "");
+  // A pasted URL is as good as the bare id (the field asks for the id).
+  const id = youtubeIdFrom(data.youtubeId) ?? "";
   return (
     <BlockSection data={data} testid="section-video">
       <div className="max-w-[1100px] mx-auto px-6 lg:px-10 text-center">
@@ -885,41 +885,13 @@ function VideoBlock({ data }: { data: Data }) {
         </h2>
 
         {id ? (
-          <div className="mt-12 lg:mt-16 relative aspect-video rounded-sm overflow-hidden bg-black shadow-2xl">
-            {playing ? (
-              <iframe
-                src={`https://www.youtube.com/embed/${id}?autoplay=1&rel=0`}
-                title={data.videoTitle || data.heading}
-                className="w-full h-full"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen
-              />
-            ) : (
-              <button
-                onClick={() => setPlaying(true)}
-                className="group absolute inset-0 w-full h-full"
-                aria-label={data.videoTitle || "Play video"}
-                data-testid="btn-play-video"
-              >
-                {poster ? (
-                  <img
-                    src={poster}
-                    alt={data.videoTitle || "Video thumbnail"}
-                    className="w-full h-full object-cover opacity-90 group-hover:opacity-100 transition-opacity"
-                  />
-                ) : null}
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <span className="w-20 h-20 lg:w-24 lg:h-24 rounded-full bg-white/95 group-hover:bg-white flex items-center justify-center transition-transform group-hover:scale-105">
-                    <Play
-                      className="w-8 h-8 lg:w-10 lg:h-10 text-black ml-1"
-                      strokeWidth={1.6}
-                      fill="currentColor"
-                    />
-                  </span>
-                </div>
-              </button>
-            )}
-          </div>
+          <YouTubeEmbed
+            id={id}
+            title={data.videoTitle || data.heading || "Video"}
+            poster={data.thumbnail || undefined}
+            className="mt-12 lg:mt-16 rounded-sm shadow-2xl"
+            testid="section-video-embed"
+          />
         ) : null}
 
         {data.body ? (
