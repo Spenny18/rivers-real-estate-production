@@ -1,4 +1,4 @@
-import { ReactNode } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { Logo } from "@/components/logo";
 import { useTheme } from "@/components/theme-provider";
@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   Home,
   Users,
+  Megaphone,
   Search,
   Bell,
   Sun,
@@ -14,7 +15,6 @@ import {
   Database,
   Globe,
   Calendar,
-  Megaphone,
   BarChart3,
   Bookmark,
   Building2,
@@ -29,6 +29,8 @@ import {
   FileSignature,
   FileStack,
   Mail,
+  Briefcase,
+  ChevronDown,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -42,32 +44,132 @@ interface NavItem {
   badge?: string | number;
 }
 
-const primaryNav: NavItem[] = [
+/**
+ * A top-level sidebar entry. Entries with `children` render as a collapsible
+ * group; the children are revealed when the parent row is clicked. A group
+ * may optionally have its own `href` (e.g. Calendar), in which case clicking
+ * the label navigates there and opens the group, while the chevron only
+ * toggles the group.
+ */
+interface NavGroup {
+  label: string;
+  icon: typeof LayoutDashboard;
+  href?: string;
+  children?: NavItem[];
+}
+
+const primaryNav: NavGroup[] = [
   { label: "Dashboard", icon: LayoutDashboard, href: "/admin/dashboard" },
-  { label: "Listings", icon: Home, href: "/admin/listings" },
-  { label: "Leads", icon: Users, href: "/admin/leads" },
-  { label: "CRM", icon: Contact, href: "/admin/crm" },
-  { label: "Calendar", icon: Calendar, href: "/admin/calendar" },
-  { label: "Scheduling", icon: CalendarClock, href: "/admin/scheduling" },
-  { label: "Deals & E-Sign", icon: FileSignature, href: "/admin/deals" },
-  { label: "Forms", icon: FileStack, href: "/admin/forms" },
-  { label: "Market Report", icon: TrendingUp, href: "/admin/market" },
-  { label: "Community Reports", icon: FileBarChart, href: "/admin/market-reports" },
+  {
+    label: "Calendar",
+    icon: Calendar,
+    href: "/admin/calendar",
+    children: [
+      { label: "Scheduling", icon: CalendarClock, href: "/admin/scheduling" },
+    ],
+  },
+  {
+    label: "CRM",
+    icon: Contact,
+    href: "/admin/crm",
+    children: [
+      { label: "Listings", icon: Home, href: "/admin/listings" },
+      { label: "Leads", icon: Users, href: "/admin/leads" },
+    ],
+  },
+  {
+    label: "Transactions",
+    icon: Briefcase,
+    children: [
+      { label: "Forms", icon: FileStack, href: "/admin/forms" },
+      { label: "Deals & E-Sign", icon: FileSignature, href: "/admin/deals" },
+    ],
+  },
+  {
+    label: "Market Report",
+    icon: TrendingUp,
+    href: "/admin/market",
+    children: [
+      { label: "Community Reports", icon: FileBarChart, href: "/admin/market-reports" },
+    ],
+  },
   { label: "Newsletter", icon: Mail, href: "/admin/newsletter" },
   { label: "Marketing", icon: Megaphone, href: "/admin/marketing" },
   { label: "Analytics", icon: BarChart3, href: "/admin/analytics" },
-  { label: "Saved Searches", icon: Bookmark, href: "/admin/saved-searches" },
-  { label: "Home Page CMS", icon: LayoutTemplate, href: "/admin/home" },
-  { label: "Condos CMS", icon: Building2, href: "/admin/condos" },
-  { label: "Neighbourhoods", icon: MapPinned, href: "/admin/neighbourhoods" },
-  { label: "Blog CMS", icon: FileText, href: "/admin/blog" },
-  { label: "SEO Keywords", icon: Target, href: "/admin/seo" },
-  { label: "MLS Sync", icon: Database, href: "/admin/mls-sync" },
+  {
+    label: "Website",
+    icon: Globe,
+    children: [
+      { label: "Saved Searches", icon: Bookmark, href: "/admin/saved-searches" },
+      { label: "Home Page CMS", icon: LayoutTemplate, href: "/admin/home" },
+      { label: "Condos CMS", icon: Building2, href: "/admin/condos" },
+      { label: "Neighbourhoods", icon: MapPinned, href: "/admin/neighbourhoods" },
+      { label: "Blog CMS", icon: FileText, href: "/admin/blog" },
+      { label: "SEO Keywords", icon: Target, href: "/admin/seo" },
+      { label: "MLS Sync", icon: Database, href: "/admin/mls-sync" },
+    ],
+  },
 ];
 
 const secondaryNav: NavItem[] = [
   { label: "View Public Site", icon: Globe, href: "/" },
 ];
+
+const testId = (label: string) => `nav-${label.toLowerCase().replace(/\s/g, "-")}`;
+
+/** Exact match, or a nested route under `href` (segment-aware so /admin/market
+ *  does not light up for /admin/market-reports). */
+function isRouteActive(location: string, href: string) {
+  if (href === "/" || href === "/admin/dashboard") return location === href;
+  return location === href || location.startsWith(`${href}/`);
+}
+
+function groupContainsRoute(group: NavGroup, location: string) {
+  return (group.children ?? []).some((c) => isRouteActive(location, c.href));
+}
+
+/** True when the group's own page or any of its children is the current route. */
+function groupOwnsRoute(group: NavGroup, location: string) {
+  return (group.href ? isRouteActive(location, group.href) : false) || groupContainsRoute(group, location);
+}
+
+// Every admin page mounts its own AppShell, so expanded/collapsed state has to
+// live outside the component or it resets on each navigation.
+const OPEN_GROUPS_KEY = "admin-sidebar-open-groups";
+function loadOpenGroups(): Set<string> {
+  try {
+    const raw = sessionStorage.getItem(OPEN_GROUPS_KEY);
+    if (raw) return new Set(JSON.parse(raw) as string[]);
+  } catch {
+    /* ignore */
+  }
+  return new Set();
+}
+function saveOpenGroups(groups: Set<string>) {
+  try {
+    sessionStorage.setItem(OPEN_GROUPS_KEY, JSON.stringify(Array.from(groups)));
+  } catch {
+    /* ignore */
+  }
+}
+
+const rowClass = (active: boolean) =>
+  `flex items-center gap-3 px-3 py-2 rounded-sm transition-all group ${
+    active
+      ? "bg-sidebar-accent text-sidebar-accent-foreground"
+      : "text-sidebar-foreground/75 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+  }`;
+
+function NavLabel({ label, active }: { label: string; active: boolean }) {
+  return (
+    <span
+      className="flex-1 font-display text-[11px] tracking-[0.16em]"
+      style={{ fontWeight: active ? 600 : 500 }}
+    >
+      {label.toUpperCase()}
+    </span>
+  );
+}
 
 export function AppShell({
   children,
@@ -84,11 +186,127 @@ export function AppShell({
   const { theme, toggle } = useTheme();
   const { user, signOut } = useAuth();
 
-  const navWithBadges = primaryNav.map((item) =>
-    item.href === "/admin/leads" && newLeadCount > 0
-      ? { ...item, badge: newLeadCount }
-      : item,
-  );
+  // Groups the user has expanded. The group containing the current route is
+  // opened automatically so the active child is never hidden.
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
+    const initial = loadOpenGroups();
+    for (const g of primaryNav) if (g.children && groupOwnsRoute(g, location)) initial.add(g.label);
+    return initial;
+  });
+  useEffect(() => {
+    const owner = primaryNav.find((g) => g.children && groupOwnsRoute(g, location));
+    if (owner && !openGroups.has(owner.label)) {
+      setOpenGroups((prev) => new Set(prev).add(owner.label));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location]);
+  useEffect(() => saveOpenGroups(openGroups), [openGroups]);
+
+  const toggleGroup = (label: string) =>
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return next;
+    });
+  const openGroup = (label: string) =>
+    setOpenGroups((prev) => (prev.has(label) ? prev : new Set(prev).add(label)));
+
+  const badgeFor = (href: string) =>
+    href === "/admin/leads" && newLeadCount > 0 ? newLeadCount : undefined;
+
+  const renderLeaf = (item: NavItem, nested = false) => {
+    const active = isRouteActive(location, item.href);
+    const Icon = item.icon;
+    const badge = item.badge ?? badgeFor(item.href);
+    return (
+      <Link
+        key={item.href}
+        href={item.href}
+        data-testid={testId(item.label)}
+        className={`${rowClass(active)} ${nested ? "pl-9" : ""}`}
+      >
+        <Icon className={`${nested ? "w-3.5 h-3.5" : "w-4 h-4"} shrink-0`} strokeWidth={1.6} />
+        <NavLabel label={item.label} active={active} />
+        {badge ? (
+          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-sm bg-white text-black tabular-nums">
+            {badge}
+          </span>
+        ) : null}
+      </Link>
+    );
+  };
+
+  const renderGroup = (group: NavGroup) => {
+    if (!group.children?.length) {
+      return renderLeaf({ label: group.label, icon: group.icon, href: group.href! });
+    }
+    const Icon = group.icon;
+    const open = openGroups.has(group.label);
+    const selfActive = group.href ? isRouteActive(location, group.href) : false;
+    const childActive = groupContainsRoute(group, location);
+    const chevron = (
+      <ChevronDown
+        className={`w-3.5 h-3.5 shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
+        strokeWidth={1.6}
+      />
+    );
+    const content = (
+      <>
+        <Icon className="w-4 h-4 shrink-0" strokeWidth={1.6} />
+        <NavLabel label={group.label} active={selfActive || childActive} />
+      </>
+    );
+
+    return (
+      <div key={group.label} className="flex flex-col gap-0.5">
+        {group.href ? (
+          // Parent with its own page: the label navigates (and opens the
+          // group); the chevron toggles without navigating.
+          <div className={`${rowClass(selfActive)} ${!selfActive && childActive ? "text-sidebar-foreground" : ""}`}>
+            <Link
+              href={group.href}
+              data-testid={testId(group.label)}
+              className="flex flex-1 items-center gap-3 min-w-0"
+              onClick={() => openGroup(group.label)}
+            >
+              {content}
+            </Link>
+            <button
+              type="button"
+              aria-label={`${open ? "Collapse" : "Expand"} ${group.label}`}
+              aria-expanded={open}
+              data-testid={`${testId(group.label)}-toggle`}
+              className="p-1 -mr-1 rounded-sm hover:bg-sidebar-accent"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                toggleGroup(group.label);
+              }}
+            >
+              {chevron}
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            aria-expanded={open}
+            data-testid={testId(group.label)}
+            className={`${rowClass(false)} w-full text-left ${childActive ? "text-sidebar-foreground" : ""}`}
+            onClick={() => toggleGroup(group.label)}
+          >
+            {content}
+            {chevron}
+          </button>
+        )}
+        {open ? (
+          <div className="flex flex-col gap-0.5" data-testid={`${testId(group.label)}-children`}>
+            {group.children.map((child) => renderLeaf(child, true))}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
 
   return (
     <div className="grid grid-cols-[260px_1fr] grid-rows-[auto_1fr] h-[100dvh] bg-background overflow-hidden">
@@ -105,60 +323,12 @@ export function AppShell({
           <div className="px-3 py-2 mt-1 font-display text-[10px] tracking-[0.2em] text-sidebar-foreground/45">
             WORKSPACE
           </div>
-          {navWithBadges.map((item) => {
-            const active =
-              location === item.href ||
-              (item.href !== "/admin/dashboard" && item.href !== "/" && location.startsWith(item.href));
-            const Icon = item.icon;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                data-testid={`nav-${item.label.toLowerCase().replace(/\s/g, "-")}`} className={`flex items-center gap-3 px-3 py-2 rounded-sm transition-all group ${
-                    active
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                      : "text-sidebar-foreground/75 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
-                  }`}>
-                  <Icon className="w-4 h-4 shrink-0" strokeWidth={1.6} />
-                  <span
-                    className="flex-1 font-display text-[11px] tracking-[0.16em]"
-                    style={{ fontWeight: active ? 600 : 500 }}
-                  >
-                    {item.label.toUpperCase()}
-                  </span>
-                  {item.badge ? (
-                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-sm bg-white text-black tabular-nums">
-                      {item.badge}
-                    </span>
-                  ) : null}
-                
-              </Link>
-            );
-          })}
+          {primaryNav.map(renderGroup)}
 
           <div className="px-3 py-2 mt-5 font-display text-[10px] tracking-[0.2em] text-sidebar-foreground/45">
             ACCOUNT
           </div>
-          {secondaryNav.map((item) => {
-            const active = location === item.href;
-            const Icon = item.icon;
-            return (
-              <Link key={item.href} href={item.href} data-testid={`nav-${item.label.toLowerCase()}`} className={`flex items-center gap-3 px-3 py-2 rounded-sm transition-all ${
-                    active
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                      : "text-sidebar-foreground/75 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
-                  }`}>
-                  <Icon className="w-4 h-4 shrink-0" strokeWidth={1.6} />
-                  <span
-                    className="font-display text-[11px] tracking-[0.16em]"
-                    style={{ fontWeight: active ? 600 : 500 }}
-                  >
-                    {item.label.toUpperCase()}
-                  </span>
-                
-              </Link>
-            );
-          })}
+          {secondaryNav.map((item) => renderLeaf(item))}
         </nav>
 
         {/* Plan card */}
