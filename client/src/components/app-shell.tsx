@@ -4,6 +4,9 @@ import { Logo } from "@/components/logo";
 import { useTheme } from "@/components/theme-provider";
 import {
   LayoutDashboard,
+  Home,
+  Users,
+  Megaphone,
   Search,
   Bell,
   Sun,
@@ -65,7 +68,15 @@ const primaryNav: NavGroup[] = [
       { label: "Scheduling", icon: CalendarClock, href: "/admin/scheduling" },
     ],
   },
-  { label: "CRM", icon: Contact, href: "/admin/crm" },
+  {
+    label: "CRM",
+    icon: Contact,
+    href: "/admin/crm",
+    children: [
+      { label: "Listings", icon: Home, href: "/admin/listings" },
+      { label: "Leads", icon: Users, href: "/admin/leads" },
+    ],
+  },
   {
     label: "Transactions",
     icon: Briefcase,
@@ -83,6 +94,7 @@ const primaryNav: NavGroup[] = [
     ],
   },
   { label: "Newsletter", icon: Mail, href: "/admin/newsletter" },
+  { label: "Marketing", icon: Megaphone, href: "/admin/marketing" },
   { label: "Analytics", icon: BarChart3, href: "/admin/analytics" },
   {
     label: "Website",
