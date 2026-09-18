@@ -63,6 +63,7 @@ import { backupStatus, queueDocumentsBackup, runBackup } from "./backup";
 import { AGENT } from "./brand";
 import { inboxStatus, pollDealInbox, recentInboundForDeal } from "./deal-inbox";
 import { FUB_PERSON_URL, noteOnFub } from "./deal-fub";
+import { contactAddress } from "./form-templates";
 import { requireAccount, type AccountReq } from "./account";
 import { dealFieldTemplates, templateFieldSchema, type TemplateField } from "@shared/schema";
 import { formatStamp } from "@shared/esign-format";
@@ -219,7 +220,7 @@ function dealView(d: Deal) {
     notes: d.notes,
     crmContactFubId: d.crmContactFubId,
     crmContact: contact
-      ? { fubId: contact.fubId, name: contact.name, email: contact.email, phone: contact.phone, stage: contact.stage, url: FUB_PERSON_URL(contact.fubId) }
+      ? { fubId: contact.fubId, name: contact.name, email: contact.email, phone: contact.phone, address: contactAddress(contact), stage: contact.stage, url: FUB_PERSON_URL(contact.fubId) }
       : null,
     crmDealFubId: d.crmDealFubId,
     crmDeal: crmDeal ? { fubId: crmDeal.fubId, name: crmDeal.name, stageName: crmDeal.stageName, value: crmDeal.value, status: crmDeal.status } : null,

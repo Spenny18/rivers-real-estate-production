@@ -550,6 +550,7 @@ function ClientCard({ deal, onSaved }: { deal: DealView; onSaved: (d: DealView) 
                   {deal.crmContact.phone ? ` · ${deal.crmContact.phone}` : ""}
                   {deal.crmContact.stage ? ` · ${deal.crmContact.stage}` : ""}
                 </div>
+                {deal.crmContact.address ? <div className="text-[11px] text-muted-foreground truncate">{deal.crmContact.address}</div> : null}
                 <a href={deal.crmContact.url} target="_blank" rel="noreferrer" className="text-[11px] inline-flex items-center gap-1 underline underline-offset-2 mt-1">
                   Open in Follow Up Boss <ExternalLink className="h-3 w-3" />
                 </a>

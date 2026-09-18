@@ -212,6 +212,30 @@ function listingForDeal(deal: Deal): MlsListing | undefined {
   return undefined;
 }
 
+/**
+ * The mailing address Follow Up Boss holds for a person, from the mirrored
+ * person JSON (`addresses: [{ type, street, city, state, code, country }]`).
+ * The home address wins over an office one; the first one otherwise.
+ */
+export function contactAddress(contact: { raw: string } | undefined): string | null {
+  if (!contact) return null;
+  let raw: any;
+  try {
+    raw = JSON.parse(contact.raw || "{}");
+  } catch {
+    return null;
+  }
+  const list: any[] = Array.isArray(raw?.addresses) ? raw.addresses : raw?.address ? [raw.address] : [];
+  const pick = list.find((a) => a && typeof a === "object" && String(a.type ?? "").toLowerCase() === "home") ?? list.find((a) => a && typeof a === "object");
+  if (!pick) return null;
+  const street = String(pick.street ?? pick.street1 ?? pick.address ?? "").trim();
+  const city = String(pick.city ?? "").trim();
+  const state = String(pick.state ?? pick.province ?? "").trim();
+  const code = String(pick.code ?? pick.postalCode ?? pick.zip ?? "").trim();
+  const line = [street, city, [state, code].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+  return line || null;
+}
+
 function streetOf(l: MlsListing): string {
   const num = [l.unit ? `${l.unit} -` : "", l.streetNumber ?? "", l.streetName ?? ""].filter(Boolean).join(" ").trim();
   return num || l.fullAddress.split(",")[0].trim();
@@ -302,8 +326,8 @@ export function prefillForDeal(deal: Deal, template: FormTemplate): Prefill {
 
   // 3. The client, when nobody was carried forward into the first slot.
   const clientRole: PartyRole = deal.kind === "listing" ? "seller" : "buyer";
+  const contact = deal.crmContactFubId ? storage.getCrmContact(deal.crmContactFubId) : undefined;
   if (slots[clientRole] > 0 && !values[partyKey(clientRole, 1, "name")] && !values[partyKey(clientRole, 1, "email")]) {
-    const contact = deal.crmContactFubId ? storage.getCrmContact(deal.crmContactFubId) : undefined;
     const lead = deal.leadId ? storage.getLead(deal.leadId) : undefined;
     const name = contact?.name || lead?.name;
     const email = contact?.email || lead?.email;
@@ -312,7 +336,14 @@ export function prefillForDeal(deal: Deal, template: FormTemplate): Prefill {
       set(partyKey(clientRole, 1, "name"), name, "contact");
       set(partyKey(clientRole, 1, "email"), email, "contact");
       set(partyKey(clientRole, 1, "phone"), phone, "contact");
+      set(partyKey(clientRole, 1, "address"), contactAddress(contact), "contact");
     }
+  }
+  // The mailing address from Follow Up Boss, whenever the first slot is that
+  // person and the address is still blank (a previous form may predate it).
+  if (slots[clientRole] > 0 && contact && !values[partyKey(clientRole, 1, "address")]) {
+    const sameEmail = contact.email && (values[partyKey(clientRole, 1, "email")] ?? "").trim().toLowerCase() === contact.email.trim().toLowerCase();
+    if (sameEmail) set(partyKey(clientRole, 1, "address"), contactAddress(contact), "contact");
   }
 
   return {
