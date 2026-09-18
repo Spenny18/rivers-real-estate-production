@@ -103,7 +103,7 @@ export interface DealView {
   mlsNumber: string | null;
   notes: string | null;
   crmContactFubId: string | null;
-  crmContact: { fubId: string; name: string | null; email: string | null; phone: string | null; stage: string | null; url: string } | null;
+  crmContact: { fubId: string; name: string | null; email: string | null; phone: string | null; address: string | null; stage: string | null; url: string } | null;
   crmDealFubId: string | null;
   crmDeal: { fubId: string; name: string | null; stageName: string | null; value: number | null; status: string | null } | null;
   inboxAddress: string | null;
