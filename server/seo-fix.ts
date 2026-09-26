@@ -395,7 +395,7 @@ Prefer differentiating when both pages earn meaningful impressions for different
 - Use set_cluster only to change the cluster definition (pillar, head term, vocabulary, explicit members).`);
   }
   if (resolved.kind === "candidate") {
-    parts.push(`These posts share a topic no cluster owns. Decide whether it deserves its own cluster. If yes: one set_cluster change creating it (clusterId null, a short label, pillar = the best existing page or the suggested one, head term, vocabulary words, members = the posts), edit_blog changes that link each post up to the pillar, differentiated targets for posts that overlap, and plannedTopics for missing angles. If a whole new pillar page is needed, draft it with create_blog_draft and set it as pillar using its future path /blog/<slug>. If it does not deserve a cluster, return no changes and explain why.`);
+    parts.push(`These posts share a topic no cluster owns. Decide whether it deserves its own cluster. If yes: one set_cluster change creating it (clusterId "", a short label, pillar = the best existing page or the suggested one, head term, vocabulary words, members = the posts), edit_blog changes that link each post up to the pillar, differentiated targets for posts that overlap, and plannedTopics for missing angles. If a whole new pillar page is needed, draft it with create_blog_draft and set it as pillar using its future path /blog/<slug>. If it does not deserve a cluster, return no changes and explain why.`);
   }
   if (resolved.opportunity?.type === "content_gap") {
     parts.push(`No page targets this query yet. Propose one create_blog_draft that would genuinely answer it for a Calgary buyer or seller, plus edit_blog link insertions on 1–2 existing related posts pointing to the new slug (only if a natural sentence exists to link from).`);
@@ -450,7 +450,7 @@ Writing rules:
 - Prefer queries the page already earns impressions for over invented keywords.
 - Internal links go in blog bodies as [anchor text](/path) using descriptive anchors, only to paths from the live page list.
 
-Change types and the fields each uses (set every unused field to null, or [] for arrays):
+Change types and the fields each uses (set every unused field to "" — an empty string — or [] for arrays):
 - set_meta: path, title and/or description. Works on any page. For blog posts prefer edit_blog (title/excerpt) instead, since those ARE the post's title and description.
 - set_focus_keyword: path, keyword — the query the page should own from now on.
 - edit_blog: slug, optional title / excerpt / heroImageAlt, and bodyEdits: [{find, replace}]. Each "find" must be copied EXACTLY from the supplied body and appear exactly once — use a whole sentence or paragraph. To add a new section, find the last sentence of the paragraph it should follow and replace it with that sentence + "\\n\\n## Heading\\n\\nNew paragraph". Keep edits surgical; do not rewrite whole posts.
@@ -458,7 +458,7 @@ Change types and the fields each uses (set every unused field to null, or [] for
 - add_redirect: from, to — 301 a weaker page into a stronger one. Only for consolidation.
 - unpublish_blog: slug — only alongside an add_redirect from that post.
 - create_blog_draft: slug (lowercase-hyphenated, new), title, excerpt, body (lightweight markdown, 700–1200 words, answers the query directly in the first paragraph, ## sections, 2–4 internal links), category (one of Market, Buying, Selling, Neighbourhoods, Condos, Lifestyle).
-- set_cluster: clusterId (an existing id to change it, or null to create one), label, pillar (a live path, or /blog/<slug> of a draft created in this same answer), headKeyword, intent (transactional | commercial | informational | navigational), vocabulary (lowercase words that classify posts into it), members (explicit page paths). Only for changing the cluster map.
+- set_cluster: clusterId (an existing id to change it, or "" to create one), label, pillar (a live path, or /blog/<slug> of a draft created in this same answer), headKeyword, intent (transactional | commercial | informational | navigational), vocabulary (lowercase words that classify posts into it), members (explicit page paths). Only for changing the cluster map.
 - code_change: path, files, instructions — for page copy that lives in source code. Write instructions a developer (Claude Code) can execute without further context: exact current strings to find, exact replacements, and which strings must stay in sync between server and client.
 
 Site architecture (hub and spoke):
@@ -469,8 +469,10 @@ Site architecture (hub and spoke):
 
 If the right answer is to change nothing, return an empty changes list and explain why in the rationale.`;
 
-/** Flat JSON schema — every field present, unused ones null — which is what
- *  structured outputs handles most reliably. */
+/** Flat JSON schema — every field present, unused ones "" or [] — which is
+ *  what structured outputs handles most reliably. Fields are plain strings,
+ *  not string|null: the API caps a schema at 16 union-typed parameters, and
+ *  the validator already treats "" as absent (see str()). */
 const OUTPUT_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -507,16 +509,16 @@ const OUTPUT_SCHEMA = {
             ],
           },
           reason: { type: "string" },
-          path: { type: ["string", "null"] },
-          slug: { type: ["string", "null"] },
-          kind: { type: ["string", "null"], description: "neighbourhood | condo (edit_entity_copy only)" },
-          field: { type: ["string", "null"] },
-          title: { type: ["string", "null"] },
-          description: { type: ["string", "null"] },
-          excerpt: { type: ["string", "null"] },
-          heroImageAlt: { type: ["string", "null"] },
-          keyword: { type: ["string", "null"] },
-          text: { type: ["string", "null"] },
+          path: { type: "string" },
+          slug: { type: "string" },
+          kind: { type: "string", description: "neighbourhood | condo (edit_entity_copy only)" },
+          field: { type: "string" },
+          title: { type: "string" },
+          description: { type: "string" },
+          excerpt: { type: "string" },
+          heroImageAlt: { type: "string" },
+          keyword: { type: "string" },
+          text: { type: "string" },
           paragraphs: { type: "array", items: { type: "string" } },
           bodyEdits: {
             type: "array",
@@ -527,17 +529,17 @@ const OUTPUT_SCHEMA = {
               properties: { find: { type: "string" }, replace: { type: "string" } },
             },
           },
-          from: { type: ["string", "null"] },
-          to: { type: ["string", "null"] },
-          body: { type: ["string", "null"] },
-          category: { type: ["string", "null"] },
+          from: { type: "string" },
+          to: { type: "string" },
+          body: { type: "string" },
+          category: { type: "string" },
           files: { type: "array", items: { type: "string" } },
-          instructions: { type: ["string", "null"] },
-          clusterId: { type: ["string", "null"] },
-          label: { type: ["string", "null"] },
-          pillar: { type: ["string", "null"] },
-          headKeyword: { type: ["string", "null"] },
-          intent: { type: ["string", "null"] },
+          instructions: { type: "string" },
+          clusterId: { type: "string" },
+          label: { type: "string" },
+          pillar: { type: "string" },
+          headKeyword: { type: "string" },
+          intent: { type: "string" },
           vocabulary: { type: "array", items: { type: "string" } },
           members: { type: "array", items: { type: "string" } },
         },
