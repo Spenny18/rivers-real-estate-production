@@ -26,6 +26,11 @@ import {
   addConsoleRedirect,
   consoleRedirectFor,
   createFixProposal,
+  deleteCluster,
+  getStoredCluster,
+  slugifyClusterId,
+  upsertCluster,
+  type StoredCluster,
   getFixProposal,
   getMetaOverride,
   removeConsoleRedirect,
@@ -37,6 +42,7 @@ import {
 import { cachedSeoReport, invalidateSeoReport } from "./seo-report-cache";
 import { lastReportContext, type PageAnalysis, type SeoReport } from "./seo-keywords";
 import type { Opportunity } from "./seo-opportunities";
+import type { ClusterAudit, ClusterCandidate } from "./seo-architecture";
 
 /** Claude Opus 5 unless overridden. */
 const MODEL = process.env.SEO_FIX_MODEL?.trim() || "claude-opus-5";
@@ -51,7 +57,10 @@ const FALLBACK_MODELS = new Set(["claude-opus-5", "claude-opus-5-5", "claude-fab
 export type FixSubject =
   | { kind: "opportunity"; opportunityId: string }
   | { kind: "cannibalization"; paths: string[] }
-  | { kind: "page"; path: string };
+  | { kind: "page"; path: string }
+  | { kind: "cluster"; clusterId: string }
+  | { kind: "candidate"; candidateId: string }
+  | { kind: "topic"; clusterId: string; query: string; title: string };
 
 const NEIGHBOURHOOD_FIELDS = [
   "tagline", "story", "realEstateCopy", "lifeCopy", "outsideCopy", "amenitiesCopy", "shopDineCopy",
@@ -78,7 +87,12 @@ export type FixOp =
       type: "create_blog_draft"; slug: string; title: string; excerpt: string; body: string;
       category: string; reason: string;
     }
-  | { type: "code_change"; path: string; files: string[]; instructions: string; reason: string };
+  | { type: "code_change"; path: string; files: string[]; instructions: string; reason: string }
+  | {
+      type: "set_cluster"; clusterId: string; isNew: boolean; label: string; pillar: string;
+      headKeyword: string; intent: StoredCluster["intent"]; vocabulary: string[]; members: string[];
+      prefixes: string[]; reason: string;
+    };
 
 /** One row of the before/after the dialog renders. */
 export interface PreviewRow {
@@ -110,7 +124,8 @@ type SnapshotEntry =
   | { index: number; kind: "entity"; entity: "neighbourhood" | "condo"; slug: string; field: string; before: string; after: string }
   | { index: number; kind: "redirect"; from: string; beforeTo: string | null; after: string }
   | { index: number; kind: "draft"; slug: string }
-  | { index: number; kind: "issue"; url: string };
+  | { index: number; kind: "issue"; url: string }
+  | { index: number; kind: "cluster"; id: string; before: StoredCluster | null; after: StoredCluster };
 
 interface BlogFields {
   title: string;
@@ -190,13 +205,43 @@ interface ResolvedSubject {
   paths: string[];
   opportunity: Opportunity | null;
   label: string;
+  cluster?: ClusterAudit;
+  candidate?: ClusterCandidate;
+  topic?: { query: string; title: string };
 }
 
 function resolveSubject(subject: FixSubject, report: SeoReport): ResolvedSubject {
   if (subject.kind === "opportunity") {
     const opp = report.opportunities.find((o) => o.id === subject.opportunityId);
     if (!opp) throw new Error("That opportunity is no longer in the report — rescan and try again.");
+    // Architecture findings are cluster-shaped: plan them with the whole
+    // cluster (or candidate group) in view, focused on this finding.
+    if (opp.type === "architecture" && opp.candidateId) {
+      const cand = report.architecture?.candidates.find((c) => c.id === opp.candidateId);
+      if (cand) return { kind: "candidate", paths: cand.pages, opportunity: opp, label: opp.headline, candidate: cand };
+    }
+    if (opp.type === "architecture" && opp.clusterId && opp.subtype !== "deep_page") {
+      const cl = report.architecture?.clusters.find((c) => c.id === opp.clusterId);
+      if (cl) return { kind: "cluster", paths: [cl.pillar], opportunity: opp, label: opp.headline, cluster: cl };
+    }
     return { kind: "opportunity", paths: opp.paths, opportunity: opp, label: opp.headline };
+  }
+  if (subject.kind === "cluster" || subject.kind === "topic") {
+    const cl = report.architecture?.clusters.find((c) => c.id === subject.clusterId);
+    if (!cl) throw new Error("That cluster isn't in the latest report — rescan and try again.");
+    if (subject.kind === "topic") {
+      return {
+        kind: "topic", paths: [cl.pillar], opportunity: null, cluster: cl,
+        topic: { query: subject.query, title: subject.title },
+        label: `Draft: ${subject.title}`,
+      };
+    }
+    return { kind: "cluster", paths: [cl.pillar], opportunity: null, cluster: cl, label: `Plan the ${cl.label} cluster` };
+  }
+  if (subject.kind === "candidate") {
+    const cand = report.architecture?.candidates.find((c) => c.id === subject.candidateId);
+    if (!cand) throw new Error("That suggested cluster isn't in the latest report — rescan and try again.");
+    return { kind: "candidate", paths: cand.pages, opportunity: null, candidate: cand, label: `Plan a new cluster: ${cand.label}` };
   }
   if (subject.kind === "cannibalization") {
     const paths = subject.paths.filter((p) => report.pages.some((x) => x.path === p));
@@ -288,6 +333,44 @@ function describePage(page: PageAnalysis): string {
   return lines.join("\n");
 }
 
+function describeCluster(cl: ClusterAudit, report: SeoReport, opts: { brief?: boolean } = {}): string {
+  const ctx = lastReportContext();
+  const lines: string[] = [];
+  lines.push(`### Cluster "${cl.label}" (id ${cl.id})`);
+  lines.push(`Pillar: ${cl.pillar}${cl.pillarStatus !== 200 ? ` (HTTP ${cl.pillarStatus ?? "not crawled"} — BROKEN)` : ""} · head term: "${cl.headKeyword}" · intent: ${cl.intent} · health ${cl.health}/100`);
+  if (cl.flags.length) lines.push(`Flags: ${cl.flags.join(", ")}`);
+  lines.push(`Pillar links down to ${cl.linkedFromPillar}/${cl.children.length} children; ${cl.linkingUp}/${cl.children.length} children link back up (body-copy links only — nav doesn't count).`);
+  if (cl.headTerm) {
+    lines.push(`Head-term demand: ${cl.headTerm.queries} matching queries. Most goes to ${cl.headTerm.owner} (${cl.headTerm.ownerImpressions} impr, pos ${cl.headTerm.ownerPosition ?? "?"}); pillar gets ${cl.headTerm.pillarImpressions} impr${cl.headTerm.pillarPosition ? ` at pos ${cl.headTerm.pillarPosition}` : ""}.`);
+  }
+  if (cl.gaps.length) {
+    lines.push(`Uncovered searches in this cluster's territory (no page targets them):\n${cl.gaps.map((g) => `  - "${g.query}" — ${g.impressions} impr, best pos ${g.position} on ${g.bestPage}`).join("\n")}`);
+  }
+  if (opts.brief) return lines.join("\n");
+  lines.push("Children (path | title | focus keyword | top queries | links):");
+  for (const path of cl.children.slice(0, 60)) {
+    const p = report.pages.find((x) => x.path === path);
+    if (!p) continue;
+    const q = (ctx?.gscByPath.get(path) ?? []).slice().sort((a, b) => b.impressions - a.impressions).slice(0, 3)
+      .map((r) => `"${r.query}" ${r.impressions}i p${r.position.toFixed(0)}`).join(", ");
+    const down = cl.missingDownLinks.includes(path) ? "no link from pillar" : "linked from pillar";
+    const up = cl.missingUpLinks.includes(path) ? "NO up-link" : "links up";
+    lines.push(`  - ${path} | ${p.title.slice(0, 70)} | ${p.focusKeyword} | ${q || "no search data"} | ${down}, ${up}`);
+  }
+  if (cl.children.length > 60) lines.push(`  …and ${cl.children.length - 60} more`);
+  return lines.join("\n");
+}
+
+function describeCandidate(cand: ClusterCandidate, report: SeoReport): string {
+  return [
+    `### Suggested new cluster "${cand.label}" (id ${cand.id})`,
+    cand.why,
+    `Posts in the group: ${cand.pages.join(", ")}`,
+    `Suggested pillar: ${cand.suggestedPillar ?? "none yet — may need a new pillar page"} · suggested head term: "${cand.headKeyword}"`,
+    `Existing cluster ids (do not reuse for a new cluster): ${report.clusters.map((c) => c.id).join(", ")}`,
+  ].join("\n");
+}
+
 function buildPrompt(resolved: ResolvedSubject, report: SeoReport): string {
   const parts: string[] = [];
   parts.push(`# Task\n${resolved.label}`);
@@ -304,13 +387,44 @@ function buildPrompt(resolved: ResolvedSubject, report: SeoReport): string {
 - CONSOLIDATE: when one page is clearly weaker and not meaningfully distinct, fold its useful content into the stronger page (blog body edits) and add_redirect from the weaker to the stronger (plus unpublish_blog if the weaker is a blog post).
 Prefer differentiating when both pages earn meaningful impressions for different queries; prefer consolidating when the weaker one earns almost nothing. Never redirect a pillar page.`);
   }
+  if (resolved.kind === "cluster") {
+    parts.push(`Plan this topic cluster as a hub. Within one review-sized set of changes:
+- Fix the structure first: pillar ↔ child links (blog bodies via edit_blog; a code-owned pillar via one code_change listing every child it should introduce), and head-term ownership (align titles/focus keywords so only the pillar targets "${resolved.cluster?.headKeyword}"; if a child clearly deserves to be the pillar, say so and use set_cluster to promote it).
+- Give children that compete with each other distinct targets.
+- Put the sub-topics the cluster is missing into plannedTopics (best first, up to 8), each with the query it should target. Draft at most 2 of them now with create_blog_draft, only the strongest.
+- Use set_cluster only to change the cluster definition (pillar, head term, vocabulary, explicit members).`);
+  }
+  if (resolved.kind === "candidate") {
+    parts.push(`These posts share a topic no cluster owns. Decide whether it deserves its own cluster. If yes: one set_cluster change creating it (clusterId null, a short label, pillar = the best existing page or the suggested one, head term, vocabulary words, members = the posts), edit_blog changes that link each post up to the pillar, differentiated targets for posts that overlap, and plannedTopics for missing angles. If a whole new pillar page is needed, draft it with create_blog_draft and set it as pillar using its future path /blog/<slug>. If it does not deserve a cluster, return no changes and explain why.`);
+  }
   if (resolved.opportunity?.type === "content_gap") {
     parts.push(`No page targets this query yet. Propose one create_blog_draft that would genuinely answer it for a Calgary buyer or seller, plus edit_blog link insertions on 1–2 existing related posts pointing to the new slug (only if a natural sentence exists to link from).`);
   }
 
-  for (const path of resolved.paths) {
+  if (resolved.cluster && resolved.kind !== "topic") parts.push(describeCluster(resolved.cluster, report));
+  if (resolved.candidate) parts.push(describeCandidate(resolved.candidate, report));
+  if (resolved.kind === "topic" && resolved.cluster && resolved.topic) {
+    parts.push(`Write the planned post "${resolved.topic.title}" targeting "${resolved.topic.query}" for the ${resolved.cluster.label} cluster (pillar ${resolved.cluster.pillar}, head term "${resolved.cluster.headKeyword}"). Return one create_blog_draft that links up to the pillar with head-term anchor text and to 1–3 sibling pages, plus edit_blog link insertions on up to 2 related posts pointing to the new slug where a natural sentence exists. Add the draft's future path to the cluster with a set_cluster change (members) only if it would not be picked up by the cluster's URL prefixes or vocabulary.`);
+    parts.push(describeCluster(resolved.cluster, report, { brief: true }));
+  }
+
+  // Page detail. Cluster plans already carry per-child detail, so only the
+  // pillar gets the full treatment there; candidate plans carry their posts.
+  const detailed = resolved.kind === "candidate"
+    ? resolved.paths.slice(0, 6)
+    : resolved.paths;
+  for (const path of detailed) {
     const page = report.pages.find((p) => p.path === path);
     if (page) parts.push(describePage(page));
+  }
+  if (resolved.kind === "cluster" && resolved.cluster) {
+    // Blog children that need an up-link get their full body so edits can
+    // quote it exactly. Capped: a plan is reviewed by a person.
+    const needUp = resolved.cluster.missingUpLinks.filter((p) => p.startsWith("/blog/")).slice(0, 5);
+    for (const path of needUp) {
+      const page = report.pages.find((p) => p.path === path);
+      if (page) parts.push(describePage(page));
+    }
   }
 
   const cluster = report.clusters
@@ -344,7 +458,14 @@ Change types and the fields each uses (set every unused field to null, or [] for
 - add_redirect: from, to — 301 a weaker page into a stronger one. Only for consolidation.
 - unpublish_blog: slug — only alongside an add_redirect from that post.
 - create_blog_draft: slug (lowercase-hyphenated, new), title, excerpt, body (lightweight markdown, 700–1200 words, answers the query directly in the first paragraph, ## sections, 2–4 internal links), category (one of Market, Buying, Selling, Neighbourhoods, Condos, Lifestyle).
+- set_cluster: clusterId (an existing id to change it, or null to create one), label, pillar (a live path, or /blog/<slug> of a draft created in this same answer), headKeyword, intent (transactional | commercial | informational | navigational), vocabulary (lowercase words that classify posts into it), members (explicit page paths). Only for changing the cluster map.
 - code_change: path, files, instructions — for page copy that lives in source code. Write instructions a developer (Claude Code) can execute without further context: exact current strings to find, exact replacements, and which strings must stay in sync between server and client.
+
+Site architecture (hub and spoke):
+- Each cluster has one pillar that covers the topic broadly, owns the head term, and links to every child from its body copy.
+- Each child goes deep on one sub-topic, targets its own narrower query, and links back up to the pillar with head-term anchor text. No two pages target the same query.
+- Link across clusters only where it genuinely helps the reader. Keep important pages within 3 clicks of the homepage.
+- plannedTopics lists pages worth writing next (title, targetQuery, why); they are a roadmap for the owner, not applied. Use [] when there's nothing to plan.
 
 If the right answer is to change nothing, return an empty changes list and explain why in the rationale.`;
 
@@ -353,9 +474,18 @@ If the right answer is to change nothing, return an empty changes list and expla
 const OUTPUT_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["summary", "rationale", "changes"],
+  required: ["summary", "rationale", "changes", "plannedTopics"],
   properties: {
     summary: { type: "string", description: "One line: what this fix does." },
+    plannedTopics: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["title", "targetQuery", "why"],
+        properties: { title: { type: "string" }, targetQuery: { type: "string" }, why: { type: "string" } },
+      },
+    },
     rationale: { type: "string", description: "2–5 sentences: the diagnosis and why these changes fix it." },
     changes: {
       type: "array",
@@ -365,14 +495,15 @@ const OUTPUT_SCHEMA = {
         required: [
           "type", "reason", "path", "slug", "kind", "field", "title", "description", "excerpt",
           "heroImageAlt", "keyword", "text", "paragraphs", "bodyEdits", "from", "to", "body",
-          "category", "files", "instructions",
+          "category", "files", "instructions", "clusterId", "label", "pillar", "headKeyword",
+          "intent", "vocabulary", "members",
         ],
         properties: {
           type: {
             type: "string",
             enum: [
               "set_meta", "set_focus_keyword", "edit_blog", "edit_entity_copy", "add_redirect",
-              "unpublish_blog", "create_blog_draft", "code_change",
+              "unpublish_blog", "create_blog_draft", "code_change", "set_cluster",
             ],
           },
           reason: { type: "string" },
@@ -402,6 +533,13 @@ const OUTPUT_SCHEMA = {
           category: { type: ["string", "null"] },
           files: { type: "array", items: { type: "string" } },
           instructions: { type: ["string", "null"] },
+          clusterId: { type: ["string", "null"] },
+          label: { type: ["string", "null"] },
+          pillar: { type: ["string", "null"] },
+          headKeyword: { type: ["string", "null"] },
+          intent: { type: ["string", "null"] },
+          vocabulary: { type: "array", items: { type: "string" } },
+          members: { type: "array", items: { type: "string" } },
         },
       },
     },
@@ -412,6 +550,7 @@ interface RawOutput {
   summary: string;
   rationale: string;
   changes: Array<Record<string, any>>;
+  plannedTopics?: Array<{ title: string; targetQuery: string; why: string }>;
 }
 
 async function askClaude(system: string, prompt: string): Promise<{ output: RawOutput; model: string }> {
@@ -461,8 +600,41 @@ function fakeOutput(prompt: string): RawOutput {
   const blank = {
     path: null, slug: null, kind: null, field: null, title: null, description: null, excerpt: null,
     heroImageAlt: null, keyword: null, text: null, paragraphs: [], bodyEdits: [], from: null, to: null,
-    body: null, category: null, files: [], instructions: null,
+    body: null, category: null, files: [], instructions: null, clusterId: null, label: null,
+    pillar: null, headKeyword: null, intent: null, vocabulary: [], members: [],
   };
+  const fakeTopics = [
+    { title: "Test planned topic one", targetQuery: "test planned query one", why: "Fake roadmap entry." },
+    { title: "Test planned topic two", targetQuery: "test planned query two", why: "Fake roadmap entry." },
+  ];
+  // Cluster-shaped subjects get cluster-shaped fake answers.
+  const clusterM = prompt.match(/### Cluster "([^"]+)" \(id ([^)]+)\)\nPillar: (\S+) · head term: "([^"]+)"/);
+  const candM = prompt.match(/### Suggested new cluster "([^"]+)" \(id ([^)]+)\)/);
+  const topicM = prompt.match(/Write the planned post "([^"]+)" targeting "([^"]+)"/);
+  if (topicM) {
+    const slug = `fake-${topicM[2].replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`.slice(0, 60);
+    return {
+      summary: "Fake draft for testing", rationale: "SEO_FIX_FAKE=1.", plannedTopics: [],
+      changes: [{ ...blank, type: "create_blog_draft", slug, title: topicM[1], excerpt: "A fake excerpt long enough to pass validation for the planned post in this test run.", body: "## Fake\n\nFake body.", category: "Market", reason: "Fake: exercise create_blog_draft." }],
+    };
+  }
+  if (candM) {
+    const posts = (prompt.match(/Posts in the group: (.+)/)?.[1] ?? "").split(", ").filter(Boolean);
+    return {
+      summary: "Fake new cluster for testing", rationale: "SEO_FIX_FAKE=1.", plannedTopics: fakeTopics,
+      changes: [{ ...blank, type: "set_cluster", clusterId: null, label: candM[1], pillar: posts[0] ?? "/blog",
+        headKeyword: `${candM[1].toLowerCase()} calgary`, intent: "informational", vocabulary: [candM[1].toLowerCase()],
+        members: posts, reason: "Fake: exercise set_cluster (create)." }],
+    };
+  }
+  if (clusterM) {
+    return {
+      summary: "Fake cluster plan for testing", rationale: "SEO_FIX_FAKE=1.", plannedTopics: fakeTopics,
+      changes: [{ ...blank, type: "set_cluster", clusterId: clusterM[2], label: `${clusterM[1]} (edited)`, pillar: clusterM[3],
+        headKeyword: clusterM[4], intent: "commercial", vocabulary: ["fake-term"], members: [],
+        reason: "Fake: exercise set_cluster (edit)." }],
+    };
+  }
   const changes: Array<Record<string, any>> = [
     { ...blank, type: "set_meta", path, title: "Test Title for SEO Fix Flow | Rivers Real Estate", description: "A test meta description written by the fake fixer so the preview, apply and undo flow can be exercised end to end without an API key.", reason: "Fake: exercise set_meta." },
     { ...blank, type: "set_focus_keyword", path, keyword: "test focus keyword", reason: "Fake: exercise set_focus_keyword." },
@@ -472,7 +644,7 @@ function fakeOutput(prompt: string): RawOutput {
     changes.push({ ...blank, type: "edit_blog", slug, bodyEdits: [{ find: firstPara, replace: `${firstPara} See our [Calgary neighbourhood guides](/neighbourhoods).` }], reason: "Fake: exercise edit_blog." });
   }
   changes.push({ ...blank, type: "code_change", path, files: ["server/seo-inject.ts"], instructions: "Fake: no-op instructions.", reason: "Fake: exercise code_change." });
-  return { summary: "Fake fix for testing", rationale: "SEO_FIX_FAKE=1 is set, so this proposal was generated without calling Claude.", changes };
+  return { summary: "Fake fix for testing", rationale: "SEO_FIX_FAKE=1 is set, so this proposal was generated without calling Claude.", changes, plannedTopics: [] };
 }
 
 // ---------------------------------------------------------------------------
@@ -662,6 +834,9 @@ export function validateChanges(
           const title = str(c.title);
           const body = str(c.body);
           if (!title || !body) throw new Error("title and body are required");
+          if (changes.filter((x) => x.op.type === "create_blog_draft").length >= 2) {
+            throw new Error("only two new drafts per fix — the rest belong in the roadmap");
+          }
           const excerpt = str(c.excerpt) ?? body.split(/\n\s*\n/)[0].slice(0, 160);
           const category = str(c.category) ?? "Market";
           changes.push({
@@ -693,6 +868,54 @@ export function validateChanges(
             delivery: githubConfigured() ? "github" : "prompt",
             prompt: codeChangePrompt(op, subject),
             op,
+          });
+          break;
+        }
+        case "set_cluster": {
+          const existingId = str(c.clusterId);
+          const existing = existingId ? getStoredCluster(existingId) : null;
+          if (existingId && !existing) throw new Error(`no cluster "${existingId}"`);
+          const label = str(c.label) ?? existing?.label;
+          if (!label) throw new Error("a new cluster needs a label");
+          const pillar = normPath(str(c.pillar) ?? existing?.pillar ?? "");
+          // The pillar may be a draft created in this same proposal.
+          const draftedHere = raw.some((o) => o.type === "create_blog_draft" && `/blog/${String(o.slug ?? "").toLowerCase()}` === pillar);
+          if (!live.has(pillar) && !draftedHere) throw new Error(`pillar ${pillar || "(none)"} is not a live page`);
+          const clash = report.clusters.find((x) => x.pillar === pillar && x.id !== existing?.id);
+          if (clash) throw new Error(`${pillar} is already the pillar of "${clash.label}"`);
+          const headKeyword = (str(c.headKeyword) ?? existing?.headKeyword ?? "").toLowerCase();
+          if (!headKeyword) throw new Error("head keyword is required");
+          const intents = ["transactional", "commercial", "informational", "navigational"];
+          const intent = (intents.includes(String(c.intent)) ? c.intent : existing?.intent ?? "informational") as StoredCluster["intent"];
+          const vocabulary = (Array.isArray(c.vocabulary) ? c.vocabulary : []).map((v: unknown) => String(v).toLowerCase().trim()).filter(Boolean);
+          const askedMembers = (Array.isArray(c.members) ? c.members : []).map((m: unknown) => normPath(String(m).trim())).filter(Boolean);
+          const members = askedMembers.filter((m: string) => live.has(m) ||
+            raw.some((o) => o.type === "create_blog_draft" && `/blog/${String(o.slug ?? "").toLowerCase()}` === m));
+          const unknown = askedMembers.filter((m: string) => !members.includes(m));
+          if (unknown.length) drop("set_cluster", `Left out of the cluster (not live pages): ${unknown.join(", ")}`);
+          // New ids come from the label; never collide with an existing one.
+          let clusterId = existing?.id ?? slugifyClusterId(label);
+          if (!existing) {
+            let n = 2;
+            const base = clusterId;
+            while (getStoredCluster(clusterId) || report.clusters.some((x) => x.id === clusterId)) clusterId = `${base}-${n++}`;
+          }
+          const finalVocab = vocabulary.length ? vocabulary : existing?.vocabulary ?? [];
+          const finalMembers = askedMembers.length ? members : existing?.members ?? [];
+          const describe = (x: { label: string; pillar: string; headKeyword: string; intent: string; vocabulary: string[]; members: string[] } | null) =>
+            x ? `${x.label}\npillar ${x.pillar} · owns “${x.headKeyword}” · ${x.intent}\nvocabulary: ${x.vocabulary.join(", ") || "—"}\nmembers: ${x.members.join(", ") || "—"}` : "";
+          changes.push({
+            index, destructive: false,
+            heading: existing ? `Cluster — ${existing.label}` : `New cluster — ${label}`,
+            rows: [{
+              label: "Cluster definition",
+              before: describe(existing),
+              after: describe({ label, pillar, headKeyword, intent, vocabulary: finalVocab, members: finalMembers }),
+            }],
+            op: {
+              type: "set_cluster", clusterId, isNew: !existing, label, pillar, headKeyword, intent,
+              vocabulary: finalVocab, members: finalMembers, prefixes: existing?.prefixes ?? [], reason,
+            },
           });
           break;
         }
@@ -784,6 +1007,7 @@ export function proposeFix(subject: FixSubject): FixProposalRow {
     label: resolved.label,
     paths: resolved.paths,
     opportunityType: resolved.opportunity?.type ?? null,
+    clusterId: resolved.cluster?.id ?? null,
   });
 
   (async () => {
@@ -799,6 +1023,18 @@ export function proposeFix(subject: FixSubject): FixProposalRow {
         rationale: String(output.rationale ?? ""),
         changes,
         dropped,
+        planned: (Array.isArray(output.plannedTopics) ? output.plannedTopics : [])
+          .filter((t) => t && typeof t.title === "string" && typeof t.targetQuery === "string")
+          .slice(0, 8)
+          .map((t) => ({
+            title: t.title,
+            targetQuery: t.targetQuery,
+            why: String(t.why ?? ""),
+            // A new-cluster plan's topics belong to the cluster it creates.
+            clusterId: resolved.cluster?.id ??
+              (changes.find((c) => c.op.type === "set_cluster")?.op as { clusterId?: string } | undefined)?.clusterId ??
+              null,
+          })),
         model,
       });
     } catch (e: any) {
@@ -913,6 +1149,17 @@ async function applyOne(ch: FixChange, proposal: FixProposalRow): Promise<{ snap
         readMinutes: Math.max(2, Math.round(words / 230)),
       } as any);
       return { snap: { index, kind: "draft", slug: op.slug }, message: "Saved as a draft — add a hero image and publish it from /admin/blog." };
+    }
+    case "set_cluster": {
+      const before = getStoredCluster(op.clusterId);
+      const after = upsertCluster({
+        id: op.clusterId, label: op.label, pillar: op.pillar, headKeyword: op.headKeyword,
+        intent: op.intent, prefixes: before?.prefixes ?? op.prefixes, vocabulary: op.vocabulary, members: op.members,
+      });
+      return {
+        snap: { index, kind: "cluster", id: op.clusterId, before, after },
+        message: before ? "Cluster updated — the report regroups on the next scan." : "Cluster created — the report regroups on the next scan.",
+      };
     }
     case "code_change": {
       if (!githubConfigured()) {
@@ -1043,6 +1290,20 @@ export function undoFix(id: number, force = false): { proposal: FixProposalRow; 
             .prepare("DELETE FROM blog_posts WHERE slug = ? AND status = 'draft'")
             .run(s.slug);
           if (!res.changes) skipped.push(`/blog/${s.slug} was published since — left in place`);
+          break;
+        }
+        case "cluster": {
+          const cur = getStoredCluster(s.id);
+          const shape = (c: StoredCluster | null) => c && {
+            label: c.label, pillar: c.pillar, headKeyword: c.headKeyword, intent: c.intent,
+            vocabulary: c.vocabulary, members: c.members,
+          };
+          if (!force && !same(shape(cur), shape(s.after))) {
+            skipped.push(`Cluster ${s.id} was edited since — left as is`);
+            break;
+          }
+          if (s.before) upsertCluster({ ...s.before });
+          else deleteCluster(s.id);
           break;
         }
         case "issue":

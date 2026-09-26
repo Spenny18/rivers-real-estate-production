@@ -49,6 +49,16 @@ sqlite.exec(`
   );
 `);
 
+// Added after the table first shipped; ALTER is the only way to reach rows
+// that already exist in production.
+{
+  const cols = (sqlite.prepare("PRAGMA table_info(seo_fix_proposals)").all() as Array<{ name: string }>)
+    .map((c) => c.name);
+  if (!cols.includes("planned")) {
+    sqlite.exec("ALTER TABLE seo_fix_proposals ADD COLUMN planned TEXT NOT NULL DEFAULT '[]'");
+  }
+}
+
 const now = () => new Date().toISOString();
 const normPath = (p: string) => (p.length > 1 ? p.replace(/\/+$/, "") : p);
 
@@ -175,6 +185,8 @@ export interface FixProposalRow {
   changes: any[];
   dropped: any[];
   snapshot: any[];
+  /** Cluster plans: follow-up pages Claude recommends writing (not applied). */
+  planned: any[];
   error: string | null;
   model: string | null;
   createdAt: string;
@@ -198,6 +210,7 @@ function rowToProposal(r: any): FixProposalRow {
     changes: parse(r.changes, []),
     dropped: parse(r.dropped, []),
     snapshot: parse(r.snapshot, []),
+    planned: parse(r.planned, []),
     error: r.error,
     model: r.model,
     createdAt: r.created_at,
@@ -231,7 +244,7 @@ export function listFixProposals(limit = 50): FixProposalRow[] {
 export function updateFixProposal(
   id: number,
   patch: Partial<Pick<FixProposalRow,
-    "status" | "summary" | "rationale" | "changes" | "dropped" | "snapshot" | "error" | "model" | "appliedAt">>,
+    "status" | "summary" | "rationale" | "changes" | "dropped" | "snapshot" | "planned" | "error" | "model" | "appliedAt">>,
 ): void {
   const cols: string[] = [];
   const vals: unknown[] = [];
@@ -242,6 +255,7 @@ export function updateFixProposal(
   if (patch.changes !== undefined) set("changes", JSON.stringify(patch.changes));
   if (patch.dropped !== undefined) set("dropped", JSON.stringify(patch.dropped));
   if (patch.snapshot !== undefined) set("snapshot", JSON.stringify(patch.snapshot));
+  if (patch.planned !== undefined) set("planned", JSON.stringify(patch.planned));
   if (patch.error !== undefined) set("error", patch.error);
   if (patch.model !== undefined) set("model", patch.model);
   if (patch.appliedAt !== undefined) set("applied_at", patch.appliedAt);
@@ -262,4 +276,129 @@ export function failAbandonedProposals(): void {
        WHERE status = 'generating'`,
     )
     .run(now());
+}
+
+// ---------------------------------------------------------------------------
+// Topic clusters
+// ---------------------------------------------------------------------------
+// The cluster map (pillar page + head term + which pages belong) used to be a
+// constant in seo-keywords.ts. It lives here so clusters can be adopted,
+// edited and planned from the console. The constant is still the factory
+// default: an empty table is seeded from it on first read, so nothing changes
+// until someone edits a cluster.
+
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS seo_clusters (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    pillar TEXT NOT NULL,
+    head_keyword TEXT NOT NULL,
+    intent TEXT NOT NULL,
+    prefixes TEXT NOT NULL DEFAULT '[]',
+    vocabulary TEXT NOT NULL DEFAULT '[]',
+    members TEXT NOT NULL DEFAULT '[]',
+    factory INTEGER NOT NULL DEFAULT 0,
+    sort INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+  );
+`);
+
+export interface StoredCluster {
+  id: string;
+  label: string;
+  pillar: string;
+  headKeyword: string;
+  intent: "transactional" | "commercial" | "informational" | "navigational";
+  prefixes: string[];
+  vocabulary: string[];
+  /** Explicit member pages — how a cluster built from scattered blog posts
+   *  claims them, since they share no URL prefix. */
+  members: string[];
+  /** Seeded from the code default: editable, never deletable. */
+  factory: boolean;
+  sort: number;
+}
+
+const INTENTS = new Set(["transactional", "commercial", "informational", "navigational"]);
+let clusterCache: StoredCluster[] | null = null;
+
+function rowToCluster(r: any): StoredCluster {
+  return {
+    id: r.id,
+    label: r.label,
+    pillar: r.pillar,
+    headKeyword: r.head_keyword,
+    intent: INTENTS.has(r.intent) ? r.intent : "informational",
+    prefixes: parse(r.prefixes, []),
+    vocabulary: parse(r.vocabulary, []),
+    members: parse(r.members, []),
+    factory: Boolean(r.factory),
+    sort: r.sort,
+  };
+}
+
+/** All clusters, seeding the table from `defaults` the first time. */
+export function getStoredClusters(
+  defaults: Array<Omit<StoredCluster, "members" | "factory" | "sort"> & { members?: string[] }>,
+): StoredCluster[] {
+  if (clusterCache) return clusterCache;
+  let rows = sqlite.prepare("SELECT * FROM seo_clusters ORDER BY sort, id").all() as any[];
+  if (!rows.length) {
+    const ins = sqlite.prepare(
+      `INSERT OR IGNORE INTO seo_clusters
+         (id, label, pillar, head_keyword, intent, prefixes, vocabulary, members, factory, sort, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+    );
+    const t = now();
+    defaults.forEach((d, i) =>
+      ins.run(d.id, d.label, d.pillar, d.headKeyword, d.intent, JSON.stringify(d.prefixes),
+        JSON.stringify(d.vocabulary), JSON.stringify(d.members ?? []), i, t));
+    rows = sqlite.prepare("SELECT * FROM seo_clusters ORDER BY sort, id").all() as any[];
+  }
+  clusterCache = rows.map(rowToCluster);
+  return clusterCache;
+}
+
+export function getStoredCluster(id: string): StoredCluster | null {
+  const r = sqlite.prepare("SELECT * FROM seo_clusters WHERE id = ?").get(id);
+  return r ? rowToCluster(r) : null;
+}
+
+export function slugifyClusterId(label: string): string {
+  return label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "cluster";
+}
+
+/** Insert or update a cluster. Returns the stored row. */
+export function upsertCluster(c: Omit<StoredCluster, "factory" | "sort"> & { sort?: number }): StoredCluster {
+  const existing = getStoredCluster(c.id);
+  const sort = c.sort ?? existing?.sort
+    ?? ((sqlite.prepare("SELECT COALESCE(MAX(sort), -1) + 1 AS n FROM seo_clusters").get() as any).n as number);
+  const clean = (xs: string[]) => Array.from(new Set(xs.map((x) => String(x).trim()).filter(Boolean)));
+  sqlite
+    .prepare(
+      `INSERT INTO seo_clusters
+         (id, label, pillar, head_keyword, intent, prefixes, vocabulary, members, factory, sort, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         label = excluded.label, pillar = excluded.pillar, head_keyword = excluded.head_keyword,
+         intent = excluded.intent, prefixes = excluded.prefixes, vocabulary = excluded.vocabulary,
+         members = excluded.members, sort = excluded.sort, updated_at = excluded.updated_at`,
+    )
+    .run(
+      c.id, c.label.trim(), normPath(c.pillar.trim()), c.headKeyword.trim().toLowerCase(),
+      INTENTS.has(c.intent) ? c.intent : "informational",
+      JSON.stringify(clean(c.prefixes)), JSON.stringify(clean(c.vocabulary).map((v) => v.toLowerCase())),
+      JSON.stringify(clean(c.members).map(normPath)), sort, now(),
+    );
+  clusterCache = null;
+  return getStoredCluster(c.id)!;
+}
+
+/** Delete a cluster. Factory clusters are refused — edit them instead. */
+export function deleteCluster(id: string, opts: { allowFactory?: boolean } = {}): void {
+  const c = getStoredCluster(id);
+  if (!c) return;
+  if (c.factory && !opts.allowFactory) throw new Error("Built-in clusters can be edited but not deleted");
+  sqlite.prepare("DELETE FROM seo_clusters WHERE id = ?").run(id);
+  clusterCache = null;
 }

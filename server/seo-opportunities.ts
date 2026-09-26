@@ -24,7 +24,16 @@ export type OpportunityType =
   | "cannibalization"
   | "internal_links"
   | "content_gap"
-  | "on_page";
+  | "on_page"
+  | "architecture";
+
+/** For type "architecture": which structural problem it is. */
+export type ArchitectureSubtype =
+  | "pillar_links"
+  | "uplinks"
+  | "pillar_not_owner"
+  | "cluster_candidate"
+  | "deep_page";
 
 export type Effort = "quick" | "medium" | "heavy";
 
@@ -45,6 +54,10 @@ export interface Opportunity {
   paths: string[];
   /** The query the opportunity is about, when there is one. */
   query: string | null;
+  subtype?: ArchitectureSubtype;
+  /** Architecture items: the cluster (or candidate) it concerns. */
+  clusterId?: string;
+  candidateId?: string;
   headline: string;
   why: string;
   action: string;
@@ -87,8 +100,8 @@ export function expectedCtr(position: number): number {
   return 0.003;
 }
 
-const EFFORT_COST: Record<Effort, number> = { quick: 1, medium: 2, heavy: 4 };
-const INTENT_WEIGHT: Record<string, number> = {
+export const EFFORT_COST: Record<Effort, number> = { quick: 1, medium: 2, heavy: 4 };
+export const INTENT_WEIGHT: Record<string, number> = {
   transactional: 1.5,
   commercial: 1.2,
   informational: 0.8,
@@ -96,7 +109,7 @@ const INTENT_WEIGHT: Record<string, number> = {
 };
 
 /** Clicks below this per month are noise, not a quick win. */
-const QUICK_WIN_MIN_GAIN = 3;
+export const QUICK_WIN_MIN_GAIN = 3;
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
