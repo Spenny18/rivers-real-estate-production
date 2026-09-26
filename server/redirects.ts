@@ -20,6 +20,8 @@
  * treated as soft-404s by Google and pass nothing).
  */
 
+import { consoleRedirectFor } from "./seo-store";
+
 // Old root-level WordPress advice-post slugs → /blog. Their content was not
 // migrated 1:1; the journal index is the closest surviving equivalent.
 // (Slugs with migrated equivalents get exact entries in EXACT instead.)
@@ -233,6 +235,15 @@ export function redirectForPath(rawPath: string): string | null {
   // every issue we send, and the subpath rule at the bottom would otherwise
   // bounce it to the contact form.
   if (p.startsWith("/newsletter/")) return null;
+
+  // Redirects added from /admin/seo (consolidating a cannibalizing page).
+  // They win over the legacy map below: they are newer and deliberate.
+  try {
+    const fromConsole = consoleRedirectFor(p);
+    if (fromConsole && fromConsole !== p) return fromConsole;
+  } catch {
+    // Never let the redirect table take the site down.
+  }
 
   if (EXACT[p]) return EXACT[p];
 

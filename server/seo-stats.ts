@@ -378,6 +378,93 @@ export function gscSiteUrl(): string {
   return process.env.GSC_SITE_URL || `sc-domain:${publicOrigin().replace(/^https?:\/\//, "")}`;
 }
 
+// ---------- GA4 per-page metrics for the keyword console -----------------
+// The console ranks work by payoff, and "payoff" is more than search clicks:
+// a page that already converts visitors (key events) or holds them
+// (engagement) is worth more per extra click than one that bounces. Two
+// reports, both by path: all traffic, and organic-search landings only.
+
+export interface Ga4PageMetrics {
+  pageviews: number;
+  sessions: number;
+  engagementRate: number;
+  keyEvents: number;
+  organicLandings: number;
+}
+
+export async function fetchGa4PageMetrics(
+  days: number,
+): Promise<{ ok: boolean; message?: string; pages: Map<string, Ga4PageMetrics> }> {
+  const propertyId = process.env.GA4_PROPERTY_ID;
+  if (!propertyId) return { ok: false, message: "GA4_PROPERTY_ID not set", pages: new Map() };
+  const { token, error } = await getAccessToken();
+  if (!token) return { ok: false, message: error ?? "Google auth failed", pages: new Map() };
+
+  const safeDays = Math.max(1, Math.min(365, Math.floor(days)));
+  try {
+    return await cached(`ga4pages:${propertyId}:${safeDays}`, async () => {
+      const dateRanges = [{ startDate: `${safeDays}daysAgo`, endDate: "today" }];
+      const [all, organic] = await Promise.all([
+        ga4Report(token, propertyId, {
+          dateRanges,
+          dimensions: [{ name: "pagePath" }],
+          metrics: [
+            { name: "screenPageViews" },
+            { name: "sessions" },
+            { name: "engagementRate" },
+            { name: "keyEvents" },
+          ],
+          orderBys: [{ metric: { metricName: "screenPageViews" }, desc: true }],
+          limit: 2000,
+        }),
+        ga4Report(token, propertyId, {
+          dateRanges,
+          dimensions: [{ name: "landingPage" }],
+          metrics: [{ name: "sessions" }],
+          dimensionFilter: {
+            filter: {
+              fieldName: "sessionDefaultChannelGroup",
+              stringFilter: { value: "Organic Search" },
+            },
+          },
+          limit: 2000,
+        }),
+      ]);
+      const key = (raw: string) => {
+        const p = (raw || "/").split("?")[0];
+        return p.length > 1 ? p.replace(/\/+$/, "") : p;
+      };
+      const pages = new Map<string, Ga4PageMetrics>();
+      const blank = (): Ga4PageMetrics => ({
+        pageviews: 0, sessions: 0, engagementRate: 0, keyEvents: 0, organicLandings: 0,
+      });
+      for (const r of all.rows ?? []) {
+        const k = key(r.dimensionValues?.[0]?.value);
+        const m = pages.get(k) ?? blank();
+        const v = (i: number) => Number(r.metricValues?.[i]?.value ?? 0);
+        // Rows can repeat once the query string is stripped; weight the rate
+        // by sessions so the merge stays honest.
+        const s = v(1);
+        const totalS = m.sessions + s;
+        m.engagementRate = totalS ? (m.engagementRate * m.sessions + v(2) * s) / totalS : 0;
+        m.pageviews += v(0);
+        m.sessions = totalS;
+        m.keyEvents += v(3);
+        pages.set(k, m);
+      }
+      for (const r of organic.rows ?? []) {
+        const k = key(r.dimensionValues?.[0]?.value);
+        const m = pages.get(k) ?? blank();
+        m.organicLandings += Number(r.metricValues?.[0]?.value ?? 0);
+        pages.set(k, m);
+      }
+      return { ok: true, pages };
+    });
+  } catch (err: any) {
+    return { ok: false, message: err?.message ?? String(err), pages: new Map() };
+  }
+}
+
 /** Raw searchAnalytics.query passthrough. */
 export async function gscQueryRaw(
   token: string,
