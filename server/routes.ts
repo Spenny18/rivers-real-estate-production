@@ -30,6 +30,7 @@ import {
 } from "./page-content";
 import { normalizeBlocks, normalizeSeo } from "@shared/home-content";
 import { invalidateSsrCache } from "./ssr";
+import * as seoReports from "./seo-report-cache";
 
 import { publicOrigin } from "./origin";
 const execFileAsync = promisify(execFile);
@@ -3419,46 +3420,8 @@ export async function registerRoutes(
   // keyword scoring, cluster membership, the internal-link graph, and
   // suggested targets. Cached because a full crawl costs a few seconds;
   // ?refresh=1 forces a rebuild after content edits.
-  let seoReportCache: { at: number; data: unknown } | null = null;
-  const SEO_REPORT_TTL_MS = 10 * 60 * 1000;
-  // A build in flight, if any. The crawl visits ~160 of our own routes and
-  // every one is an SSR render, so on the production machine it takes far
-  // longer than a request should be held open — long enough that the proxy
-  // gave up and answered 502, which is why this tab rendered nothing. The
-  // report is now built off the request path: the endpoint answers straight
-  // away with whatever it has and reports that a build is running.
-  //
-  // Holding the promise also collapses concurrent requests onto one crawl.
-  // Pressing Rescan repeatedly used to start a new 160-page crawl each time,
-  // which is how this page took the public site down earlier.
-  let seoReportBuild: Promise<unknown> | null = null;
-  let seoReportError: string | null = null;
-
-  function startSeoReportBuild(): Promise<unknown> {
-    if (seoReportBuild) return seoReportBuild;
-    seoReportError = null;
-    seoReportBuild = (async () => {
-      const { buildSeoReport } = await import("./seo-keywords");
-      const overrides: Record<string, string> = {};
-      for (const t of storage.listSeoKeywordTargets()) overrides[t.path] = t.focusKeyword;
-      // Crawl ourselves over loopback so the analysis sees exactly what a
-      // crawler sees, including SSR metadata and the real anchor graph.
-      const port = process.env.PORT || "5000";
-      const data = await buildSeoReport({ baseUrl: `http://127.0.0.1:${port}`, overrides });
-      seoReportCache = { at: Date.now(), data };
-      return data;
-    })()
-      .catch((err: any) => {
-        seoReportError = err?.message ?? "Failed to build SEO report";
-        console.error("[seo-keywords] build failed:", seoReportError);
-        return null;
-      })
-      .finally(() => {
-        seoReportBuild = null;
-      });
-    return seoReportBuild;
-  }
-
+  // The report's cache + background build live in server/seo-report-cache.ts
+  // so the "Fix with Claude" flow can invalidate it after applying a change.
 
   // ---- Sitemap health ----
   // What Google sees when it fetches the sitemap, answered from inside the
@@ -3637,25 +3600,26 @@ export async function registerRoutes(
   // load has no report to show and says so rather than hanging.
   app.get("/api/admin/seo/keywords", requireAuth, (req, res) => {
     const refresh = req.query.refresh === "1";
-    const fresh =
-      seoReportCache && Date.now() - seoReportCache.at < SEO_REPORT_TTL_MS;
+    const { cache } = seoReports.seoReportState();
+    const fresh = cache && Date.now() - cache.at < seoReports.SEO_REPORT_TTL_MS;
 
-    if (refresh || !fresh) startSeoReportBuild();
+    if (refresh || !fresh) seoReports.startSeoReportBuild();
 
-    if (seoReportCache) {
+    const state = seoReports.seoReportState();
+    if (state.cache) {
       return res.json({
         ok: true,
         cached: true,
-        building: !!seoReportBuild,
-        staleAt: seoReportCache.at,
-        ...(seoReportCache.data as object),
+        building: state.building,
+        staleAt: state.cache.at,
+        ...state.cache.data,
       });
     }
     // Nothing built yet. Not an error — the crawl is under way.
     res.json({
       ok: false,
-      building: !!seoReportBuild,
-      message: seoReportError ?? "Building the first report — this takes a minute.",
+      building: state.building,
+      message: state.error ?? "Building the first report — this takes a minute.",
     });
   });
 
@@ -3668,7 +3632,7 @@ export async function registerRoutes(
       return res.status(400).json({ ok: false, message: "focusKeyword is required" });
     }
     storage.setSeoKeywordTarget(pagePath, focusKeyword, note ?? null);
-    seoReportCache = null; // next read reflects the new target
+    seoReports.invalidateSeoReport(); // next read reflects the new target
     res.json({ ok: true });
   });
 
@@ -3678,8 +3642,87 @@ export async function registerRoutes(
       return res.status(400).json({ ok: false, message: "path is required" });
     }
     storage.clearSeoKeywordTarget(pagePath);
-    seoReportCache = null;
+    seoReports.invalidateSeoReport();
     res.json({ ok: true });
+  });
+
+  // ---- Fix with Claude ----
+  // POST starts a proposal and answers at once with its id; Claude runs in
+  // the background (a single call can outlast the proxy, the same problem
+  // the crawl had) and the client polls GET /fixes/:id. Nothing is written
+  // to the site until /apply, and only the changes the admin ticked.
+  // A proposal still "generating" at boot lost its Claude call in a restart.
+  import("./seo-store").then((m) => m.failAbandonedProposals()).catch(() => {});
+  app.post("/api/admin/seo/fixes", requireAuth, async (req, res) => {
+    const { proposeFix } = await import("./seo-fix");
+    const b = req.body ?? {};
+    let subject: import("./seo-fix").FixSubject;
+    if (typeof b.opportunityId === "string") {
+      subject = { kind: "opportunity", opportunityId: b.opportunityId };
+    } else if (b.kind === "cannibalization" && Array.isArray(b.paths) && b.paths.length === 2) {
+      subject = { kind: "cannibalization", paths: b.paths.map(String) };
+    } else if (b.kind === "page" && typeof b.path === "string" && b.path.startsWith("/")) {
+      subject = { kind: "page", path: b.path };
+    } else {
+      return res.status(400).json({ ok: false, message: "Give an opportunityId, a cannibalization pair, or a page path" });
+    }
+    try {
+      const row = proposeFix(subject);
+      res.json({ ok: true, id: row.id, proposal: row });
+    } catch (e: any) {
+      res.status(400).json({ ok: false, message: e?.message ?? "Could not start the fix" });
+    }
+  });
+
+  app.get("/api/admin/seo/fixes", requireAuth, async (_req, res) => {
+    const { listFixProposals } = await import("./seo-store");
+    res.json({ ok: true, fixes: listFixProposals(50) });
+  });
+
+  app.get("/api/admin/seo/fixes/:id", requireAuth, async (req, res) => {
+    const { getFixProposal } = await import("./seo-store");
+    const p = getFixProposal(Number(req.params.id));
+    if (!p) return res.status(404).json({ ok: false, message: "Fix not found" });
+    res.json({ ok: true, proposal: p });
+  });
+
+  app.post("/api/admin/seo/fixes/:id/apply", requireAuth, async (req, res) => {
+    const { applyFix } = await import("./seo-fix");
+    const ops = Array.isArray(req.body?.ops) ? req.body.ops.map(Number).filter(Number.isInteger) : [];
+    if (!ops.length) return res.status(400).json({ ok: false, message: "Choose at least one change to apply" });
+    try {
+      res.json({ ok: true, proposal: await applyFix(Number(req.params.id), ops) });
+    } catch (e: any) {
+      res.status(400).json({ ok: false, message: e?.message ?? "Apply failed" });
+    }
+  });
+
+  app.post("/api/admin/seo/fixes/:id/undo", requireAuth, async (req, res) => {
+    const { undoFix } = await import("./seo-fix");
+    try {
+      res.json({ ok: true, ...undoFix(Number(req.params.id), req.body?.force === true) });
+    } catch (e: any) {
+      res.status(400).json({ ok: false, message: e?.message ?? "Undo failed" });
+    }
+  });
+
+  app.post("/api/admin/seo/fixes/:id/dismiss", requireAuth, async (req, res) => {
+    const { dismissFix } = await import("./seo-fix");
+    try {
+      res.json({ ok: true, proposal: dismissFix(Number(req.params.id)) });
+    } catch (e: any) {
+      res.status(400).json({ ok: false, message: e?.message ?? "Dismiss failed" });
+    }
+  });
+
+  // What the fix flow can reach on this server, so the UI can say so up front.
+  app.get("/api/admin/seo/fixes-config", requireAuth, (_req, res) => {
+    res.json({
+      ok: true,
+      claude: Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || process.env.SEO_FIX_FAKE === "1"),
+      github: Boolean(process.env.GITHUB_TOKEN && process.env.GITHUB_REPO),
+      githubRepo: process.env.GITHUB_REPO ?? null,
+    });
   });
 
   app.get("/api/analytics/seo-stats", requireAuth, async (req, res) => {

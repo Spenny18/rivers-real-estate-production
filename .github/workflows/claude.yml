@@ -1,0 +1,59 @@
+# Claude Code GitHub Action.
+#
+# The SEO console (/admin/seo → "Fix with Claude") files an issue here that
+# starts with "@claude" whenever a fix needs a code change — page copy on
+# /mls, /about, /work-with/* and the other pages built in source rather than
+# the CMS. This workflow picks the issue up, has Claude make the change on a
+# branch, and opens a pull request for review. Nothing reaches main (and so
+# nothing deploys) until that PR is merged.
+#
+# The same trigger works by hand: open an issue or comment "@claude …".
+#
+# One-time setup:
+#   1. Install the Claude GitHub App on this repository.
+#   2. Repository secret ANTHROPIC_API_KEY (Settings → Secrets → Actions).
+#   3. For the console to file issues: a fine-grained personal access token
+#      scoped to this repository only, with Issues: read & write, set on the
+#      server with `fly secrets set GITHUB_TOKEN=… GITHUB_REPO=spenny18/rivers-real-estate-production`.
+#      (It must be a personal token: issues opened with an Actions token don't
+#      trigger workflows.)
+name: Claude Code
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened, assigned]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  claude:
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: |
+            --allowedTools "Bash(npm ci),Bash(npm run check),Bash(npm run build),Bash(gh pr create:*)"
+            --append-system-prompt "This is the Rivers Real Estate site (Express + React + SQLite, deployed to Fly on merge to main). Work on a branch and finish by opening a pull request against main with gh pr create; never push to main. Server-rendered SEO strings in server/seo-inject.ts must stay identical to the page's <SeoHead> strings. Use Canadian spelling."

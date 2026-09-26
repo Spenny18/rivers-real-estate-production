@@ -28,6 +28,21 @@ export interface SeoHeadProps {
 
 const DATA_ATTR = "data-rivers-seo";
 
+declare global {
+  interface Window {
+    /** Title/description set from /admin/seo, keyed by path. Emitted inline
+     *  by server/seo-inject.ts so this component and the server agree. */
+    __SEO_OVERRIDES__?: Record<string, { title: string | null; description: string | null }>;
+  }
+}
+
+function overrideFor(): { title: string | null; description: string | null } | null {
+  if (typeof window === "undefined") return null;
+  const p = window.location.pathname;
+  const key = p.length > 1 ? p.replace(/\/+$/, "") : p;
+  return window.__SEO_OVERRIDES__?.[key] ?? null;
+}
+
 function setOrCreateMeta(selector: string, attrName: string, attrValue: string, content: string) {
   let el = document.head.querySelector(selector) as HTMLMetaElement | null;
   if (!el) {
@@ -51,13 +66,20 @@ function setOrCreateLink(rel: string, href: string) {
 }
 
 export function SeoHead({
-  title,
-  description,
+  title: propTitle,
+  description: propDescription,
   canonical,
   ogImage,
   ogType = "website",
   noindex,
 }: SeoHeadProps) {
+  // An override set from the SEO console beats the page's own strings — the
+  // server already emitted it, and putting the old title back here would
+  // show Googlebot something different from what it was served.
+  const o = overrideFor();
+  const title = o?.title || propTitle;
+  const description = o?.description || propDescription;
+
   useEffect(() => {
     const prevTitle = document.title;
     document.title = title;

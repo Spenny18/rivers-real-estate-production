@@ -21,6 +21,8 @@ import { storage } from "./storage";
 import { metaForPath } from "./seo-inject";
 
 import { publicOrigin } from "./origin";
+import type { Ga4PageMetrics } from "./seo-stats";
+import { buildOpportunities, type Opportunity } from "./seo-opportunities";
 const ORIGIN = publicOrigin();
 
 /** The other domain Spencer still runs. Links to it leak authority while both
@@ -172,7 +174,20 @@ function attr(tag: string, name: string): string | null {
   return m ? m[1] : null;
 }
 
-function parsePage(path: string, status: number, html: string): CrawledPage {
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&#39;|&#x27;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+function parsePage(path: string, status: number, rawHtml: string): CrawledPage {
+  // Comments first: index.html has a comment that mentions "<title>", and
+  // the title regex below used to start matching inside it — every page's
+  // title was read as that comment's text plus the real title.
+  const html = rawHtml.replace(/<!--[\s\S]*?-->/g, "");
   const titleM = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   const descM = html.match(/<meta[^>]+name="description"[^>]*>/i);
   const canonM = html.match(/<link[^>]+rel="canonical"[^>]*>/i);
@@ -223,7 +238,7 @@ function parsePage(path: string, status: number, html: string): CrawledPage {
     path,
     status,
     title: titleM ? stripTags(titleM[1]) : "",
-    description: descM ? attr(descM[0], "content") || "" : "",
+    description: descM ? decodeEntities(attr(descM[0], "content") || "") : "",
     canonical: canonM ? attr(canonM[0], "href") : null,
     h1: h1M ? stripTags(h1M[1]) : "",
     headings,
@@ -360,7 +375,7 @@ export function derivedKeyword(page: CrawledPage): string {
   return words.slice(0, 6).join(" ");
 }
 
-function normalize(kw: string): string {
+export function normalize(kw: string): string {
   return kw.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
 }
 
@@ -404,7 +419,7 @@ function subjectTokens(kw: string): string[] {
  *   2. Identical SUBJECTS (generic filler removed) mean the same target
  *      regardless of length — return 1.
  *   3. Otherwise fall back to overlap over the larger set. */
-function similarity(a: string, b: string): number {
+export function similarity(a: string, b: string): number {
   const toks = (x: string) => normalize(x).split(" ").filter((w) => w && !STOP.has(w));
   const A = new Set(toks(a));
   const B = new Set(toks(b));
@@ -436,7 +451,7 @@ function similarity(a: string, b: string): number {
  *  ("Downsizing & Empty Nesters in Calgary"), so a literal includes() reports
  *  a miss on a page that is a perfect match. Instead require every significant
  *  keyword token to appear in the haystack, in order. */
-function containsKeyword(haystack: string, keyword: string): boolean {
+export function containsKeyword(haystack: string, keyword: string): boolean {
   const kw = normalize(keyword).split(" ").filter((w) => w && !STOP.has(w));
   if (!kw.length) return false;
   const hay = normalize(haystack).split(" ");
@@ -520,6 +535,7 @@ export interface PageAnalysis {
   suggestedKeyword: string | null;
   suggestionReason: string | null;
   gsc?: { clicks: number; impressions: number; position: number; topQuery: string | null };
+  ga4?: Ga4PageMetrics;
   issues: string[];
 }
 
@@ -570,7 +586,13 @@ export interface SeoReport {
   pageCount: number;
   crawlMs: number;
   gsc: { ok: boolean; message?: string; rows: number };
+  ga4: { ok: boolean; message?: string; pages: number };
+  /** Ranked by priority — see server/seo-opportunities.ts. */
+  opportunities: Opportunity[];
   summary: {
+    /** Sum of estimated monthly click gains across all opportunities. */
+    estClicksAvailable: number;
+    quickWins: number;
     avgScore: number;
     strong: number;
     fair: number;
@@ -592,6 +614,17 @@ export interface SeoReport {
   pages: PageAnalysis[];
 }
 
+/** Raw Search Console rows and GA4 metrics from the most recent build. */
+let lastContext: {
+  gscByPath: Map<string, GscPageRow[]>;
+  ga4: Map<string, Ga4PageMetrics>;
+  builtAt: number;
+} | null = null;
+
+export function lastReportContext() {
+  return lastContext;
+}
+
 export async function buildSeoReport(opts: {
   baseUrl: string;
   overrides?: Record<string, string>;
@@ -611,6 +644,19 @@ export async function buildSeoReport(opts: {
   } catch (e: any) {
     gscState = { ok: false, message: e?.message?.slice(0, 200) ?? "unavailable", rows: 0 };
   }
+  // ---- GA4 (optional) — engagement and conversions per page, used to weight
+  //      opportunities toward pages whose visits are worth something ----
+  let ga4Pages = new Map<string, Ga4PageMetrics>();
+  let ga4State: SeoReport["ga4"] = { ok: false, message: "Not connected", pages: 0 };
+  try {
+    const { fetchGa4PageMetrics } = await import("./seo-stats");
+    const res = await fetchGa4PageMetrics(opts.gscDays ?? 90);
+    ga4Pages = res.pages;
+    ga4State = { ok: res.ok, message: res.message?.slice(0, 200), pages: res.pages.size };
+  } catch (e: any) {
+    ga4State = { ok: false, message: e?.message?.slice(0, 200) ?? "unavailable", pages: 0 };
+  }
+
   const gscByPath = new Map<string, GscPageRow[]>();
   for (const r of gscRows) {
     let p: string;
@@ -832,9 +878,21 @@ export async function buildSeoReport(opts: {
             topQuery: bestQuery ? bestQuery.query : null,
           }
         : undefined,
+      ga4: ga4Pages.get(page.path),
       issues,
     };
   });
+
+  const opportunities = buildOpportunities({
+    pages: analyses,
+    gscRows,
+    ga4: ga4Pages,
+    days: opts.gscDays ?? 90,
+  });
+
+  // The fix generator needs the raw query rows for the pages it is asked to
+  // work on; the report itself only carries per-page rollups.
+  lastContext = { gscByPath, ga4: ga4Pages, builtAt: Date.now() };
 
   const clusters = CLUSTERS.map((c) => {
     const pages = analyses.filter((a) => a.cluster === c.id);
@@ -856,7 +914,11 @@ export async function buildSeoReport(opts: {
     pageCount: analyses.length,
     crawlMs,
     gsc: gscState,
+    ga4: ga4State,
+    opportunities,
     summary: {
+      estClicksAvailable: Math.round(opportunities.reduce((s, o) => s + o.estClicksGain, 0)),
+      quickWins: opportunities.filter((o) => o.quickWin).length,
       avgScore: analyses.length
         ? Math.round(analyses.reduce((s, p) => s + p.score, 0) / analyses.length) : 0,
       strong: analyses.filter((p) => p.grade === "strong").length,

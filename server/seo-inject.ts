@@ -23,6 +23,7 @@ import { getBlockType } from "@shared/home-content";
 import { youtubeVideoNode } from "./schema/video";
 import { findYouTubeReferences, isYouTubeThumbnailFor } from "@shared/youtube";
 import { publicOrigin } from "./origin";
+import { getMetaOverride, getMetaOverrides } from "./seo-store";
 
 const ORIGIN = publicOrigin();
 const SITE_NAME = "Rivers Real Estate";
@@ -273,7 +274,30 @@ function listingSchema(o: {
   };
 }
 
+/**
+ * Metadata for a path, with any title/description set from the SEO console
+ * applied on top. The override is the last word: it replaces whatever the
+ * page's own code or CMS row produced, and SeoHead applies the same map on the
+ * client (see overridesScript below) so both render paths agree.
+ */
 export function metaForPath(path: string): SeoMeta | null {
+  const meta = baseMetaForPath(path);
+  if (!meta || meta.noindex) return meta;
+  let o: ReturnType<typeof getMetaOverride> = null;
+  try {
+    o = getMetaOverride(path === "/" ? "/" : path.replace(/\/$/, ""));
+  } catch {
+    // The override table is an enhancement; never fail a render over it.
+  }
+  if (!o) return meta;
+  return {
+    ...meta,
+    title: o.title || meta.title,
+    description: o.description || meta.description,
+  };
+}
+
+function baseMetaForPath(path: string): SeoMeta | null {
   if (!path || path.startsWith("/api/") || path.startsWith("/assets/")) return null;
   if (/\.[a-z0-9]{1,8}$/i.test(path) && !path.endsWith(".html")) return null;
 
@@ -872,9 +896,32 @@ export function injectMetaIntoHtml(html: string, meta: SeoMeta): string {
     /<meta\s+name=["']description["'][^>]*>/i,
     `<meta name="description" content="${desc}" />`,
   );
+  // The console's title/description overrides, for SeoHead to apply on
+  // client-side navigations (see client/src/components/seo-head.tsx).
+  tags.push(overridesScript());
+
   // Inject the rest just before </head>.
   out = out.replace(/<\/head>/i, `${tags.join("\n    ")}\n  </head>`);
   return out;
+}
+
+/**
+ * The whole override map as an inline script. SeoHead sets document.title from
+ * its props on every route change; without this it would put the page's
+ * hard-coded title back over an override the server had just emitted, and
+ * Googlebot (which runs the JS) would index the old one. The map is small —
+ * one entry per page edited from the console — so shipping all of it keeps
+ * SPA navigations correct without a fetch.
+ */
+function overridesScript(): string {
+  let map: ReturnType<typeof getMetaOverrides> = {};
+  try {
+    map = getMetaOverrides();
+  } catch {
+    map = {};
+  }
+  const json = JSON.stringify(map).replace(/</g, "\\u003c");
+  return `<script>window.__SEO_OVERRIDES__=${json}</script>`;
 }
 
 export { ORIGIN as SEO_ORIGIN, BRAND_TAGLINE };

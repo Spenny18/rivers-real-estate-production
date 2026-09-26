@@ -8,14 +8,18 @@ import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   RefreshCw, Search, AlertTriangle, Link2, Unlink, Target, ExternalLink, Save, X, UploadCloud,
-  ImageDown,
+  ImageDown, Sparkles,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
+import { apiErrorMessage, apiRequest } from "@/lib/queryClient";
+import { OpportunitiesSection } from "@/components/seo/opportunities";
+import { FixDialog } from "@/components/seo/fix-dialog";
+import { FixHistory } from "@/components/seo/fix-history";
+import type { FixSubject, Opportunity } from "@/components/seo/types";
 
 interface ScoreComponent { id: string; label: string; earned: number; max: number; detail: string }
 interface PageAnalysis {
@@ -29,12 +33,15 @@ interface PageAnalysis {
   recommendedInboundFrom: { path: string; reason: string }[];
   suggestedKeyword: string | null; suggestionReason: string | null;
   gsc?: { clicks: number; impressions: number; position: number; topQuery: string | null };
+  ga4?: { pageviews: number; sessions: number; engagementRate: number; keyEvents: number; organicLandings: number };
   issues: string[];
 }
 interface SeoReport {
   ok: boolean; cached: boolean; building?: boolean; message?: string; staleAt?: number; generatedAt: string; pageCount: number; crawlMs: number;
   gsc: { ok: boolean; message?: string; rows: number };
-  summary: { avgScore: number; strong: number; fair: number; weak: number; conflicts: number; orphans: number; missingKeyword: number };
+  ga4?: { ok: boolean; message?: string; pages: number };
+  opportunities?: Opportunity[];
+  summary: { estClicksAvailable?: number; quickWins?: number; avgScore: number; strong: number; fair: number; weak: number; conflicts: number; orphans: number; missingKeyword: number };
   clusters: { id: string; label: string; pillar: string; headKeyword: string; intent: string; pages: number; avgScore: number; conflicts: number }[];
   pages: PageAnalysis[];
 }
@@ -466,6 +473,26 @@ export default function AdminSeoPage() {
   const [onlyIssues, setOnlyIssues] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const [draftKeyword, setDraftKeyword] = useState("");
+  const [fixId, setFixId] = useState<number | null>(null);
+  // Which button started the fix request in flight, so only it pulses.
+  const [pendingFix, setPendingFix] = useState<string | null>(null);
+
+  const startFix = useMutation({
+    mutationFn: async (v: { subject: FixSubject; key: string }) => {
+      setPendingFix(v.key);
+      const r = await apiRequest("POST", "/api/admin/seo/fixes", v.subject);
+      return (await r.json()) as { id: number };
+    },
+    onSuccess: ({ id }) => {
+      setOpen(null);
+      setFixId(id);
+      qc.invalidateQueries({ queryKey: ["/api/admin/seo/fixes"] });
+    },
+    onError: (e) =>
+      toast({ title: "Couldn't start the fix", description: apiErrorMessage(e), variant: "destructive" }),
+    onSettled: () => setPendingFix(null),
+  });
+  const fixWithClaude = (subject: FixSubject, key: string) => startFix.mutate({ subject, key });
 
   // The crawl runs in the background on the server, so poll while it does.
   // It used to be built inside the request, which on the production machine
@@ -567,6 +594,7 @@ export default function AdminSeoPage() {
         <SitemapCard />
         <SitemapHealthCard />
         <LegacyImagesCard />
+        <FixHistory onOpen={setFixId} />
 
         {isLoading ? (
           <div className="space-y-4">
@@ -606,6 +634,19 @@ export default function AdminSeoPage() {
                 {" · "}Generated {new Date(data.generatedAt).toLocaleString()}
               </p>
             </section>
+
+            <OpportunitiesSection
+              opportunities={data.opportunities ?? []}
+              estClicksAvailable={data.summary.estClicksAvailable ?? 0}
+              gscOk={data.gsc.ok}
+              ga4Ok={Boolean(data.ga4?.ok)}
+              pending={pendingFix}
+              onFix={(subject) => fixWithClaude(subject, "opportunityId" in subject ? subject.opportunityId : "")}
+              onOpenPage={(path) => {
+                setOpen(path);
+                setDraftKeyword(data.pages.find((x) => x.path === path)?.focusKeyword ?? "");
+              }}
+            />
 
             {/* Clusters */}
             <section>
@@ -648,8 +689,20 @@ export default function AdminSeoPage() {
                 <div className="border border-border divide-y divide-border">
                   {conflictPairs.map(({ a, bPath, keyword }) => (
                     <div key={`${a.path}::${bPath}`} className="p-4 bg-card">
-                      <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">
-                        both targeting “{keyword}”
+                      <div className="flex flex-wrap items-start justify-between gap-3 mb-2">
+                        <div className="text-xs uppercase tracking-wider text-muted-foreground">
+                          both targeting “{keyword}”
+                        </div>
+                        <Button
+                          size="sm"
+                          onClick={() => fixWithClaude({ kind: "cannibalization", paths: [a.path, bPath] }, `pair:${a.path}::${bPath}`)}
+                          disabled={pendingFix !== null}
+                          className="gap-1.5 rounded-sm font-display text-[10px] tracking-[0.16em]"
+                          data-testid={`button-fix-pair-${a.path}`}
+                        >
+                          <Sparkles className={`w-3.5 h-3.5 ${pendingFix === `pair:${a.path}::${bPath}` ? "animate-pulse" : ""}`} />
+                          FIX WITH CLAUDE
+                        </Button>
                       </div>
                       <div className="grid gap-1.5 font-mono text-sm">
                         <div className="flex items-center gap-2">
@@ -766,6 +819,16 @@ export default function AdminSeoPage() {
                   <div className="font-mono text-sm break-all">{p.path}</div>
                   <div className="text-xs text-muted-foreground mt-1">{p.clusterLabel} · {p.wordCount} words · HTTP {p.status}</div>
                 </div>
+                <Button
+                  size="sm"
+                  onClick={() => fixWithClaude({ kind: "page", path: p.path }, `page:${p.path}`)}
+                  disabled={pendingFix !== null}
+                  className="gap-1.5 rounded-sm font-display text-[10px] tracking-[0.14em] shrink-0"
+                  data-testid="button-fix-page"
+                >
+                  <Sparkles className={`w-3.5 h-3.5 ${pendingFix === `page:${p.path}` ? "animate-pulse" : ""}`} />
+                  IMPROVE WITH CLAUDE
+                </Button>
                 <a href={p.path} target="_blank" rel="noreferrer" className="p-2 hover:bg-secondary" aria-label="Open page">
                   <ExternalLink className="w-4 h-4" />
                 </a>
@@ -829,6 +892,15 @@ export default function AdminSeoPage() {
                 </div>
 
                 {/* Search Console */}
+                {p.ga4 && (
+                  <div>
+                    <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground font-semibold mb-2">Google Analytics · 90 days</div>
+                    <div className="text-sm tabular-nums">
+                      {p.ga4.pageviews.toLocaleString()} views · {p.ga4.organicLandings.toLocaleString()} organic landings ·{" "}
+                      {(p.ga4.engagementRate * 100).toFixed(0)}% engaged · {p.ga4.keyEvents} key events
+                    </div>
+                  </div>
+                )}
                 {p.gsc && (
                   <div>
                     <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground font-semibold mb-2">Search Console</div>
@@ -924,6 +996,8 @@ export default function AdminSeoPage() {
           </div>
         );
       })()}
+
+      <FixDialog fixId={fixId} onClose={() => setFixId(null)} />
     </AppShell>
   );
 }
