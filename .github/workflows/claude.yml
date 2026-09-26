@@ -11,10 +11,12 @@
 #
 # One-time setup:
 #   1. Install the Claude GitHub App on this repository.
-#   2. Repository secret ANTHROPIC_API_KEY (Settings → Secrets → Actions).
+#   2. Runs on the Claude subscription, not API billing: run `claude setup-token`
+#      locally and store the result as the repository secret
+#      CLAUDE_CODE_OAUTH_TOKEN (Settings → Secrets and variables → Actions).
 #   3. For the console to file issues: a fine-grained personal access token
 #      scoped to this repository only, with Issues: read & write, set on the
-#      server with `fly secrets set GITHUB_TOKEN=… GITHUB_REPO=spenny18/rivers-real-estate-production`.
+#      server with `fly secrets set GITHUB_TOKEN=… GITHUB_REPO=Spenny18/rivers-real-estate-production`.
 #      (It must be a personal token: issues opened with an Actions token don't
 #      trigger workflows.)
 name: Claude Code
@@ -53,7 +55,7 @@ jobs:
         id: claude
         uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: |
             --allowedTools "Bash(npm ci),Bash(npm run check),Bash(npm run build),Bash(gh pr create:*)"
             --append-system-prompt "This is the Rivers Real Estate site (Express + React + SQLite, deployed to Fly on merge to main). Work on a branch and finish by opening a pull request against main with gh pr create; never push to main. Server-rendered SEO strings in server/seo-inject.ts must stay identical to the page's <SeoHead> strings. Use Canadian spelling."
