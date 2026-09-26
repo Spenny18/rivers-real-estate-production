@@ -3663,8 +3663,14 @@ export async function registerRoutes(
       subject = { kind: "cannibalization", paths: b.paths.map(String) };
     } else if (b.kind === "page" && typeof b.path === "string" && b.path.startsWith("/")) {
       subject = { kind: "page", path: b.path };
+    } else if (b.kind === "cluster" && typeof b.clusterId === "string") {
+      subject = { kind: "cluster", clusterId: b.clusterId };
+    } else if (b.kind === "candidate" && typeof b.candidateId === "string") {
+      subject = { kind: "candidate", candidateId: b.candidateId };
+    } else if (b.kind === "topic" && typeof b.clusterId === "string" && typeof b.query === "string" && typeof b.title === "string") {
+      subject = { kind: "topic", clusterId: b.clusterId, query: b.query.slice(0, 200), title: b.title.slice(0, 200) };
     } else {
-      return res.status(400).json({ ok: false, message: "Give an opportunityId, a cannibalization pair, or a page path" });
+      return res.status(400).json({ ok: false, message: "Give an opportunityId, a cannibalization pair, a page path, a cluster, a candidate or a topic" });
     }
     try {
       const row = proposeFix(subject);
@@ -3712,6 +3718,77 @@ export async function registerRoutes(
       res.json({ ok: true, proposal: dismissFix(Number(req.params.id)) });
     } catch (e: any) {
       res.status(400).json({ ok: false, message: e?.message ?? "Dismiss failed" });
+    }
+  });
+
+  // ---- Topic clusters (the pillar/cluster map the report is built on) ----
+  // Edits invalidate the report: cluster membership drives every score.
+  app.get("/api/admin/seo/clusters", requireAuth, async (_req, res) => {
+    const { activeClusters } = await import("./seo-keywords");
+    res.json({ ok: true, clusters: activeClusters() });
+  });
+
+  const clusterInput = (b: any) => {
+    const list = (v: unknown) =>
+      (Array.isArray(v) ? v : typeof v === "string" ? v.split(/[\n,]/) : []).map((x) => String(x).trim()).filter(Boolean);
+    const label = String(b?.label ?? "").trim();
+    const pillar = String(b?.pillar ?? "").trim();
+    const headKeyword = String(b?.headKeyword ?? "").trim();
+    if (!label || !pillar.startsWith("/") || !headKeyword) {
+      throw new Error("Label, a pillar path starting with / and a head keyword are required");
+    }
+    return {
+      label, pillar, headKeyword,
+      intent: (["transactional", "commercial", "informational", "navigational"].includes(b?.intent) ? b.intent : "informational") as any,
+      prefixes: list(b?.prefixes), vocabulary: list(b?.vocabulary), members: list(b?.members),
+    };
+  };
+  const pillarClash = async (pillar: string, selfId: string | null) => {
+    const { activeClusters } = await import("./seo-keywords");
+    const p = pillar.length > 1 ? pillar.replace(/\/+$/, "") : pillar;
+    return activeClusters().find((c) => c.pillar === p && c.id !== selfId) ?? null;
+  };
+
+  app.post("/api/admin/seo/clusters", requireAuth, async (req, res) => {
+    try {
+      const { upsertCluster, getStoredCluster, slugifyClusterId } = await import("./seo-store");
+      const input = clusterInput(req.body);
+      const clash = await pillarClash(input.pillar, null);
+      if (clash) return res.status(400).json({ ok: false, message: `${input.pillar} is already the pillar of "${clash.label}"` });
+      let id = slugifyClusterId(input.label);
+      for (let n = 2; getStoredCluster(id); n++) id = `${slugifyClusterId(input.label)}-${n}`;
+      const cluster = upsertCluster({ id, ...input });
+      seoReports.invalidateSeoReport({ keepData: true });
+      res.json({ ok: true, cluster });
+    } catch (e: any) {
+      res.status(400).json({ ok: false, message: e?.message ?? "Could not create the cluster" });
+    }
+  });
+
+  app.put("/api/admin/seo/clusters/:id", requireAuth, async (req, res) => {
+    try {
+      const { upsertCluster, getStoredCluster } = await import("./seo-store");
+      const existing = getStoredCluster(String(req.params.id));
+      if (!existing) return res.status(404).json({ ok: false, message: "Cluster not found" });
+      const input = clusterInput(req.body);
+      const clash = await pillarClash(input.pillar, existing.id);
+      if (clash) return res.status(400).json({ ok: false, message: `${input.pillar} is already the pillar of "${clash.label}"` });
+      const cluster = upsertCluster({ id: existing.id, ...input });
+      seoReports.invalidateSeoReport({ keepData: true });
+      res.json({ ok: true, cluster });
+    } catch (e: any) {
+      res.status(400).json({ ok: false, message: e?.message ?? "Could not save the cluster" });
+    }
+  });
+
+  app.delete("/api/admin/seo/clusters/:id", requireAuth, async (req, res) => {
+    try {
+      const { deleteCluster } = await import("./seo-store");
+      deleteCluster(String(req.params.id));
+      seoReports.invalidateSeoReport({ keepData: true });
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(400).json({ ok: false, message: e?.message ?? "Could not delete the cluster" });
     }
   });
 

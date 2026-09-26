@@ -23,6 +23,8 @@ import { metaForPath } from "./seo-inject";
 import { publicOrigin } from "./origin";
 import type { Ga4PageMetrics } from "./seo-stats";
 import { buildOpportunities, type Opportunity } from "./seo-opportunities";
+import { buildArchitecture, type ArchitectureReport } from "./seo-architecture";
+import { getStoredClusters } from "./seo-store";
 const ORIGIN = publicOrigin();
 
 /** The other domain Spencer still runs. Links to it leak authority while both
@@ -45,8 +47,14 @@ export interface ClusterDef {
   /** Vocabulary used to classify loose pages (blog posts) into the cluster. */
   vocabulary: string[];
   intent: "transactional" | "commercial" | "informational" | "navigational";
+  /** Explicit member pages (clusters adopted from scattered blog posts). */
+  members?: string[];
+  /** Seeded from the defaults below — editable in the console, not deletable. */
+  factory?: boolean;
 }
 
+/** Factory defaults. The live cluster map is in the seo_clusters table (see
+ *  activeClusters), seeded from this list the first time it is read. */
 export const CLUSTERS: ClusterDef[] = [
   {
     id: "condos",
@@ -150,6 +158,10 @@ export interface CrawledPage {
   text: string;
   wordCount: number;
   internalLinks: string[];
+  /** Internal links inside the page body (<main>), excluding header, nav and
+   *  footer — the contextual links that carry topical signal between a
+   *  pillar and its children. */
+  bodyLinks: string[];
   externalLinks: string[];
   sisterDomainLinks: string[];
   schemaTypes: string[];
@@ -232,6 +244,16 @@ function parsePage(path: string, status: number, rawHtml: string): CrawledPage {
     }
   }
 
+  const bodyInternal = new Set<string>();
+  for (const m of Array.from(body.matchAll(/<a\b[^>]*href\s*=\s*"([^"]+)"[^>]*>/gi))) {
+    const href = m[1].trim();
+    if (href.startsWith("/") && !href.startsWith("//")) {
+      bodyInternal.add(href.split("#")[0].split("?")[0].replace(/\/$/, "") || "/");
+    } else if (/^https?:\/\/([^/]+\.)?riversrealestate\.ca/i.test(href)) {
+      try { bodyInternal.add(new URL(href).pathname.replace(/\/$/, "") || "/"); } catch { /* ignore */ }
+    }
+  }
+
   const schemaTypes = Array.from(html.matchAll(/"@type"\s*:\s*"([A-Za-z]+)"/g)).map((m) => m[1]);
 
   return {
@@ -245,6 +267,7 @@ function parsePage(path: string, status: number, rawHtml: string): CrawledPage {
     text,
     wordCount: text ? text.split(/\s+/).length : 0,
     internalLinks: Array.from(internal),
+    bodyLinks: Array.from(bodyInternal),
     externalLinks: Array.from(external),
     sisterDomainLinks: Array.from(sister),
     schemaTypes: Array.from(new Set(schemaTypes)),
@@ -295,7 +318,7 @@ async function fetchRoute(base: string, path: string): Promise<CrawledPage> {
   } catch (e: any) {
     return {
       path, status: 0, title: "", description: "", h1: "", headings: [], text: "",
-      wordCount: 0, internalLinks: [], externalLinks: [], sisterDomainLinks: [],
+      wordCount: 0, internalLinks: [], bodyLinks: [], externalLinks: [], sisterDomainLinks: [],
       schemaTypes: [], canonical: null,
     };
   }
@@ -401,7 +424,7 @@ const GENERIC = new Set([
   "properties", "guide", "ultimate", "best", "top", "condos", "condo",
 ]);
 
-function subjectTokens(kw: string): string[] {
+export function subjectTokens(kw: string): string[] {
   return normalize(kw)
     .split(" ")
     .filter((w) => w && !STOP.has(w) && !GENERIC.has(w) && !/^\d+$/.test(w));
@@ -474,12 +497,38 @@ function keywordOccurrences(haystack: string, keyword: string): number {
   return Math.min(...counts);
 }
 
-function clusterFor(path: string, page: CrawledPage): ClusterDef {
-  const byPrefix = CLUSTERS.find((c) =>
+/**
+ * The live cluster map. Reads the seo_clusters table (seeded from CLUSTERS on
+ * first use); falls back to the constant if the table can't be read, so a
+ * storage problem degrades the console rather than breaking it.
+ */
+export function activeClusters(): ClusterDef[] {
+  try {
+    const stored = getStoredClusters(CLUSTERS);
+    if (stored.length) return stored;
+  } catch (e: any) {
+    console.warn("[seo-keywords] cluster table unavailable, using defaults:", e?.message ?? e);
+  }
+  return CLUSTERS;
+}
+
+/**
+ * Which cluster a page belongs to. Precedence: a cluster that names the page
+ * as its pillar or an explicit member, then URL prefix, then (for blog posts)
+ * vocabulary, then the journal.
+ */
+export function clusterFor(path: string, page: CrawledPage, clusters: ClusterDef[] = activeClusters()): ClusterDef {
+  const explicit =
+    clusters.find((c) => c.pillar === path) ??
+    clusters.find((c) => c.members?.includes(path));
+  if (explicit) return explicit;
+
+  const byPrefix = clusters.find((c) =>
     c.prefixes.some((p) => path === p || path.startsWith(p + "/")),
   );
   if (byPrefix && byPrefix.id !== "journal") return byPrefix;
-  if (path === "/") return CLUSTERS.find((c) => c.id === "trust")!;
+  const trust = clusters.find((c) => c.id === "trust");
+  if (path === "/" && trust) return trust;
 
   // Blog posts get classified by vocabulary so they can be checked against the
   // pillar they actually compete with, not just filed under "journal".
@@ -487,14 +536,14 @@ function clusterFor(path: string, page: CrawledPage): ClusterDef {
     const hay = `${page.title} ${page.h1} ${page.headings.join(" ")}`.toLowerCase();
     let best: ClusterDef | null = null;
     let bestScore = 0;
-    for (const c of CLUSTERS) {
+    for (const c of clusters) {
       if (c.id === "journal" || c.id === "trust") continue;
       const score = countVocab(hay, c.vocabulary);
       if (score > bestScore) { bestScore = score; best = c; }
     }
     if (best && bestScore >= 2) return best;
   }
-  return byPrefix || CLUSTERS.find((c) => c.id === "journal")!;
+  return byPrefix || clusters.find((c) => c.id === "journal") || clusters[0];
 }
 
 // ---------------------------------------------------------------------------
@@ -589,6 +638,8 @@ export interface SeoReport {
   ga4: { ok: boolean; message?: string; pages: number };
   /** Ranked by priority — see server/seo-opportunities.ts. */
   opportunities: Opportunity[];
+  /** Pillar/cluster health and suggested new clusters — server/seo-architecture.ts. */
+  architecture: ArchitectureReport;
   summary: {
     /** Sum of estimated monthly click gains across all opportunities. */
     estClicksAvailable: number;
@@ -618,6 +669,9 @@ export interface SeoReport {
 let lastContext: {
   gscByPath: Map<string, GscPageRow[]>;
   ga4: Map<string, Ga4PageMetrics>;
+  /** Every internal link per page (nav included) and the body-only subset. */
+  links: Map<string, string[]>;
+  bodyLinks: Map<string, string[]>;
   builtAt: number;
 } | null = null;
 
@@ -631,6 +685,8 @@ export async function buildSeoReport(opts: {
   gscDays?: number;
 }): Promise<SeoReport> {
   const t0 = Date.now();
+  const clusterDefs = activeClusters();
+  const clusterOf = (path: string, page: CrawledPage) => clusterFor(path, page, clusterDefs);
   const routes = publicRoutes();
   const crawled = await crawl(opts.baseUrl, routes);
   const crawlMs = Date.now() - t0;
@@ -691,7 +747,7 @@ export async function buildSeoReport(opts: {
 
   const analyses: PageAnalysis[] = crawled.map((page) => {
     const { kw, src } = keywordOf.get(page.path)!;
-    const cluster = clusterFor(page.path, page);
+    const cluster = clusterOf(page.path, page);
     const isPillar = cluster.pillar === page.path;
     const hayTitle = page.title.toLowerCase();
     const hayDesc = page.description.toLowerCase();
@@ -774,7 +830,7 @@ export async function buildSeoReport(opts: {
         if (other.internalLinks.some((h) => (h.replace(/\/$/, "") || "/") === page.path)) continue;
         const mentions = containsKeyword(other.text, kw);
         if (!mentions) continue;
-        const sameCluster = clusterFor(other.path, other).id === cluster.id;
+        const sameCluster = clusterOf(other.path, other).id === cluster.id;
         recommendedInboundFrom.push({
           path: other.path,
           reason: sameCluster
@@ -883,18 +939,33 @@ export async function buildSeoReport(opts: {
     };
   });
 
-  const opportunities = buildOpportunities({
+  const norm = (h: string) => h.replace(/\/$/, "") || "/";
+  const links = new Map(crawled.map((p) => [p.path, p.internalLinks.map(norm)]));
+  const bodyLinks = new Map(crawled.map((p) => [p.path, p.bodyLinks.map(norm)]));
+
+  const pageOpportunities = buildOpportunities({
     pages: analyses,
     gscRows,
     ga4: ga4Pages,
     days: opts.gscDays ?? 90,
   });
+  const architecture = buildArchitecture({
+    pages: analyses,
+    clusters: clusterDefs,
+    links,
+    bodyLinks,
+    gscRows,
+    ga4: ga4Pages,
+    days: opts.gscDays ?? 90,
+  });
+  const opportunities = [...pageOpportunities, ...architecture.opportunities]
+    .sort((a, b) => b.priority - a.priority);
 
-  // The fix generator needs the raw query rows for the pages it is asked to
-  // work on; the report itself only carries per-page rollups.
-  lastContext = { gscByPath, ga4: ga4Pages, builtAt: Date.now() };
+  // The fix generator needs the raw query rows and the link graph for the
+  // pages it is asked to work on; the report itself only carries rollups.
+  lastContext = { gscByPath, ga4: ga4Pages, links, bodyLinks, builtAt: Date.now() };
 
-  const clusters = CLUSTERS.map((c) => {
+  const clusters = clusterDefs.map((c) => {
     const pages = analyses.filter((a) => a.cluster === c.id);
     return {
       id: c.id,
@@ -916,6 +987,7 @@ export async function buildSeoReport(opts: {
     gsc: gscState,
     ga4: ga4State,
     opportunities,
+    architecture: architecture.report,
     summary: {
       estClicksAvailable: Math.round(opportunities.reduce((s, o) => s + o.estClicksGain, 0)),
       quickWins: opportunities.filter((o) => o.quickWin).length,

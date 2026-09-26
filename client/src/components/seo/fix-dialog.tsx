@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiErrorMessage, apiRequest } from "@/lib/queryClient";
-import { STATUS_LABELS, type FixChange, type FixProposal } from "./types";
+import { STATUS_LABELS, type FixChange, type FixProposal, type PlannedTopic } from "./types";
 
 async function getProposal(id: number): Promise<FixProposal> {
   const r = await apiRequest("GET", `/api/admin/seo/fixes/${id}`);
@@ -25,7 +25,16 @@ async function getProposal(id: number): Promise<FixProposal> {
 /** A code change that can't be delivered here can only be copied, not applied. */
 const selectable = (c: FixChange) => !(c.op.type === "code_change" && c.delivery !== "github");
 
-export function FixDialog({ fixId, onClose }: { fixId: number | null; onClose: () => void }) {
+export function FixDialog({
+  fixId,
+  onClose,
+  onDraftTopic,
+}: {
+  fixId: number | null;
+  onClose: () => void;
+  /** Start a new fix that drafts one roadmap topic as a post. */
+  onDraftTopic?: (t: PlannedTopic) => void;
+}) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -158,6 +167,40 @@ export function FixDialog({ fixId, onClose }: { fixId: number | null; onClose: (
                     locked={p.status !== "ready" || !selectable(c)}
                   />
                 ))}
+              </div>
+            )}
+
+            {(p.planned?.length ?? 0) > 0 && (
+              <div className="border border-border p-3" data-testid="fix-roadmap">
+                <div className="text-[10px] uppercase tracking-[0.16em] font-semibold text-muted-foreground mb-2">
+                  Content roadmap — pages worth writing next
+                </div>
+                <ol className="space-y-2">
+                  {p.planned!.map((t, i) => (
+                    <li key={i} className="flex items-start gap-3 text-sm">
+                      <span className="text-muted-foreground tabular-nums w-4 shrink-0">{i + 1}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium">{t.title}</div>
+                        <div className="text-xs text-muted-foreground">
+                          targets “{t.targetQuery}”{t.why ? ` — ${t.why}` : ""}
+                        </div>
+                      </div>
+                      {onDraftTopic && t.clusterId && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="rounded-sm h-7 text-xs gap-1 shrink-0"
+                          onClick={() => onDraftTopic(t)}
+                        >
+                          <Sparkles className="w-3 h-3" /> Draft this
+                        </Button>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+                <p className="text-[11px] text-muted-foreground mt-2">
+                  Drafting opens a new fix; the post is saved as a draft for you to review and publish.
+                </p>
               </div>
             )}
 

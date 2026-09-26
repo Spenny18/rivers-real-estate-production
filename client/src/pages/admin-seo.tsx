@@ -19,7 +19,8 @@ import { apiErrorMessage, apiRequest } from "@/lib/queryClient";
 import { OpportunitiesSection } from "@/components/seo/opportunities";
 import { FixDialog } from "@/components/seo/fix-dialog";
 import { FixHistory } from "@/components/seo/fix-history";
-import type { FixSubject, Opportunity } from "@/components/seo/types";
+import { ArchitectureSection } from "@/components/seo/architecture";
+import type { ClusterAudit, ClusterCandidate, FixSubject, Opportunity } from "@/components/seo/types";
 
 interface ScoreComponent { id: string; label: string; earned: number; max: number; detail: string }
 interface PageAnalysis {
@@ -41,6 +42,7 @@ interface SeoReport {
   gsc: { ok: boolean; message?: string; rows: number };
   ga4?: { ok: boolean; message?: string; pages: number };
   opportunities?: Opportunity[];
+  architecture?: { clusters: ClusterAudit[]; candidates: ClusterCandidate[] };
   summary: { estClicksAvailable?: number; quickWins?: number; avgScore: number; strong: number; fair: number; weak: number; conflicts: number; orphans: number; missingKeyword: number };
   clusters: { id: string; label: string; pillar: string; headKeyword: string; intent: string; pages: number; avgScore: number; conflicts: number }[];
   pages: PageAnalysis[];
@@ -648,34 +650,17 @@ export default function AdminSeoPage() {
               }}
             />
 
-            {/* Clusters */}
-            <section>
-              <h2 className="font-serif text-2xl mb-1">Clusters</h2>
-              <p className="text-sm text-muted-foreground mb-4">
-                Each cluster has one pillar page that owns the head term. Child pages must target something narrower.
-              </p>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {data.clusters.map((c) => (
-                  <button key={c.id} onClick={() => setClusterFilter(clusterFilter === c.id ? "all" : c.id)}
-                    className={`text-left border p-4 transition-colors ${clusterFilter === c.id ? "border-foreground bg-secondary/50" : "border-border bg-card hover:border-foreground/40"}`}
-                    data-testid={`cluster-${c.id}`}>
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="font-semibold text-sm">{c.label}</div>
-                      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{c.intent}</span>
-                    </div>
-                    <div className="text-xs text-muted-foreground mt-2 font-mono">{c.pillar}</div>
-                    <div className="text-xs mt-1">owns <span className="font-semibold">{c.headKeyword}</span></div>
-                    <div className="flex items-center gap-4 mt-3 text-xs tabular-nums">
-                      <span>{c.pages} pages</span>
-                      <span>avg {c.avgScore}</span>
-                      {c.conflicts > 0 && (
-                        <span className="text-rose-600 dark:text-rose-400">{c.conflicts} conflict{c.conflicts === 1 ? "" : "s"}</span>
-                      )}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </section>
+            {/* Site architecture — cluster health, emerging clusters, planning */}
+            <ArchitectureSection
+              clusters={data.clusters}
+              audits={data.architecture?.clusters ?? []}
+              candidates={data.architecture?.candidates ?? []}
+              livePaths={data.pages.filter((p) => p.status === 200).map((p) => p.path)}
+              clusterFilter={clusterFilter}
+              onFilter={(id) => setClusterFilter(clusterFilter === id ? "all" : id)}
+              pending={pendingFix}
+              onPlan={fixWithClaude}
+            />
 
             {/* Conflicts */}
             {conflictPairs.length > 0 && (
@@ -997,7 +982,13 @@ export default function AdminSeoPage() {
         );
       })()}
 
-      <FixDialog fixId={fixId} onClose={() => setFixId(null)} />
+      <FixDialog
+        fixId={fixId}
+        onClose={() => setFixId(null)}
+        onDraftTopic={(t) =>
+          t.clusterId &&
+          fixWithClaude({ kind: "topic", clusterId: t.clusterId, query: t.targetQuery, title: t.title }, `topic:${t.targetQuery}`)}
+      />
     </AppShell>
   );
 }

@@ -8,7 +8,8 @@ export type OpportunityType =
   | "cannibalization"
   | "internal_links"
   | "content_gap"
-  | "on_page";
+  | "on_page"
+  | "architecture";
 
 export interface OpportunityQuery {
   query: string;
@@ -24,6 +25,9 @@ export interface Opportunity {
   type: OpportunityType;
   paths: string[];
   query: string | null;
+  subtype?: "pillar_links" | "uplinks" | "pillar_not_owner" | "cluster_candidate" | "deep_page";
+  clusterId?: string;
+  candidateId?: string;
   headline: string;
   why: string;
   action: string;
@@ -47,7 +51,12 @@ export interface Opportunity {
 export type FixSubject =
   | { opportunityId: string }
   | { kind: "cannibalization"; paths: string[] }
-  | { kind: "page"; path: string };
+  | { kind: "page"; path: string }
+  | { kind: "cluster"; clusterId: string }
+  | { kind: "candidate"; candidateId: string }
+  | { kind: "topic"; clusterId: string; query: string; title: string };
+
+export interface PlannedTopic { title: string; targetQuery: string; why: string; clusterId: string | null }
 
 export interface PreviewRow { label: string; before: string; after: string }
 
@@ -75,6 +84,7 @@ export interface FixProposal {
   rationale: string | null;
   changes: FixChange[];
   dropped: Array<{ type: string; reason: string }>;
+  planned?: PlannedTopic[];
   error: string | null;
   model: string | null;
   createdAt: string;
@@ -90,7 +100,57 @@ export const OPPORTUNITY_LABELS: Record<OpportunityType, string> = {
   internal_links: "Internal links",
   content_gap: "Content gap",
   on_page: "On-page basics",
+  architecture: "Site architecture",
 };
+
+export interface ClusterAudit {
+  id: string;
+  label: string;
+  pillar: string;
+  headKeyword: string;
+  intent: string;
+  factory: boolean;
+  pillarStatus: number | null;
+  children: string[];
+  linkedFromPillar: number;
+  linkingUp: number;
+  missingDownLinks: string[];
+  missingUpLinks: string[];
+  offClusterLinkShare: number;
+  avgDepth: number | null;
+  deepPages: string[];
+  headTerm: {
+    owner: string | null; ownerImpressions: number; ownerPosition: number | null;
+    pillarImpressions: number; pillarPosition: number | null; queries: number;
+  } | null;
+  gaps: Array<{ query: string; impressions: number; position: number; bestPage: string }>;
+  flags: string[];
+  health: number;
+}
+
+export interface ClusterCandidate {
+  id: string;
+  label: string;
+  subject: string;
+  headKeyword: string;
+  pages: string[];
+  suggestedPillar: string | null;
+  impressions: number;
+  why: string;
+}
+
+/** A cluster definition as stored (GET /api/admin/seo/clusters). */
+export interface ClusterDef {
+  id: string;
+  label: string;
+  pillar: string;
+  headKeyword: string;
+  intent: string;
+  prefixes: string[];
+  vocabulary: string[];
+  members?: string[];
+  factory?: boolean;
+}
 
 export const EFFORT_LABELS = { quick: "Quick", medium: "Medium", heavy: "Bigger job" } as const;
 
