@@ -6,10 +6,11 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  AlertTriangle, Check, Copy, ExternalLink, GitPullRequest, RefreshCw, Sparkles, Undo2, X,
+  AlertTriangle, Check, Copy, ExternalLink, GitPullRequest, MessageSquare, RefreshCw, Send, Sparkles, Undo2, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -25,13 +26,31 @@ async function getProposal(id: number): Promise<FixProposal> {
 /** A code change that can't be delivered here can only be copied, not applied. */
 const selectable = (c: FixChange) => !(c.op.type === "code_change" && c.delivery !== "github");
 
+/** Initial ticks: every safe change, but only the first of each set of alternatives. */
+function initialSelection(changes: FixChange[]): Set<number> {
+  const seen = new Set<string>();
+  const out = new Set<number>();
+  for (const c of changes) {
+    if (c.destructive || !selectable(c)) continue;
+    if (c.variantGroup) {
+      if (seen.has(c.variantGroup)) continue;
+      seen.add(c.variantGroup);
+    }
+    out.add(c.index);
+  }
+  return out;
+}
+
 export function FixDialog({
   fixId,
   onClose,
   onDraftTopic,
+  onRevised,
 }: {
   fixId: number | null;
   onClose: () => void;
+  /** A revision was started — show the new proposal in place of this one. */
+  onRevised?: (id: number) => void;
   /** Start a new fix that drafts one roadmap topic as a post. */
   onDraftTopic?: (t: PlannedTopic) => void;
 }) {
@@ -39,6 +58,8 @@ export function FixDialog({
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [initialisedFor, setInitialisedFor] = useState<number | null>(null);
+  const [revising, setRevising] = useState(false);
+  const [note, setNote] = useState("");
 
   const { data: p } = useQuery({
     queryKey: ["/api/admin/seo/fixes", fixId],
@@ -52,8 +73,10 @@ export function FixDialog({
   // deliberate click.
   useEffect(() => {
     if (p && p.status === "ready" && initialisedFor !== p.id) {
-      setSelected(new Set(p.changes.filter((c) => !c.destructive && selectable(c)).map((c) => c.index)));
+      setSelected(initialSelection(p.changes));
       setInitialisedFor(p.id);
+      setRevising(false);
+      setNote("");
     }
   }, [p, initialisedFor]);
 
@@ -106,11 +129,31 @@ export function FixDialog({
     },
   });
 
-  const toggle = (i: number) =>
+  const revise = useMutation({
+    mutationFn: async () => {
+      const r = await apiRequest("POST", `/api/admin/seo/fixes/${fixId}/revise`, { note: note.trim() });
+      return (await r.json()) as { id: number };
+    },
+    onSuccess: ({ id }) => {
+      qc.invalidateQueries({ queryKey: ["/api/admin/seo/fixes"] });
+      toast({ title: "Revising", description: "Claude is redrafting with your note." });
+      onRevised?.(id);
+    },
+    onError: (e) => toast({ title: "Revise failed", description: apiErrorMessage(e), variant: "destructive" }),
+  });
+
+  // Alternatives in the same group are choose-one: ticking one unticks the rest.
+  const toggle = (c: FixChange) =>
     setSelected((s) => {
       const n = new Set(s);
-      if (n.has(i)) n.delete(i);
-      else n.add(i);
+      if (n.has(c.index)) {
+        n.delete(c.index);
+        return n;
+      }
+      if (c.variantGroup && p) {
+        for (const o of p.changes) if (o.variantGroup === c.variantGroup) n.delete(o.index);
+      }
+      n.add(c.index);
       return n;
     });
 
@@ -163,7 +206,7 @@ export function FixDialog({
                     key={c.index}
                     change={c}
                     checked={selected.has(c.index)}
-                    onToggle={() => toggle(c.index)}
+                    onToggle={() => toggle(c)}
                     locked={p.status !== "ready" || !selectable(c)}
                   />
                 ))}
@@ -204,6 +247,40 @@ export function FixDialog({
               </div>
             )}
 
+            {revising && p.status === "ready" && (
+              <div className="border border-border p-3 space-y-2" data-testid="fix-revise">
+                <div className="text-[10px] uppercase tracking-[0.16em] font-semibold text-muted-foreground">
+                  What should Claude change?
+                </div>
+                <Textarea
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  rows={3}
+                  maxLength={2000}
+                  placeholder="e.g. Punchier titles — lead with the price range. Mention the ravine lots."
+                  className="rounded-sm text-sm"
+                  data-testid="input-fix-revise-note"
+                />
+                <div className="flex justify-end gap-2">
+                  <Button size="sm" variant="ghost" className="rounded-sm" onClick={() => setRevising(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="rounded-sm gap-1.5"
+                    disabled={revise.isPending || note.trim().length === 0}
+                    onClick={() => revise.mutate()}
+                    data-testid="button-fix-revise-send"
+                  >
+                    <Send className="w-3.5 h-3.5" /> {revise.isPending ? "Sending…" : "Redraft"}
+                  </Button>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Claude sees this draft and your note. This draft is set aside once the new one starts.
+                </p>
+              </div>
+            )}
+
             {p.dropped.length > 0 && (
               <div className="text-xs text-muted-foreground border-l-2 border-amber-500 pl-3 space-y-1">
                 <div className="uppercase tracking-wider text-[10px] font-semibold text-amber-700 dark:text-amber-400">
@@ -221,6 +298,16 @@ export function FixDialog({
               <Button variant="ghost" onClick={() => dismiss.mutate()} disabled={dismiss.isPending} className="rounded-sm">
                 <X className="w-3.5 h-3.5 mr-1.5" /> Dismiss
               </Button>
+              {onRevised && !revising && (
+                <Button
+                  variant="outline"
+                  onClick={() => setRevising(true)}
+                  className="rounded-sm gap-1.5"
+                  data-testid="button-fix-revise"
+                >
+                  <MessageSquare className="w-3.5 h-3.5" /> Revise
+                </Button>
+              )}
               <Button
                 onClick={() => apply.mutate()}
                 disabled={apply.isPending || selected.size === 0}
@@ -294,6 +381,11 @@ function ChangeCard({
         <div className="flex-1 min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium">{c.heading}</span>
+            {c.variantGroup && (
+              <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 border border-sky-500/40 text-sky-700 dark:text-sky-400">
+                option — pick one
+              </span>
+            )}
             {c.destructive && (
               <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 border border-rose-500/40 text-rose-700 dark:text-rose-400">
                 removes a page from search

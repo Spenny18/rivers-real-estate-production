@@ -320,7 +320,7 @@ export function buildOpportunities(opts: {
     // Orphans and links to the sister domain are common enough to swamp the
     // list, so they only count once the page is earning search impressions.
     const serious = page.issues.filter((i) =>
-      /Missing|Thin|old brand/.test(i) || (rows.length > 0 && /Links to|Orphan/.test(i)),
+      /Missing|Thin/.test(i) || (rows.length > 0 && /Links to|Orphan/.test(i)),
     );
     if (serious.length || page.score < 50) {
       const t = totals(rows);

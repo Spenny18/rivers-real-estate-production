@@ -402,3 +402,34 @@ export function deleteCluster(id: string, opts: { allowFactory?: boolean } = {})
   sqlite.prepare("DELETE FROM seo_clusters WHERE id = ?").run(id);
   clusterCache = null;
 }
+
+// ---------------------------------------------------------------------------
+// Console settings (e.g. the owner's standing "house style" for Claude)
+// ---------------------------------------------------------------------------
+
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS seo_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+`);
+
+export function getSeoSetting(key: string): string | null {
+  const r = sqlite.prepare("SELECT value FROM seo_settings WHERE key = ?").get(key) as { value: string } | undefined;
+  return r?.value ?? null;
+}
+
+export function setSeoSetting(key: string, value: string): void {
+  const v = value.trim();
+  if (!v) {
+    sqlite.prepare("DELETE FROM seo_settings WHERE key = ?").run(key);
+    return;
+  }
+  sqlite
+    .prepare(
+      `INSERT INTO seo_settings (key, value, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    )
+    .run(key, v, now());
+}

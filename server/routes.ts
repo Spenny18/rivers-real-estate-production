@@ -3792,6 +3792,30 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/admin/seo/fixes/:id/revise", requireAuth, async (req, res) => {
+    const { reviseFix } = await import("./seo-fix");
+    try {
+      const proposal = reviseFix(Number(req.params.id), String(req.body?.note ?? ""));
+      res.json({ ok: true, id: proposal.id, proposal });
+    } catch (e: any) {
+      res.status(400).json({ ok: false, message: e?.message ?? "Revise failed" });
+    }
+  });
+
+  // The owner's standing instructions for Claude ("house style").
+  app.get("/api/admin/seo/settings", requireAuth, async (_req, res) => {
+    const { getSeoSetting } = await import("./seo-store");
+    res.json({ ok: true, houseStyle: getSeoSetting("house_style") ?? "" });
+  });
+
+  app.put("/api/admin/seo/settings", requireAuth, async (req, res) => {
+    const { setSeoSetting } = await import("./seo-store");
+    const houseStyle = typeof req.body?.houseStyle === "string" ? req.body.houseStyle.slice(0, 4000) : null;
+    if (houseStyle === null) return res.status(400).json({ ok: false, message: "houseStyle must be text" });
+    setSeoSetting("house_style", houseStyle);
+    res.json({ ok: true, houseStyle: houseStyle.trim() });
+  });
+
   // What the fix flow can reach on this server, so the UI can say so up front.
   app.get("/api/admin/seo/fixes-config", requireAuth, (_req, res) => {
     res.json({
