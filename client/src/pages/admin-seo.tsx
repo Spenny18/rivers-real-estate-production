@@ -18,7 +18,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiErrorMessage, apiRequest } from "@/lib/queryClient";
 import { OpportunitiesSection } from "@/components/seo/opportunities";
 import { FixDialog } from "@/components/seo/fix-dialog";
-import { FixHistory } from "@/components/seo/fix-history";
+import { FixHistory, HouseStyleCard } from "@/components/seo/fix-history";
 import { ArchitectureSection } from "@/components/seo/architecture";
 import type { ClusterAudit, ClusterCandidate, FixSubject, Opportunity } from "@/components/seo/types";
 
@@ -597,6 +597,7 @@ export default function AdminSeoPage() {
         <SitemapHealthCard />
         <LegacyImagesCard />
         <FixHistory onOpen={setFixId} />
+        <HouseStyleCard />
 
         {isLoading ? (
           <div className="space-y-4">
@@ -985,6 +986,7 @@ export default function AdminSeoPage() {
       <FixDialog
         fixId={fixId}
         onClose={() => setFixId(null)}
+        onRevised={setFixId}
         onDraftTopic={(t) =>
           t.clusterId &&
           fixWithClaude({ kind: "topic", clusterId: t.clusterId, query: t.targetQuery, title: t.title }, `topic:${t.targetQuery}`)}

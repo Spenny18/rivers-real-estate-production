@@ -66,6 +66,8 @@ export interface FixChange {
   heading: string;
   rows: PreviewRow[];
   destructive: boolean;
+  /** Changes sharing a group are alternatives — apply one of them. */
+  variantGroup?: string;
   delivery?: "github" | "prompt";
   prompt?: string;
   applied?: boolean;

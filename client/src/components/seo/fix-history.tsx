@@ -1,9 +1,12 @@
 // Every "Fix with Claude" run, newest first — where drafts wait for review
 // and where an applied fix is found again to undo it.
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, History } from "lucide-react";
-import { apiRequest } from "@/lib/queryClient";
+import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ChevronDown, History, PenLine } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/hooks/use-toast";
+import { apiErrorMessage, apiRequest } from "@/lib/queryClient";
 import { STATUS_LABELS, type FixProposal } from "./types";
 
 const STATUS_TONE: Partial<Record<FixProposal["status"], string>> = {
@@ -65,6 +68,84 @@ export function FixHistory({ onOpen }: { onOpen: (id: number) => void }) {
             </li>
           ))}
         </ul>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Standing instructions Claude follows on every fix — tone, phrases to avoid,
+ * selling points to lean on. Saved server-side (seo_settings.house_style).
+ */
+export function HouseStyleCard() {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const { data } = useQuery({
+    queryKey: ["/api/admin/seo/settings"],
+    queryFn: async () => {
+      const r = await apiRequest("GET", "/api/admin/seo/settings");
+      return (await r.json()) as { houseStyle: string };
+    },
+  });
+  const saved = data?.houseStyle ?? "";
+  useEffect(() => setText(saved), [saved]);
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const r = await apiRequest("PUT", "/api/admin/seo/settings", { houseStyle: text.trim() });
+      return (await r.json()) as { houseStyle: string };
+    },
+    onSuccess: (next) => {
+      qc.setQueryData(["/api/admin/seo/settings"], next);
+      toast({ title: "House style saved", description: "Claude follows it on every fix from now on." });
+    },
+    onError: (e) => toast({ title: "Save failed", description: apiErrorMessage(e), variant: "destructive" }),
+  });
+
+  return (
+    <section className="border border-border bg-card" data-testid="section-house-style">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between gap-3 p-4 text-left"
+      >
+        <span className="flex items-center gap-2 font-display text-[11px] tracking-[0.16em] text-muted-foreground">
+          <PenLine className="w-3.5 h-3.5" /> HOUSE STYLE FOR CLAUDE
+          <span className="normal-case tracking-normal text-xs font-sans">
+            {saved ? "set" : "not set — Claude uses its defaults"}
+          </span>
+        </span>
+        <ChevronDown className={`w-4 h-4 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="border-t border-border p-4 space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Standing instructions for every title, description and edit Claude drafts: tone, words to avoid,
+            selling points to lean on. They take priority over Claude's defaults.
+          </p>
+          <Textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={5}
+            maxLength={4000}
+            placeholder={"e.g. Confident, not salesy. Lead with numbers when we have them.\nNever say \"dream home\". Mention private showings for $2M+ pages."}
+            className="rounded-sm text-sm"
+            data-testid="input-house-style"
+          />
+          <div className="flex items-center justify-end gap-2">
+            <span className="text-[11px] text-muted-foreground mr-auto tabular-nums">{text.length}/4000</span>
+            <Button
+              size="sm"
+              className="rounded-sm"
+              disabled={save.isPending || text.trim() === saved}
+              onClick={() => save.mutate()}
+              data-testid="button-house-style-save"
+            >
+              {save.isPending ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        </div>
       )}
     </section>
   );

@@ -893,9 +893,9 @@ export async function buildSeoReport(opts: {
     if (page.sisterDomainLinks.length) {
       issues.push(`Links to ${SISTER_DOMAIN} ×${page.sisterDomainLinks.length} — passes authority to the competing domain`);
     }
-    if (page.title.toLowerCase().includes("luxury homes calgary") && !page.path.startsWith("/blog")) {
-      issues.push("Title carries the old brand rather than Rivers Real Estate");
-    }
+    // "Luxury Homes Calgary" in neighbourhood/condo/listing titles is not
+    // flagged: that WordPress-era format carries the rankings (see the
+    // comments in server/seo-inject.ts) and is kept on purpose.
     if (!page.schemaTypes.some((t) => t === "BreadcrumbList") && page.path !== "/") {
       issues.push("No BreadcrumbList schema");
     }
