@@ -4,7 +4,7 @@
 // the other admin pages.
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, Image as ImageIcon } from "lucide-react";
+import { Save, Plus, Image as ImageIcon } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,6 +42,38 @@ function fmtDate(iso: string) {
   });
 }
 
+// Same rule the server enforces on POST: lowercase letters, digits, hyphens.
+function slugify(s: string) {
+  return s
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+// Blank post for the "New post" form. The server fills in a unique hero
+// image when heroImage is left empty.
+function emptyPost(): AdminBlogPost {
+  return {
+    id: 0,
+    slug: "",
+    title: "",
+    excerpt: "",
+    body: "",
+    category: "Guide",
+    heroImage: "",
+    heroImageAlt: null,
+    authorName: "Spencer Rivers",
+    authorAvatar: null,
+    readMinutes: 0, // 0 = let the server estimate from the body
+    status: "draft",
+    publishedAt: new Date().toISOString(),
+    videoUploadDate: null,
+    videoDuration: null,
+  };
+}
+
 export default function AdminBlogPage() {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -53,6 +85,10 @@ export default function AdminBlogPage() {
   const [draft, setDraft] = useState<AdminBlogPost | null>(null);
   const [filter, setFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "draft" | "published">("all");
+  // "New post" mode: the editor shows a blank draft that is POSTed on save.
+  const [creating, setCreating] = useState(false);
+  // Until the slug is edited by hand, it follows the title.
+  const [slugTouched, setSlugTouched] = useState(false);
 
   useEffect(() => {
     if (!selectedSlug && posts.length > 0) setSelectedSlug(posts[0].slug);
@@ -71,8 +107,56 @@ export default function AdminBlogPage() {
   // Reset the draft whenever the selected post changes (server is the source
   // of truth — unsaved local changes are intentionally dropped on switch).
   useEffect(() => {
+    if (creating) return;
     setDraft(selected ? { ...selected } : null);
-  }, [selected]);
+  }, [selected, creating]);
+
+  const startNewPost = () => {
+    setCreating(true);
+    setSlugTouched(false);
+    setDraft(emptyPost());
+  };
+
+  const selectPost = (slug: string) => {
+    setCreating(false);
+    setSelectedSlug(slug);
+  };
+
+  const create = useMutation({
+    mutationFn: async (post: AdminBlogPost) => {
+      const r = await apiRequest("POST", "/api/admin/blog", post);
+      return (await r.json()) as AdminBlogPost;
+    },
+    onSuccess: async (created) => {
+      await qc.invalidateQueries({ queryKey: ["/api/admin/blog"] });
+      setCreating(false);
+      setSelectedSlug(created.slug);
+      toast({ title: created.status === "published" ? "Post published" : "Draft created" });
+    },
+    onError: (e: any) => {
+      // apiRequest errors read "409: {"message":"…"}" — show just the message.
+      const raw = String(e?.message ?? "");
+      const msg = raw.match(/"message"\s*:\s*"([^"]+)"/)?.[1] ?? (raw || "Try again");
+      toast({ title: "Create failed", description: msg, variant: "destructive" });
+    },
+  });
+
+  const submitNew = (status: "draft" | "published") => {
+    if (!draft) return;
+    if (!draft.title.trim() || !draft.body.trim()) {
+      toast({ title: "Title and body are required", variant: "destructive" });
+      return;
+    }
+    if (!/^[a-z0-9-]+$/.test(draft.slug)) {
+      toast({
+        title: "Invalid URL slug",
+        description: "Use lowercase letters, numbers and hyphens only.",
+        variant: "destructive",
+      });
+      return;
+    }
+    create.mutate({ ...draft, status });
+  };
 
   const save = useMutation({
     mutationFn: async (patch: Partial<AdminBlogPost>) => {
@@ -113,6 +197,15 @@ export default function AdminBlogPage() {
         {/* LIST */}
         <aside className="border-r border-border overflow-y-auto bg-card">
           <div className="px-4 py-4 border-b border-border sticky top-0 bg-card z-10 space-y-2">
+            <Button
+              onClick={startNewPost}
+              variant={creating ? "outline" : "default"}
+              className="w-full h-9"
+              data-testid="btn-new-post"
+            >
+              <Plus className="w-3.5 h-3.5 mr-1.5" strokeWidth={1.8} />
+              New post
+            </Button>
             <Input
               placeholder="Search posts…"
               value={filter}
@@ -150,9 +243,9 @@ export default function AdminBlogPage() {
               {filtered.map((p) => (
                 <li key={p.slug}>
                   <button
-                    onClick={() => setSelectedSlug(p.slug)}
+                    onClick={() => selectPost(p.slug)}
                     className={`w-full text-left px-4 py-3 hover:bg-muted/40 transition-colors ${
-                      p.slug === selectedSlug ? "bg-muted/60" : ""
+                      !creating && p.slug === selectedSlug ? "bg-muted/60" : ""
                     }`}
                     data-testid={`admin-blog-item-${p.slug}`}
                   >
@@ -184,17 +277,45 @@ export default function AdminBlogPage() {
 
         {/* EDIT */}
         <section className="overflow-y-auto">
-          {draft && selected ? (
+          {draft && (selected || creating) ? (
             <div className="max-w-3xl mx-auto px-6 lg:px-10 py-8">
               <div className="flex items-start justify-between gap-3 flex-wrap">
                 <div>
                   <div className="font-display text-[10px] tracking-[0.22em] text-muted-foreground">
-                    EDIT POST · /{draft.slug}
+                    {creating ? "NEW POST" : "EDIT POST"} · /{draft.slug}
                   </div>
                   <h1 className="mt-2 font-serif text-2xl lg:text-3xl leading-tight">
                     {draft.title || "Untitled"}
                   </h1>
                 </div>
+                {creating ? (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="ghost"
+                      onClick={() => setCreating(false)}
+                      disabled={create.isPending}
+                      data-testid="btn-cancel-new-post"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => submitNew("draft")}
+                      disabled={create.isPending}
+                      data-testid="btn-create-draft"
+                    >
+                      <Save className="w-3.5 h-3.5 mr-1.5" strokeWidth={1.6} />
+                      Save draft
+                    </Button>
+                    <Button
+                      onClick={() => submitNew("published")}
+                      disabled={create.isPending}
+                      data-testid="btn-create-publish"
+                    >
+                      {create.isPending ? "Creating…" : "Publish"}
+                    </Button>
+                  </div>
+                ) : (
                 <div className="flex items-center gap-2">
                   {(draft.status ?? "published") === "published" && (
                     <a
@@ -234,6 +355,7 @@ export default function AdminBlogPage() {
                     {save.isPending ? "Saving…" : "Save"}
                   </Button>
                 </div>
+                )}
               </div>
 
               <div className="mt-8 space-y-5">
@@ -243,11 +365,40 @@ export default function AdminBlogPage() {
                   </Label>
                   <Input
                     value={draft.title}
-                    onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        title: e.target.value,
+                        ...(creating && !slugTouched ? { slug: slugify(e.target.value) } : {}),
+                      })
+                    }
                     className="mt-1 h-11"
                     data-testid="input-title"
                   />
                 </div>
+
+                {/* The slug can't be renamed after creation (PATCH never
+                    renames), so it's only editable here. */}
+                {creating && (
+                  <div>
+                    <Label className="text-xs font-display tracking-[0.18em] text-muted-foreground">
+                      URL SLUG
+                    </Label>
+                    <Input
+                      value={draft.slug}
+                      onChange={(e) => {
+                        setSlugTouched(true);
+                        setDraft({ ...draft, slug: e.target.value.toLowerCase() });
+                      }}
+                      className="mt-1 h-10 font-mono text-[13px]"
+                      placeholder="best-calgary-luxury-neighbourhoods-2026"
+                      data-testid="input-slug"
+                    />
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      The post will live at /blog/{draft.slug || "…"}. It can't be changed after the post is created.
+                    </p>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 md:grid-cols-[1fr_140px_160px] gap-3">
                   <div>
@@ -268,11 +419,17 @@ export default function AdminBlogPage() {
                     <Input
                       type="number"
                       min={1}
-                      value={draft.readMinutes}
+                      value={draft.readMinutes || ""}
                       onChange={(e) =>
-                        setDraft({ ...draft, readMinutes: Math.max(1, Number(e.target.value) || 1) })
+                        setDraft({
+                          ...draft,
+                          // Blank on a new post = let the server estimate it.
+                          readMinutes:
+                            creating && !e.target.value ? 0 : Math.max(1, Number(e.target.value) || 1),
+                        })
                       }
                       className="mt-1 h-10"
+                      placeholder="Auto"
                     />
                   </div>
                   <div>
@@ -381,7 +538,7 @@ export default function AdminBlogPage() {
             </div>
           ) : (
             <div className="h-full flex items-center justify-center text-muted-foreground">
-              {isLoading ? "Loading posts…" : "Select a post on the left to edit."}
+              {isLoading ? "Loading posts…" : "Select a post on the left to edit, or create a new one."}
             </div>
           )}
         </section>
