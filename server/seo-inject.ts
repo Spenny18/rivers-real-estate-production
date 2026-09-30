@@ -398,7 +398,16 @@ function baseMetaForPath(path: string): SeoMeta | null {
       description:
         "Calgary's most-asked-about luxury condo buildings — The Royal, The Concord, The River, Eau Claire, Belle Aire — pricing, inventory, and resale insight.",
       canonical: `${ORIGIN}/condos`,
-      jsonLd: [crumbs(HOME_CRUMB, ["Condo Buildings", `${ORIGIN}/condos`])],
+      jsonLd: [
+        {
+          "@type": "CollectionPage",
+          "@id": `${ORIGIN}/condos#webpage`,
+          url: `${ORIGIN}/condos`,
+          name: "Calgary Luxury Condos",
+          headline: "Calgary Luxury Condos",
+        },
+        crumbs(HOME_CRUMB, ["Condo Buildings", `${ORIGIN}/condos`]),
+      ],
     };
   }
   if (p === "/about") {
