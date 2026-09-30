@@ -3,14 +3,15 @@
 // instead. Data and scheduling live in server/ai-visibility.ts.
 import { Fragment, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Bot, Play, Plus, Trash2, ChevronDown, ChevronRight, AlertTriangle, Check, X, Loader2 } from "lucide-react";
+import { Bot, Play, Plus, Trash2, ChevronDown, ChevronRight, AlertTriangle, Check, X, Loader2, Sparkles, Lightbulb } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, apiErrorMessage } from "@/lib/queryClient";
+import { FixDialog } from "@/components/seo/fix-dialog";
 
 type Engine = "chatgpt" | "perplexity";
 const ENGINE_LABEL: Record<Engine, string> = { chatgpt: "ChatGPT", perplexity: "Perplexity" };
@@ -54,6 +55,42 @@ interface Report {
   latestRunId: number | null;
   results: Result[];
   competitors: { name: string; mentions: number; engines: Engine[]; prompts: string[] }[];
+  /** The crawled SEO report "Improve" plans against is ready. */
+  seoReady: boolean;
+  suggestions: {
+    status: "generating" | "ready" | "failed";
+    createdAt: string;
+    error: string | null;
+    items: Suggestion[];
+  } | null;
+}
+
+type Level = "high" | "medium" | "low";
+interface Suggestion {
+  question: string;
+  relatedQuery: string;
+  demand: Level;
+  demandEvidence: string;
+  conversion: Level;
+  conversionWhy: string;
+  lowHanging: Level;
+  lowHangingWhy: string;
+  bestPage: string;
+  score: number;
+}
+
+const LEVEL_STYLE: Record<Level, string> = {
+  high: "bg-emerald-500/15 text-emerald-800 dark:text-emerald-300",
+  medium: "bg-amber-500/15 text-amber-800 dark:text-amber-300",
+  low: "bg-muted text-muted-foreground",
+};
+
+function LevelChip({ label, level, why }: { label: string; level: Level; why: string }) {
+  return (
+    <span className={`px-1.5 py-0.5 rounded-sm text-[10px] whitespace-nowrap ${LEVEL_STYLE[level]}`} title={why}>
+      {label}: {level}
+    </span>
+  );
 }
 
 const hostOf = (url: string) => {
@@ -77,7 +114,13 @@ export default function AdminAiVisibilityPage() {
   const { data, isLoading } = useQuery<Report>({
     queryKey: ["/api/admin/ai-visibility"],
     // Poll while a check runs so the results appear when it finishes.
-    refetchInterval: (q) => ((q.state.data as Report | undefined)?.running ? 5000 : false),
+    // Poll while a check runs or suggestions are being written, and more
+    // slowly while the site data "Improve" needs is still being prepared.
+    refetchInterval: (q) => {
+      const d = q.state.data as Report | undefined;
+      if (d?.running || d?.suggestions?.status === "generating") return 5000;
+      return d && !d.seoReady ? 15000 : false;
+    },
   });
   const refresh = () => qc.invalidateQueries({ queryKey: ["/api/admin/ai-visibility"] });
 
@@ -101,6 +144,23 @@ export default function AdminAiVisibilityPage() {
     mutationFn: ({ id, active }: { id: number; active: boolean }) =>
       apiRequest("PATCH", `/api/admin/ai-visibility/prompts/${id}`, { active }),
     onSuccess: refresh,
+  });
+  const [fixId, setFixId] = useState<number | null>(null);
+  const [pendingFix, setPendingFix] = useState<number | null>(null);
+  const improve = useMutation({
+    mutationFn: async (promptId: number) => {
+      setPendingFix(promptId);
+      const r = await apiRequest("POST", "/api/admin/seo/fixes", { kind: "ai_question", promptId });
+      return (await r.json()) as { id: number };
+    },
+    onSuccess: ({ id }) => setFixId(id),
+    onError: (e) => toast({ title: "Couldn't start", description: apiErrorMessage(e), variant: "destructive" }),
+    onSettled: () => setPendingFix(null),
+  });
+  const suggest = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/admin/ai-visibility/suggestions"),
+    onSuccess: refresh,
+    onError: (e) => toast({ title: "Couldn't start", description: apiErrorMessage(e), variant: "destructive" }),
   });
   const remove = useMutation({
     mutationFn: (id: number) => apiRequest("DELETE", `/api/admin/ai-visibility/prompts/${id}`),
@@ -223,6 +283,14 @@ export default function AdminAiVisibilityPage() {
           )}
         </div>
 
+        <SuggestionsCard
+          data={data.suggestions}
+          starting={suggest.isPending}
+          onSuggest={() => suggest.mutate()}
+          onAdd={(q) => add.mutate(q)}
+          adding={add.isPending}
+        />
+
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-4 mb-6">
           {/* Questions */}
           <Card>
@@ -237,7 +305,7 @@ export default function AdminAiVisibilityPage() {
                         {ENGINE_LABEL[e]}
                       </th>
                     ))}
-                    <th className="w-[72px]" />
+                    <th className="w-[150px]" />
                   </tr>
                 </thead>
                 <tbody>
@@ -283,6 +351,23 @@ export default function AdminAiVisibilityPage() {
                             );
                           })}
                           <td className="text-right whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => improve.mutate(p.id)}
+                              disabled={!Object.keys(res).length || !data.seoReady || pendingFix !== null}
+                              className="mr-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm border border-border text-[11px] hover:bg-muted disabled:opacity-40 align-middle"
+                              title={
+                                !Object.keys(res).length
+                                  ? "Run a check first"
+                                  : !data.seoReady
+                                    ? "Preparing site data — ready in a minute or two"
+                                    : "Draft changes to win this question in AI answers"
+                              }
+                              data-testid={`btn-improve-${p.id}`}
+                            >
+                              {pendingFix === p.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                              Improve
+                            </button>
                             <Switch
                               checked={p.active}
                               onCheckedChange={(v) => toggle.mutate({ id: p.id, active: v })}
@@ -433,6 +518,75 @@ export default function AdminAiVisibilityPage() {
           </div>
         </div>
       </div>
+      <FixDialog fixId={fixId} onClose={() => setFixId(null)} onRevised={setFixId} />
     </AppShell>
+  );
+}
+
+function SuggestionsCard({
+  data,
+  starting,
+  onSuggest,
+  onAdd,
+  adding,
+}: {
+  data: Report["suggestions"];
+  starting: boolean;
+  onSuggest: () => void;
+  onAdd: (question: string) => void;
+  adding: boolean;
+}) {
+  const generating = data?.status === "generating";
+  return (
+    <Card className="mb-6">
+      <CardContent className="p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
+          <div>
+            <div className="eyebrow text-muted-foreground">Suggested questions</div>
+            <p className="text-xs text-muted-foreground mt-1 max-w-[760px]">
+              Questions worth tracking, ranked by likelihood of turning into a client, how close you already are, and
+              demand. Demand comes from your Search Console impressions for related searches; AI tools publish no
+              search volume. Hover a rating for the reasoning.
+            </p>
+          </div>
+          <Button variant="outline" onClick={onSuggest} disabled={starting || generating} data-testid="btn-suggest">
+            {generating ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Lightbulb className="w-3.5 h-3.5 mr-1.5" />}
+            {generating ? "Thinking…" : data ? "Suggest again" : "Suggest questions"}
+          </Button>
+        </div>
+        {!data && <div className="text-xs text-muted-foreground">No suggestions yet.</div>}
+        {data?.status === "failed" && <div className="text-xs text-destructive/80">{data.error ?? "Failed — try again."}</div>}
+        {generating && <div className="text-xs text-muted-foreground">Reviewing your search data and results — about a minute.</div>}
+        {data?.status === "ready" && data.items.length === 0 && (
+          <div className="text-xs text-muted-foreground">Every suggestion has been added. Suggest again for more.</div>
+        )}
+        {data?.status === "ready" && data.items.length > 0 && (
+          <ul className="divide-y divide-border/60">
+            {data.items.map((s) => (
+              <li key={s.question} className="py-2.5 flex items-start gap-3">
+                <div className="w-9 shrink-0 text-center font-serif text-lg tabular-nums" title="Priority score (0–100)">
+                  {s.score}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm">{s.question}</div>
+                  <div className="flex flex-wrap gap-1.5 mt-1">
+                    <LevelChip label="Conversion" level={s.conversion} why={s.conversionWhy} />
+                    <LevelChip label="Low-hanging" level={s.lowHanging} why={s.lowHangingWhy} />
+                    <LevelChip label="Demand" level={s.demand} why={s.demandEvidence} />
+                  </div>
+                  <div className="text-[11px] text-muted-foreground mt-1">
+                    {s.demandEvidence}
+                    {s.bestPage ? ` · best page: ${s.bestPage}` : ""}
+                  </div>
+                </div>
+                <Button size="sm" variant="outline" className="h-7" onClick={() => onAdd(s.question)} disabled={adding}>
+                  <Plus className="w-3 h-3 mr-1" /> Add
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
   );
 }

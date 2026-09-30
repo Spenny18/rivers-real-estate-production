@@ -22,6 +22,7 @@ import { getPublicPageContent } from "./page-content";
 import { getBlockType } from "@shared/home-content";
 import { youtubeVideoNode } from "./schema/video";
 import { findYouTubeReferences, isYouTubeThumbnailFor } from "@shared/youtube";
+import { extractBlogFaqs } from "@shared/blog-faq";
 import { publicOrigin } from "./origin";
 import { getMetaOverride, getMetaOverrides } from "./seo-store";
 
@@ -593,6 +594,7 @@ function baseMetaForPath(path: string): SeoMeta | null {
             duration: post.videoDuration || undefined,
           })
         : null;
+      const faqs = typeof post.body === "string" ? extractBlogFaqs(post.body) : [];
       return {
         title: `${post.title} — ${SITE_NAME}`,
         description:
@@ -624,6 +626,21 @@ function baseMetaForPath(path: string): SeoMeta | null {
             publisher: { "@id": IDS.agent },
           },
           ...(videoNode ? [videoNode] : []),
+          // A "## Frequently Asked Questions" section with ### questions
+          // (shared/blog-faq.ts) — the Q&A AI answer engines quote.
+          ...(faqs.length
+            ? [
+                {
+                  "@type": "FAQPage",
+                  "@id": `${blogUrl}#faq`,
+                  mainEntity: faqs.map((f) => ({
+                    "@type": "Question",
+                    name: f.question,
+                    acceptedAnswer: { "@type": "Answer", text: f.answer },
+                  })),
+                },
+              ]
+            : []),
           {
             "@type": "BreadcrumbList",
             itemListElement: [
