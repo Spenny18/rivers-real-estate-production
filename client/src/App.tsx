@@ -68,6 +68,7 @@ const AdminBlogPage = lazy(() => import("@/pages/admin-blog"));
 const AdminHomePage = lazy(() => import("@/pages/admin-home"));
 const AdminNeighbourhoodsPage = lazy(() => import("@/pages/admin-neighbourhoods"));
 const AdminSeoPage = lazy(() => import("@/pages/admin-seo"));
+const AdminAiVisibilityPage = lazy(() => import("@/pages/admin-ai-visibility"));
 const AdminSchedulingPage = lazy(() => import("@/pages/admin-scheduling"));
 const AdminCrmPage = lazy(() => import("@/pages/admin-crm"));
 const AdminMarketPage = lazy(() => import("@/pages/admin-market"));
@@ -271,6 +272,10 @@ function AppRouter() {
       <Route
         path="/admin/seo"
         component={() => <ProtectedRoute component={AdminSeoPage} />}
+      />
+      <Route
+        path="/admin/ai-visibility"
+        component={() => <ProtectedRoute component={AdminAiVisibilityPage} />}
       />
       <Route
         path="/admin/mls-sync"
