@@ -2,6 +2,7 @@
 // template renders all eight avatars from the home page grid, each with its
 // own SEO head (FAQ + breadcrumb schema), value props, process steps, related
 // links, and contact CTA. Routes: /work-with (index) and /work-with/:slug.
+import type { ReactNode } from "react";
 import { Link, useRoute } from "wouter";
 import {
   ArrowRight,
@@ -64,6 +65,8 @@ export interface AudienceSegment {
   card: string; // short blurb used on index cards
   headline: [string, string]; // [plain lead, emphasized tail]
   intro: string;
+  /** Optional second paragraph after the intro, for contextual internal links. */
+  introLinks?: ReactNode;
   image: string;
   imageAlt: string;
   /** "badge" = square emblem artwork: render uncropped on white instead of
@@ -345,6 +348,33 @@ export const AUDIENCE_SEGMENTS: AudienceSegment[] = [
     headline: ["Downsizing in Calgary:", "right-size without compromise."],
     intro:
       "The family home did its job. The next chapter should be simpler — a luxury condo with a concierge, a lock-and-leave bungalow, or a curated build closer to the grandkids — without giving up the quality you're used to or the equity you've built. Spencer Rivers, a Certified Condo Specialist, coordinates both sides of the move.",
+    introLinks: (
+      <>
+        Start with what the family home is worth today, then compare buildings
+        before you choose one: see{" "}
+        <Link
+          href="/home-evaluation"
+          className="underline underline-offset-4 hover:text-foreground"
+        >
+          what your home is worth
+        </Link>
+        , browse{" "}
+        <Link
+          href="/condos"
+          className="underline underline-offset-4 hover:text-foreground"
+        >
+          Calgary luxury condos
+        </Link>{" "}
+        building by building, and work through the{" "}
+        <Link
+          href="/blog/calgary-empty-nesters-downsizing-guide-2024"
+          className="underline underline-offset-4 hover:text-foreground"
+        >
+          room-by-room downsizing checklist
+        </Link>{" "}
+        before the house goes on the market.
+      </>
+    ),
     image: "/img/work-with/empty-nesters.jpg",
     imageAlt:
       "Empty Nesters — a couple enjoying sunset coffee overlooking the water",
@@ -919,6 +949,11 @@ export default function WorkWithDetailPage() {
             <p className="mt-8 max-w-[620px] text-[17px] lg:text-[18px] leading-[1.7] text-foreground/85">
               {segment.intro}
             </p>
+            {segment.introLinks && (
+              <p className="mt-5 max-w-[620px] text-[17px] lg:text-[18px] leading-[1.7] text-foreground/85">
+                {segment.introLinks}
+              </p>
+            )}
             <div className="mt-9 flex flex-wrap gap-3">
               <a href={SPENCER_PHONE_HREF}>
                 <Button
