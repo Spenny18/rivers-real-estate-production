@@ -184,6 +184,12 @@ app.use((req, res, next) => {
     console.error("[deal-inbox] failed to start cron:", err);
   }
   try {
+    const { startAiVisibilityCron } = await import("./ai-visibility");
+    startAiVisibilityCron();
+  } catch (err) {
+    console.error("[ai-visibility] failed to start cron:", err);
+  }
+  try {
     const { scheduleSitemapSubmit } = await import("./search-console");
     scheduleSitemapSubmit();
   } catch (err) {

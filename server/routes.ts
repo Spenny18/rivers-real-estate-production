@@ -3851,6 +3851,40 @@ export async function registerRoutes(
     }
   });
 
+  // AI search visibility tracker (server/ai-visibility.ts): questions asked of
+  // ChatGPT / Perplexity weekly, with mentions, citations and competitors.
+  app.get("/api/admin/ai-visibility", requireAuth, async (_req, res) => {
+    const { report } = await import("./ai-visibility");
+    res.json(report());
+  });
+  app.post("/api/admin/ai-visibility/run", requireAuth, async (_req, res) => {
+    const { startRun } = await import("./ai-visibility");
+    try {
+      res.status(202).json({ runId: startRun("manual") });
+    } catch (err: any) {
+      res.status(409).json({ message: err?.message ?? "Couldn't start" });
+    }
+  });
+  app.post("/api/admin/ai-visibility/prompts", requireAuth, async (req, res) => {
+    const { addPrompt } = await import("./ai-visibility");
+    try {
+      res.status(201).json(addPrompt(String(req.body?.text ?? "")));
+    } catch (err: any) {
+      const dup = /UNIQUE/i.test(String(err?.message));
+      res.status(400).json({ message: dup ? "That question is already on the list" : err?.message ?? "Couldn't add" });
+    }
+  });
+  app.patch("/api/admin/ai-visibility/prompts/:id", requireAuth, async (req, res) => {
+    const { updatePrompt } = await import("./ai-visibility");
+    updatePrompt(Number(req.params.id), { text: req.body?.text, active: req.body?.active });
+    res.json({ ok: true });
+  });
+  app.delete("/api/admin/ai-visibility/prompts/:id", requireAuth, async (req, res) => {
+    const { deletePrompt } = await import("./ai-visibility");
+    deletePrompt(Number(req.params.id));
+    res.json({ ok: true });
+  });
+
   // Visits from ChatGPT, Perplexity, Gemini, Copilot etc. (GA4), same 1h cache.
   app.get("/api/analytics/ai-referrals", requireAuth, async (req, res) => {
     const days = Number(req.query.days);
