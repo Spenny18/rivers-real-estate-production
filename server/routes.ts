@@ -40,6 +40,7 @@ const execFileAsync = promisify(execFile);
 // we fall back to a local folder under client/public/ so the dev server
 // can serve them too.
 import { UPLOADS_ROOT, ensureUploadsDir } from "./uploads";
+import { heroImageGenerationEnabled, queueHeroImage, keepGeneratedHero } from "./hero-image";
 
 function parseJsonArr(s: string | null | undefined): any[] {
   if (!s) return [];
@@ -2759,6 +2760,12 @@ export async function registerRoutes(
     try {
       let heroImage = String(body.heroImage ?? "");
       const heroInUse = heroImage && storage.listBlogPosts().some((p) => p.heroImage === heroImage);
+      // Reported back so the BOFU routine can tell what happened:
+      //   supplied   — the caller's image was used
+      //   generating — AI image on its way (server/hero-image.ts); the pool
+      //                image below is a placeholder until it lands
+      //   pool/none  — no OPENAI_API_KEY: a stock pool image, or nothing left
+      let heroStatus: "supplied" | "generating" | "pool" | "none" = "supplied";
       if (!heroImage || heroInUse) {
         const fresh = pickUnusedHeroImage();
         if (fresh) {
@@ -2767,6 +2774,7 @@ export async function registerRoutes(
         } else if (heroInUse) {
           console.warn(`[blog] hero pool exhausted — "${body.slug}" keeps a duplicate hero image`);
         }
+        heroStatus = heroImageGenerationEnabled() ? "generating" : fresh ? "pool" : "none";
       }
       const created = storage.upsertBlogPost({
         slug: String(body.slug).toLowerCase(),
@@ -2784,7 +2792,8 @@ export async function registerRoutes(
         videoUploadDate: typeof body.videoUploadDate === "string" && body.videoUploadDate.trim() ? body.videoUploadDate.trim() : null,
         videoDuration: typeof body.videoDuration === "string" && body.videoDuration.trim() ? body.videoDuration.trim() : null,
       } as any);
-      res.status(201).json(created);
+      if (heroStatus === "generating") queueHeroImage(created.slug, heroImage);
+      res.status(201).json({ ...created, heroStatus });
     } catch (err: any) {
       console.error("[admin] create blog failed:", err);
       res.status(500).json({ message: err?.message ?? "Create failed" });
@@ -2802,7 +2811,10 @@ export async function registerRoutes(
         excerpt: typeof body.excerpt === "string" ? body.excerpt : existing.excerpt,
         body: typeof body.body === "string" ? body.body : existing.body,
         category: typeof body.category === "string" ? body.category : existing.category,
-        heroImage: typeof body.heroImage === "string" ? body.heroImage : existing.heroImage,
+        heroImage:
+          typeof body.heroImage === "string"
+            ? keepGeneratedHero(existing.slug, body.heroImage, existing.heroImage || "")
+            : existing.heroImage,
         heroImageAlt: typeof body.heroImageAlt === "string" || body.heroImageAlt === null ? body.heroImageAlt : existing.heroImageAlt,
         authorName: typeof body.authorName === "string" ? body.authorName : existing.authorName,
         authorAvatar: typeof body.authorAvatar === "string" ? body.authorAvatar : existing.authorAvatar,
