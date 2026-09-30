@@ -342,7 +342,7 @@ export const AUDIENCE_SEGMENTS: AudienceSegment[] = [
     icon: Heart,
     title: "Empty Nesters",
     card: "Right-size without compromise. Downsize into a luxury condo, lock-and-leave bungalow, or curated build — without losing equity in the move.",
-    headline: ["Right-size", "without compromise."],
+    headline: ["Downsizing in Calgary:", "right-size without compromise."],
     intro:
       "The family home did its job. The next chapter should be simpler — a luxury condo with a concierge, a lock-and-leave bungalow, or a curated build closer to the grandkids — without giving up the quality you're used to or the equity you've built. Spencer Rivers, a Certified Condo Specialist, coordinates both sides of the move.",
     image: "/img/work-with/empty-nesters.jpg",
