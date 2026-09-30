@@ -30,6 +30,7 @@ import {
   Globe2,
   Timer,
   AlertTriangle,
+  Bot,
 } from "lucide-react";
 import { formatPriceCompact } from "@/lib/format";
 
@@ -69,6 +70,23 @@ interface SeoStats {
   };
 }
 
+interface AiReferrals {
+  ok: boolean;
+  message?: string;
+  days: number;
+  summary?: {
+    sessions: number;
+    prevSessions: number;
+    users: number;
+    keyEvents: number;
+    engagementRate: number;
+    shareOfSessions: number;
+  };
+  engines?: { engine: string; sessions: number; users: number; keyEvents: number; sources: string[] }[];
+  landingPages?: { path: string; sessions: number; keyEvents: number }[];
+  daily?: { date: string; sessions: number }[];
+}
+
 const SOURCE_PALETTE = ["#23412d", "#D4AF37", "#1F2937", "#6B7280", "#9CA3AF", "#374151"];
 
 const STATUS_LABELS: Record<string, string> = {
@@ -90,6 +108,17 @@ export default function AdminAnalyticsPage() {
         credentials: "include",
       });
       if (!r.ok) throw new Error(`seo-stats ${r.status}`);
+      return r.json();
+    },
+  });
+
+  const ai = useQuery<AiReferrals>({
+    queryKey: ["/api/analytics/ai-referrals", { days: seoDays }],
+    queryFn: async () => {
+      const r = await fetch(`/api/analytics/ai-referrals?days=${seoDays}`, {
+        credentials: "include",
+      });
+      if (!r.ok) throw new Error(`ai-referrals ${r.status}`);
       return r.json();
     },
   });
@@ -125,6 +154,14 @@ export default function AdminAnalyticsPage() {
           error={seo.isError ? "Couldn't reach the SEO data API." : null}
           days={seoDays}
           onDaysChange={setSeoDays}
+        />
+
+        {/* Visits from AI assistants (GA4), same date range ---------------- */}
+        <AiReferralsSection
+          data={ai.data}
+          loading={ai.isLoading}
+          error={ai.isError ? "Couldn't reach the AI referrals API." : null}
+          days={seoDays}
         />
 
         {/* KPI grid — 6 cards */}
@@ -792,6 +829,188 @@ function SeoTrafficSection({
                   );
                 })}
               </ul>
+            </BlockState>
+          </CardContent>
+        </Card>
+      </div>
+    </section>
+  );
+}
+
+// ---------- AI assistant referrals -------------------------------------
+// Visits from ChatGPT, Perplexity, Gemini, Copilot etc., from GA4 via
+// /api/analytics/ai-referrals. The only first-party AI-search signal: the
+// assistants don't publish impressions, and Google AI Overview clicks are
+// counted as google / organic above.
+
+function AiReferralsSection({
+  data,
+  loading,
+  error,
+  days,
+}: {
+  data: AiReferrals | undefined;
+  loading: boolean;
+  error: string | null;
+  days: 7 | 28 | 90;
+}) {
+  const s = data?.summary;
+  const fmtNum = (v: number | undefined) =>
+    typeof v === "number" ? v.toLocaleString("en-CA") : "—";
+  const fmtPct = (v: number | undefined) =>
+    typeof v === "number" ? `${(v * 100).toFixed(1)}%` : "—";
+  const change = (() => {
+    if (!s) return "—";
+    if (s.prevSessions === 0) return s.sessions > 0 ? "new this period" : "none last period";
+    const pct = ((s.sessions - s.prevSessions) / s.prevSessions) * 100;
+    return `${pct >= 0 ? "+" : ""}${pct.toFixed(0)}% vs previous ${days}d`;
+  })();
+  const maxEngine = Math.max(1, ...(data?.engines ?? []).map((e) => e.sessions));
+
+  return (
+    <section className="mb-8">
+      <div className="mb-4">
+        <div className="eyebrow text-muted-foreground">AI search</div>
+        <h2 className="font-serif text-2xl text-foreground mt-1" style={{ letterSpacing: "-0.01em" }}>
+          AI assistant referrals
+        </h2>
+        <p className="text-xs text-muted-foreground mt-1 max-w-[720px]">
+          Visits that came from ChatGPT, Perplexity, Gemini, Copilot and other AI assistants, last {days} days
+          (GA4). AI tools don't publish impressions, so this is real clicks only. Google AI Overview clicks are
+          counted as Google search above.
+        </p>
+      </div>
+
+      {error && (
+        <Card className="mb-4 border-destructive/40">
+          <CardContent className="p-4 flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0 text-destructive" strokeWidth={1.6} />
+            <div className="text-sm text-foreground/80">{error}</div>
+          </CardContent>
+        </Card>
+      )}
+      {data && !data.ok && (
+        <Card className="mb-4">
+          <CardContent className="p-4 text-xs text-destructive/80">{data.message ?? "Couldn't load."}</CardContent>
+        </Card>
+      )}
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+        <KpiCard icon={Bot} label="AI sessions" value={loading ? "…" : fmtNum(s?.sessions)} sub={loading ? "" : change} />
+        <KpiCard
+          icon={Globe2}
+          label="Share of traffic"
+          value={loading ? "…" : fmtPct(s?.shareOfSessions)}
+          sub="of all sessions"
+        />
+        <KpiCard icon={Target} label="Key events" value={loading ? "…" : fmtNum(s?.keyEvents)} sub="leads & conversions from AI" />
+        <KpiCard
+          icon={Timer}
+          label="Engagement rate"
+          value={loading ? "…" : fmtPct(s?.engagementRate)}
+          sub="engaged sessions"
+        />
+      </div>
+
+      <Card className="mb-4">
+        <CardContent className="p-5">
+          <div className="eyebrow text-muted-foreground mb-3">Daily AI sessions</div>
+          <BlockState
+            loading={loading}
+            ok={data?.ok}
+            message={data?.message}
+            empty={!s?.sessions}
+            emptyLabel="No visits from AI assistants in this range yet."
+          >
+            <div className="h-[160px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={data?.daily ?? []} margin={{ top: 4, right: 4, left: -24, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fontSize: 10 }}
+                    tickFormatter={(d: string) => d.slice(5)}
+                    minTickGap={24}
+                  />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 10 }} />
+                  <Tooltip />
+                  <Area type="monotone" dataKey="sessions" stroke="#23412d" fill="#23412d" fillOpacity={0.15} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </BlockState>
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Card>
+          <CardContent className="p-5">
+            <div className="flex items-center justify-between mb-3">
+              <div className="eyebrow text-muted-foreground">By assistant</div>
+              <span className="text-[11px] text-muted-foreground">GA4</span>
+            </div>
+            <BlockState
+              loading={loading}
+              ok={data?.ok}
+              message={data?.message}
+              empty={!data?.engines?.length}
+              emptyLabel="No AI assistant has sent visits yet."
+            >
+              <ul className="space-y-2">
+                {(data?.engines ?? []).map((e) => (
+                  <li key={e.engine} title={e.sources.join(", ")}>
+                    <div className="flex items-center justify-between text-xs mb-0.5">
+                      <span className="font-medium truncate">{e.engine}</span>
+                      <span className="font-display tracking-[0.08em] text-[10px] text-muted-foreground tabular-nums">
+                        {fmtNum(e.sessions)} sessions
+                        {e.keyEvents > 0 ? ` · ${fmtNum(e.keyEvents)} key events` : ""}
+                      </span>
+                    </div>
+                    <div className="h-2 bg-secondary rounded-sm overflow-hidden">
+                      <div className="h-full bg-foreground" style={{ width: `${(e.sessions / maxEngine) * 100}%` }} />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </BlockState>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-5">
+            <div className="flex items-center justify-between mb-3">
+              <div className="eyebrow text-muted-foreground">Pages AI sends visitors to</div>
+              <span className="text-[11px] text-muted-foreground">GA4</span>
+            </div>
+            <BlockState
+              loading={loading}
+              ok={data?.ok}
+              message={data?.message}
+              empty={!data?.landingPages?.length}
+              emptyLabel="No landing pages yet."
+            >
+              <table className="w-full text-xs">
+                <thead className="text-muted-foreground text-[10px] tracking-[0.1em] uppercase">
+                  <tr>
+                    <th className="text-left py-1.5 font-medium">Page</th>
+                    <th className="text-right font-medium">Sessions</th>
+                    <th className="text-right font-medium">Key events</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data?.landingPages ?? []).map((r) => (
+                    <tr key={r.path} className="border-t border-border/60">
+                      <td className="py-1.5 truncate max-w-[300px]">
+                        <a href={r.path} target="_blank" rel="noopener noreferrer" className="hover:underline">
+                          {r.path}
+                        </a>
+                      </td>
+                      <td className="text-right tabular-nums">{fmtNum(r.sessions)}</td>
+                      <td className="text-right tabular-nums text-muted-foreground">{fmtNum(r.keyEvents)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </BlockState>
           </CardContent>
         </Card>

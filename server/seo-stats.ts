@@ -310,6 +310,156 @@ async function fetchGa4Block(
   };
 }
 
+// ---------- AI assistant referrals --------------------------------------
+// Visits that arrive from ChatGPT, Perplexity, Gemini, Copilot and the like.
+// GA4 records them under sessionSource (ChatGPT tags its links
+// utm_source=chatgpt.com). This is the only first-party signal of AI-search
+// visibility: none of the assistants publish impressions. Google AI
+// Overviews can't be split out — those clicks land in google / organic.
+
+// RE2 syntax (GA4 PARTIAL_REGEXP, case-insensitive).
+const AI_SOURCE_REGEX =
+  "chatgpt|openai|perplexity|gemini\\.google|bard\\.google|copilot|claude\\.ai|anthropic|deepseek|grok|x\\.ai|meta\\.ai|you\\.com|phind|poe\\.com|mistral";
+
+const AI_ENGINES: [RegExp, string][] = [
+  [/chatgpt|openai/i, "ChatGPT"],
+  [/perplexity/i, "Perplexity"],
+  [/gemini\.google|bard\.google/i, "Gemini"],
+  [/copilot/i, "Copilot"],
+  [/claude\.ai|anthropic/i, "Claude"],
+  [/deepseek/i, "DeepSeek"],
+  [/grok|x\.ai/i, "Grok"],
+  [/meta\.ai/i, "Meta AI"],
+];
+
+export function aiEngineFor(source: string): string {
+  for (const [re, name] of AI_ENGINES) if (re.test(source)) return name;
+  return "Other AI";
+}
+
+const aiFilter = {
+  filter: {
+    fieldName: "sessionSource",
+    stringFilter: { matchType: "PARTIAL_REGEXP", value: AI_SOURCE_REGEX, caseSensitive: false },
+  },
+};
+
+export interface AiReferralsPayload {
+  ok: boolean;
+  message?: string;
+  days: number;
+  summary?: {
+    sessions: number;
+    prevSessions: number;
+    users: number;
+    keyEvents: number;
+    engagementRate: number; // 0–1, weighted by sessions
+    shareOfSessions: number; // 0–1 of all sessions in the range
+  };
+  engines?: { engine: string; sessions: number; users: number; keyEvents: number; sources: string[] }[];
+  landingPages?: { path: string; sessions: number; keyEvents: number }[];
+  daily?: { date: string; sessions: number }[];
+}
+
+export async function fetchAiReferrals(days: number): Promise<AiReferralsPayload> {
+  const safeDays = Math.max(1, Math.min(365, Math.floor(days)));
+  const propertyId = process.env.GA4_PROPERTY_ID;
+  if (!propertyId) return { ok: false, message: "GA4_PROPERTY_ID not set", days: safeDays };
+  const { token, error } = await getAccessToken();
+  if (!token) return { ok: false, message: error ?? "Google auth failed", days: safeDays };
+
+  try {
+    return await cached(`ga4ai:${propertyId}:${safeDays}`, async () => {
+      const current = [{ startDate: `${safeDays}daysAgo`, endDate: "today" }];
+      const previous = [{ startDate: `${safeDays * 2}daysAgo`, endDate: `${safeDays + 1}daysAgo` }];
+      const [bySource, pages, daily, prev, all] = await Promise.all([
+        ga4Report(token, propertyId, {
+          dateRanges: current,
+          dimensions: [{ name: "sessionSource" }],
+          metrics: [{ name: "sessions" }, { name: "totalUsers" }, { name: "keyEvents" }, { name: "engagementRate" }],
+          dimensionFilter: aiFilter,
+          limit: 100,
+        }),
+        ga4Report(token, propertyId, {
+          dateRanges: current,
+          dimensions: [{ name: "landingPage" }],
+          metrics: [{ name: "sessions" }, { name: "keyEvents" }],
+          dimensionFilter: aiFilter,
+          orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+          limit: 15,
+        }),
+        ga4Report(token, propertyId, {
+          dateRanges: current,
+          dimensions: [{ name: "date" }],
+          metrics: [{ name: "sessions" }],
+          dimensionFilter: aiFilter,
+          orderBys: [{ dimension: { dimensionName: "date" } }],
+          limit: 400,
+        }),
+        ga4Report(token, propertyId, {
+          dateRanges: previous,
+          metrics: [{ name: "sessions" }],
+          dimensionFilter: aiFilter,
+        }),
+        ga4Report(token, propertyId, { dateRanges: current, metrics: [{ name: "sessions" }] }),
+      ]);
+
+      const v = (r: any, i: number) => Number(r?.metricValues?.[i]?.value ?? 0);
+      const engines = new Map<string, { engine: string; sessions: number; users: number; keyEvents: number; sources: string[] }>();
+      let sessions = 0, users = 0, keyEvents = 0, engagedWeighted = 0;
+      for (const r of bySource.rows ?? []) {
+        const source = r.dimensionValues?.[0]?.value ?? "(unknown)";
+        const name = aiEngineFor(source);
+        const e = engines.get(name) ?? { engine: name, sessions: 0, users: 0, keyEvents: 0, sources: [] };
+        e.sessions += v(r, 0);
+        e.users += v(r, 1);
+        e.keyEvents += v(r, 2);
+        e.sources.push(source);
+        engines.set(name, e);
+        sessions += v(r, 0);
+        users += v(r, 1);
+        keyEvents += v(r, 2);
+        engagedWeighted += v(r, 3) * v(r, 0);
+      }
+      const totalSessions = v(all.rows?.[0], 0);
+
+      // GA4 omits days with no sessions; fill them so the trend reads true.
+      const byDate = new Map<string, number>(
+        (daily.rows ?? []).map((r: any) => [r.dimensionValues?.[0]?.value, v(r, 0)]),
+      );
+      const series: { date: string; sessions: number }[] = [];
+      for (let i = safeDays; i >= 0; i--) {
+        const d = new Date();
+        d.setUTCDate(d.getUTCDate() - i);
+        const key = d.toISOString().slice(0, 10).replace(/-/g, "");
+        series.push({ date: d.toISOString().slice(0, 10), sessions: byDate.get(key) ?? 0 });
+      }
+
+      return {
+        ok: true,
+        days: safeDays,
+        summary: {
+          sessions,
+          prevSessions: v(prev.rows?.[0], 0),
+          users,
+          keyEvents,
+          engagementRate: sessions ? engagedWeighted / sessions : 0,
+          shareOfSessions: totalSessions ? sessions / totalSessions : 0,
+        },
+        engines: Array.from(engines.values()).sort((a, b) => b.sessions - a.sessions),
+        landingPages: (pages.rows ?? []).map((r: any) => ({
+          path: r.dimensionValues?.[0]?.value ?? "",
+          sessions: v(r, 0),
+          keyEvents: v(r, 1),
+        })),
+        daily: series,
+      };
+    });
+  } catch (err: any) {
+    return { ok: false, message: err?.message ?? String(err), days: safeDays };
+  }
+}
+
 // ---------- Public entry point ------------------------------------------
 
 export async function fetchSeoStats(days: number): Promise<SeoStatsPayload> {

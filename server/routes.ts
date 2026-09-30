@@ -3851,6 +3851,19 @@ export async function registerRoutes(
     }
   });
 
+  // Visits from ChatGPT, Perplexity, Gemini, Copilot etc. (GA4), same 1h cache.
+  app.get("/api/analytics/ai-referrals", requireAuth, async (req, res) => {
+    const days = Number(req.query.days);
+    const safeDays = Number.isFinite(days) && days > 0 ? days : 28;
+    try {
+      const { fetchAiReferrals } = await import("./seo-stats");
+      res.json(await fetchAiReferrals(safeDays));
+    } catch (err: any) {
+      console.error("[ai-referrals] route error:", err?.message ?? err);
+      res.status(500).json({ ok: false, message: err?.message ?? "ai-referrals failed" });
+    }
+  });
+
   app.get("/api/analytics/summary", requireAuth, (_req, res) => {
     const allListings = storage.listListings();
     const allLeads = storage.listLeads();
