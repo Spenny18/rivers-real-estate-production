@@ -26,6 +26,17 @@ const NEIGHBOURHOOD_GROUPS = [
   { label: "Downtown East Village", slug: "beltline" },
 ];
 
+// "Calgary condo documents: what to review" (/blog/calgary-condo-document-review)
+// is deliberately absent — add it once that post is published.
+const BUYING_GUIDES = [
+  { label: "The 9 best condo buildings in Calgary", href: "/blog/the-9-best-luxury-condos-in-calgary" },
+  { label: "Mission, Eau Claire and East Village compared", href: "/blog/calgarys-top-luxury-condo-districts-mission-eau-claire-and-east-village-compared" },
+  { label: "Eau Claire luxury condos: buildings, views and price per square foot", href: "/blog/eau-claire-luxury-condos-buildings-views-and-price-per-square-foot" },
+  { label: "East Village luxury condos: the true cost of ownership", href: "/blog/east-village-luxury-condos-modern-towers-and-the-true-cost-of-ownership" },
+  { label: "Calgary new construction condos", href: "/blog/calgary-new-construction-guide" },
+  { label: "Condo assignment sales", href: "/assignments" },
+];
+
 export default function CondosIndexPage() {
   const { data: buildings = [], isLoading } = useQuery<CondoBuilding[]>({
     queryKey: ["/api/public/condos"],
@@ -49,14 +60,12 @@ export default function CondosIndexPage() {
             className="font-serif text-4xl lg:text-6xl text-background"
             style={{ letterSpacing: "-0.015em" }}
           >
-            Calgary's Condo Buildings.
+            Calgary Luxury Condos
           </h1>
           <p className="mt-5 max-w-[680px] text-background/80 leading-relaxed">
-            From the historic Eau Claire riverfront to the tallest residential
-            towers in the Beltline, Calgary's downtown condo market offers
-            unparalleled walkability, amenity, and view. This guide covers the
-            buildings I work in most often — the ones with strong fundamentals,
-            consistent resale, and amenity packages that hold up over time.
+            Thirty-two Calgary luxury condo buildings, from Eau Claire
+            riverfront towers to Beltline high-rises, with pricing context, fee
+            structure and resale history for each.
           </p>
         </div>
       </section>
@@ -118,6 +127,22 @@ export default function CondosIndexPage() {
             </div>
           ))
         )}
+
+        {/* Guides */}
+        <div className="border-t border-border pt-10">
+          <h2 className="font-serif text-2xl lg:text-3xl" style={{ letterSpacing: "-0.01em" }}>
+            Condo buying guides
+          </h2>
+          <ul className="mt-6 space-y-3">
+            {BUYING_GUIDES.map((g) => (
+              <li key={g.href}>
+                <Link href={g.href} className="text-foreground underline underline-offset-4 hover:text-muted-foreground transition-colors">
+                  {g.label}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
       </section>
 
       {/* CTA */}
