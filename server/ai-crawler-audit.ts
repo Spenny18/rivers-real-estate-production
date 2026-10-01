@@ -139,7 +139,24 @@ function bodyProbe(body: string): string {
     .split(/\n\s*\n/)
     .map((p) => p.trim())
     .find((p) => p.length > 80 && !/^(#|>|-|\*|!|\[)/.test(p) && !/https?:\/\//.test(p));
-  return (para ?? "").replace(/\*\*?|_/g, "").split(/[.!?]/)[0].trim().slice(0, 50);
+  return normText((para ?? "").replace(/\*\*?|_/g, "").split(/[.!?]/)[0]).slice(0, 50);
+}
+
+const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", rsquo: "'", lsquo: "'", rdquo: '"', ldquo: '"', mdash: "—", ndash: "–" };
+
+/** Text as a reader sees it: tags dropped, entities decoded, quotes and spaces unified. */
+export function normText(s: string): string {
+  return s
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) =>
+      e[0] === "#"
+        ? String.fromCodePoint(e[1].toLowerCase() === "x" ? parseInt(e.slice(2), 16) : Number(e.slice(1)))
+        : (ENTITIES[e.toLowerCase()] ?? m),
+    )
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"')
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export async function runCrawlerAudit(): Promise<AuditReport> {
@@ -150,7 +167,8 @@ export async function runCrawlerAudit(): Promise<AuditReport> {
   const post = storage.listBlogPosts().find((p: any) => (p.status ?? "published") === "published");
   const path = post ? `/blog/${post.slug}` : "/";
   const probe = post ? bodyProbe(post.body ?? "") : "";
-  const visible = (html: string) => (probe ? html.includes(probe.slice(0, 40)) : /<h1[\s>]/i.test(html));
+  // The page text is HTML-escaped (&quot;, &#x27;), so compare decoded text.
+  const visible = (html: string) => (probe ? normText(html).includes(probe.slice(0, 40)) : /<h1[\s>]/i.test(html));
 
   let robotsTxt = "";
   let robotsFound = false;
