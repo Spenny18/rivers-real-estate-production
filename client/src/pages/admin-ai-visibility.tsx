@@ -13,8 +13,21 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, apiErrorMessage } from "@/lib/queryClient";
 import { FixDialog } from "@/components/seo/fix-dialog";
 
-type Engine = "chatgpt" | "perplexity";
-const ENGINE_LABEL: Record<Engine, string> = { chatgpt: "ChatGPT", perplexity: "Perplexity" };
+type Engine = "chatgpt" | "perplexity" | "google_aio" | "google_ai_mode";
+const ENGINE_LABEL: Record<Engine, string> = {
+  chatgpt: "ChatGPT",
+  perplexity: "Perplexity",
+  google_aio: "Google AI Overviews",
+  google_ai_mode: "Google AI Mode",
+};
+/** For narrow table columns. */
+const ENGINE_SHORT: Record<Engine, string> = {
+  chatgpt: "ChatGPT",
+  perplexity: "Perplexity",
+  google_aio: "AI Overview",
+  google_ai_mode: "AI Mode",
+};
+const listJoin = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
 
 interface EngineSummary {
   engine: Engine;
@@ -22,6 +35,8 @@ interface EngineSummary {
   mentioned: number;
   cited: number;
   errors: number;
+  /** Searches where Google showed no AI answer. */
+  notShown?: number;
 }
 interface Result {
   promptId: number;
@@ -34,6 +49,8 @@ interface Result {
   position: number | null;
   competitors: string[];
   error: string | null;
+  /** False when the engine gave no AI answer for this search. */
+  shown: boolean;
 }
 interface Report {
   engines: Record<Engine, boolean>;
@@ -250,7 +267,7 @@ export default function AdminAiVisibilityPage() {
               AI Visibility
             </h1>
             <p className="text-sm text-muted-foreground mt-1.5 max-w-[760px]">
-              Each check asks {engines.length ? engines.map((e) => ENGINE_LABEL[e]).join(" and ") : "the AI assistants"} the
+              Each check asks {engines.length ? listJoin(engines.map((e) => ENGINE_LABEL[e])) : "the AI assistants"} the
               questions below, with web search on, and records whether you're named or cited and who's named instead.
               Answers vary between runs, so read the trend rather than any single result.
             </p>
@@ -276,7 +293,7 @@ export default function AdminAiVisibilityPage() {
           </Button>
         </div>
 
-        {(!data.engines.chatgpt || !data.engines.perplexity || !data.extractor) && (
+        {(!data.engines.chatgpt || !data.engines.perplexity || !data.engines.google_aio || !data.extractor) && (
           <Card className="mb-6 border-amber-500/40">
             <CardContent className="p-4 flex gap-2.5 text-sm text-foreground/80">
               <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0 text-amber-600" strokeWidth={1.6} />
@@ -285,6 +302,12 @@ export default function AdminAiVisibilityPage() {
                 {!data.engines.perplexity && (
                   <div>
                     Perplexity isn't connected — set <code>PERPLEXITY_API_KEY</code> (from perplexity.ai → API) on the server.
+                  </div>
+                )}
+                {!data.engines.google_aio && (
+                  <div>
+                    Google AI Overviews and AI Mode aren't connected — set <code>DATAFORSEO_LOGIN</code> and{" "}
+                    <code>DATAFORSEO_PASSWORD</code> (from app.dataforseo.com → API Access) on the server.
                   </div>
                 )}
                 {!data.extractor && (
@@ -298,7 +321,7 @@ export default function AdminAiVisibilityPage() {
         )}
 
         {/* Latest check */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
+        <div className={`grid grid-cols-1 md:grid-cols-3 ${(latest?.engines.length ?? 0) > 2 ? "xl:grid-cols-5" : ""} gap-3 mb-6`}>
           {(latest?.engines ?? []).map((e) => (
             <Card key={e.engine}>
               <CardContent className="p-4">
@@ -312,6 +335,7 @@ export default function AdminAiVisibilityPage() {
                 <div className="text-[11px] text-muted-foreground mt-0.5">
                   {e.mentioned} of {e.checked} answers · cited as a source in {e.cited}
                   {e.errors ? ` · ${e.errors} failed` : ""}
+                  {e.notShown ? ` · no AI answer on ${e.notShown} searches` : ""}
                 </div>
               </CardContent>
             </Card>
@@ -357,7 +381,7 @@ export default function AdminAiVisibilityPage() {
                     <th className="text-left py-1.5 font-medium">Question</th>
                     {engines.map((e) => (
                       <th key={e} className="text-center font-medium w-[96px]">
-                        {ENGINE_LABEL[e]}
+                        {ENGINE_SHORT[e]}
                       </th>
                     ))}
                     <th className="w-[215px]" />
@@ -393,6 +417,10 @@ export default function AdminAiVisibilityPage() {
                                   <span className="text-muted-foreground">—</span>
                                 ) : r.error ? (
                                   <span className="text-destructive/80" title={r.error}>error</span>
+                                ) : !r.shown ? (
+                                  <span className="text-muted-foreground text-[11px]" title="Google showed no AI answer for this search">
+                                    none shown
+                                  </span>
                                 ) : r.mentioned ? (
                                   <span className="inline-flex items-center gap-0.5 text-emerald-700 dark:text-emerald-400">
                                     <Check className="w-3 h-3" />
@@ -467,6 +495,10 @@ export default function AdminAiVisibilityPage() {
                                       <div className="eyebrow text-muted-foreground mb-1.5">{ENGINE_LABEL[e]}</div>
                                       {r.error ? (
                                         <div className="text-destructive/80">{r.error}</div>
+                                      ) : !r.shown ? (
+                                        <div className="text-muted-foreground">
+                                          Google showed no AI answer for this search, so there was nothing to be named in.
+                                        </div>
                                       ) : (
                                         <>
                                           <div className="whitespace-pre-wrap leading-relaxed max-h-[320px] overflow-y-auto">{r.answer}</div>
@@ -538,7 +570,7 @@ export default function AdminAiVisibilityPage() {
                         <th className="text-right font-medium">Rank</th>
                         {engines.map((e) => (
                           <th key={e} className="text-right font-medium">
-                            {ENGINE_LABEL[e]}
+                            {ENGINE_SHORT[e]}
                           </th>
                         ))}
                       </tr>

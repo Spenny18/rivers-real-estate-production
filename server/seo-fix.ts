@@ -485,6 +485,10 @@ function describeAiQuestion(ctx: QuestionContext): string {
       lines.push(`\n## ${label}: the check failed (${r.error.slice(0, 120)})`);
       continue;
     }
+    if (!r.shown) {
+      lines.push(`\n## ${label}: Google showed no AI answer for this search`);
+      continue;
+    }
     const status = r.mentioned
       ? `names Spencer${r.position ? ` at #${r.position} of the agents it recommends` : ""}${r.cited ? " and cites our site" : ""}`
       : "does NOT name Spencer";
@@ -497,7 +501,7 @@ function describeAiQuestion(ctx: QuestionContext): string {
   }
   lines.push(`
 # How to win this question
-Goal: make Spencer Rivers a name ChatGPT and Perplexity give when asked this question. Both search the web, then quote pages that answer the question directly and credibly, and repeat names that many sources agree on. In priority order:
+Goal: make Spencer Rivers a name ChatGPT, Perplexity and Google's AI answers give when asked this question. All of them search the web, then quote pages that answer the question directly and credibly, and repeat names that many sources agree on. In priority order:
 1. Strengthen the page best placed to answer it (the pages detailed below): open the relevant section with a direct 2–3 sentence answer that mirrors the question's wording, add specific facts from the supplied content, and name Spencer consistently as "Spencer Rivers, REALTOR®, CLHMS" with Rivers Real Estate and Calgary, so the entity is unambiguous.
 2. Add a question-and-answer block. On blog posts, use edit_blog to add or extend a "## Frequently Asked Questions" section with "### <the question>" followed by a 2–4 sentence answer. The site turns that section into FAQPage schema automatically, which is the structured data AI engines read. On pages whose copy lives in code (e.g. /work-with/*, which already has FAQ arrays that emit FAQPage schema), use code_change to add the Q&A to that page's FAQ list.
 3. Add internal links to the page that answers it from related posts (edit_blog), with anchor text close to the question.
