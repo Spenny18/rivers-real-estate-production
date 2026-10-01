@@ -3681,6 +3681,14 @@ export async function registerRoutes(
       subject = { kind: "candidate", candidateId: b.candidateId };
     } else if (b.kind === "topic" && typeof b.clusterId === "string" && typeof b.query === "string" && typeof b.title === "string") {
       subject = { kind: "topic", clusterId: b.clusterId, query: b.query.slice(0, 200), title: b.title.slice(0, 200) };
+    } else if (b.kind === "ai_question" && Number.isInteger(b.promptId)) {
+      subject = { kind: "ai_question", promptId: b.promptId };
+      // The fix plans against the crawled site; the AI Visibility page may be
+      // opened before anyone has visited /admin/seo to build it.
+      if (!seoReports.cachedSeoReport()) {
+        seoReports.startSeoReportBuild();
+        return res.status(409).json({ ok: false, message: "Preparing the site data this needs — try again in a minute or two." });
+      }
     } else {
       return res.status(400).json({ ok: false, message: "Give an opportunityId, a cannibalization pair, a page path, a cluster, a candidate or a topic" });
     }
@@ -3854,8 +3862,49 @@ export async function registerRoutes(
   // AI search visibility tracker (server/ai-visibility.ts): questions asked of
   // ChatGPT / Perplexity weekly, with mentions, citations and competitors.
   app.get("/api/admin/ai-visibility", requireAuth, async (_req, res) => {
-    const { report } = await import("./ai-visibility");
-    res.json(report());
+    const { report, latestSuggestions } = await import("./ai-visibility");
+    // "Improve" needs the crawled SEO report; start it early so it's ready.
+    // This page polls while a check runs, so never restart a crawl that is
+    // running or has just failed (the SEO page's Rescan retries those).
+    const seoReady = !!seoReports.cachedSeoReport();
+    const st = seoReports.seoReportState();
+    if (!seoReady && !st.building && !st.error) seoReports.startSeoReportBuild();
+    res.json({ ...report(), suggestions: latestSuggestions(), seoReady });
+  });
+  app.post("/api/admin/ai-visibility/suggestions", requireAuth, async (_req, res) => {
+    const { startSuggestions } = await import("./ai-visibility");
+    try {
+      startSuggestions(async () => {
+        // Suggestions lean on Search Console + GA4 from the SEO report.
+        const report = seoReports.cachedSeoReport() ?? (await seoReports.startSeoReportBuild());
+        const { lastReportContext } = await import("./seo-keywords");
+        const ctx = lastReportContext();
+        const byQuery = new Map<string, { query: string; impressions: number; clicks: number; position: number; page: string; keyEvents: number; top: number }>();
+        for (const [page, rows] of Array.from(ctx?.gscByPath.entries() ?? [])) {
+          for (const r of rows) {
+            const q = byQuery.get(r.query) ?? { query: r.query, impressions: 0, clicks: 0, position: r.position, page, keyEvents: 0, top: 0 };
+            q.impressions += r.impressions;
+            q.clicks += r.clicks;
+            if (r.impressions > q.top) {
+              q.top = r.impressions;
+              q.page = page;
+              q.position = r.position;
+              q.keyEvents = ctx?.ga4.get(page)?.keyEvents ?? 0;
+            }
+            byQuery.set(r.query, q);
+          }
+        }
+        const gscQueries = Array.from(byQuery.values())
+          .sort((a, b) => b.impressions - a.impressions)
+          .slice(0, 150)
+          .map(({ top, ...q }) => q);
+        const pages = (report?.pages ?? []).filter((p) => p.status === 200).map((p) => ({ path: p.path, title: p.title }));
+        return { gscQueries, pages };
+      });
+      res.status(202).json({ ok: true });
+    } catch (err: any) {
+      res.status(409).json({ message: err?.message ?? "Couldn't start" });
+    }
   });
   app.post("/api/admin/ai-visibility/run", requireAuth, async (_req, res) => {
     const { startRun } = await import("./ai-visibility");

@@ -503,6 +503,266 @@ export function report() {
 }
 
 // ---------------------------------------------------------------------------
+// Per-question context for "Improve" (server/seo-fix.ts, kind "ai_question")
+// ---------------------------------------------------------------------------
+
+export interface QuestionContext {
+  promptId: number;
+  question: string;
+  checkedAt: string | null;
+  results: Array<{
+    engine: Engine;
+    mentioned: boolean;
+    cited: boolean;
+    position: number | null;
+    competitors: string[];
+    citations: { url: string; title?: string }[];
+    answer: string;
+    error: string | null;
+  }>;
+}
+
+/** The question and its answers from the most recent check that covered it. */
+export function questionContext(promptId: number): QuestionContext | null {
+  const p = sqlite.prepare("SELECT * FROM ai_vis_prompts WHERE id = ?").get(promptId) as any;
+  if (!p) return null;
+  const last = sqlite
+    .prepare("SELECT run_id, created_at FROM ai_vis_results WHERE prompt_id = ? ORDER BY run_id DESC LIMIT 1")
+    .get(promptId) as any;
+  const rows = last
+    ? (sqlite.prepare("SELECT * FROM ai_vis_results WHERE prompt_id = ? AND run_id = ?").all(promptId, last.run_id) as any[])
+    : [];
+  return {
+    promptId,
+    question: p.text,
+    checkedAt: last?.created_at ?? null,
+    results: rows.map(rowToResult).map((r) => ({
+      engine: r.engine,
+      mentioned: r.mentioned,
+      cited: r.cited,
+      position: r.position,
+      competitors: r.competitors,
+      citations: r.citations,
+      answer: r.answer,
+      error: r.error,
+    })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Question suggestions
+// ---------------------------------------------------------------------------
+// Claude proposes questions worth tracking, weighing demand (Search Console
+// impressions for related queries — the only volume signal we have; AI
+// assistants publish none), likelihood of conversion (hiring intent, and
+// GA4 key events on the page that would answer it) and how close we already
+// are. One suggestion set is kept; asking again replaces it.
+
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS ai_vis_suggestions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL,            -- generating | ready | failed
+    items TEXT NOT NULL DEFAULT '[]',
+    error TEXT,
+    model TEXT
+  );
+`);
+
+const LEVELS = ["high", "medium", "low"] as const;
+type Level = (typeof LEVELS)[number];
+
+export interface QuestionSuggestion {
+  question: string;
+  relatedQuery: string;
+  demand: Level;
+  demandEvidence: string;
+  conversion: Level;
+  conversionWhy: string;
+  lowHanging: Level;
+  lowHangingWhy: string;
+  bestPage: string;
+  score: number;
+}
+
+const SUGGEST_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["suggestions"],
+  properties: {
+    suggestions: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "question", "relatedQuery", "demand", "demandEvidence", "conversion", "conversionWhy",
+          "lowHanging", "lowHangingWhy", "bestPage", "score",
+        ],
+        properties: {
+          question: { type: "string", description: "Phrased the way a person would ask ChatGPT." },
+          relatedQuery: { type: "string", description: "The Search Console query behind it, or \"\"." },
+          demand: { type: "string", enum: [...LEVELS] },
+          demandEvidence: { type: "string" },
+          conversion: { type: "string", enum: [...LEVELS] },
+          conversionWhy: { type: "string" },
+          lowHanging: { type: "string", enum: [...LEVELS] },
+          lowHangingWhy: { type: "string" },
+          bestPage: { type: "string", description: "Live path best placed to win it, or \"\"." },
+          score: { type: "integer", description: "0–100 overall priority." },
+        },
+      },
+    },
+  },
+} as const;
+
+const SUGGEST_SYSTEM = `You pick the questions a Calgary luxury real estate agent should track in AI assistants (ChatGPT, Perplexity). The agent is Spencer Rivers (REALTOR®, CLHMS, Certified Condo Specialist, Rivers Real Estate / Synterra Realty); the site is riversrealestate.ca. Clients are mostly $1M+ buyers and sellers, condo buyers, downsizers and relocations.
+
+Suggest up to 15 NEW questions (never repeat or reword one already tracked). Rate each on:
+- demand: how many people plausibly ask it. Base this on the Search Console data supplied (impressions for the related query over the last 90 days). Quote the numbers in demandEvidence, e.g. "Search Console: 1,240 impressions/90d for 'luxury realtor calgary'". When no supplied query relates, say "No Search Console data — estimated" and rate conservatively. Never invent numbers.
+- conversion: how likely someone asking it is to become a client. Hiring and pricing questions ("who should I hire", "best realtor for", "how much is my home worth") are high; market and neighbourhood research is medium; general information is low. Where the page that would answer it has GA4 key events, mention them.
+- lowHanging: how quickly it can be won. High when the site already ranks in Google's top 20 for the related query, already has a strong page on it, or the assistants already name Spencer for a close question; low when nothing on the site covers it.
+- score: 0–100 overall, weighing conversion most, then low-hanging, then demand.
+Phrase questions the way people type them into ChatGPT (full sentences, Calgary named). Prefer specific neighbourhoods, price points and situations over generic ones. bestPage must be a path from the supplied page list, or "".`;
+
+function levelOf(v: any): Level {
+  return LEVELS.includes(v) ? v : "low";
+}
+
+export function latestSuggestions() {
+  suggestionsRunning(); // clears a row left behind by a restart
+  const r = sqlite.prepare("SELECT * FROM ai_vis_suggestions ORDER BY id DESC LIMIT 1").get() as any;
+  if (!r) return null;
+  let items: QuestionSuggestion[] = [];
+  try {
+    items = JSON.parse(r.items);
+  } catch {
+    items = [];
+  }
+  // Hide ones added since the suggestions were made.
+  const tracked = new Set(listPrompts().map((p) => normQ(p.text)));
+  return {
+    status: r.status as "generating" | "ready" | "failed",
+    createdAt: r.created_at as string,
+    error: (r.error as string | null) ?? null,
+    items: items.filter((s) => !tracked.has(normQ(s.question))),
+  };
+}
+
+function normQ(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
+}
+
+/** Data the suggestion prompt is built from. Separate so it can be tested. */
+export interface SuggestInputs {
+  gscQueries: Array<{ query: string; impressions: number; clicks: number; position: number; page: string; keyEvents: number }>;
+  pages: Array<{ path: string; title: string }>;
+}
+
+function suggestPrompt(inp: SuggestInputs): string {
+  const rep = report();
+  const status = new Map<number, string>();
+  for (const r of rep.results) {
+    const s = r.error ? "error" : r.mentioned ? `named${r.position ? ` #${r.position}` : ""}` : "not named";
+    status.set(r.promptId, `${status.get(r.promptId) ? `${status.get(r.promptId)}, ` : ""}${ENGINE_LABELS[r.engine]}: ${s}`);
+  }
+  const parts: string[] = [];
+  parts.push(
+    `# Questions already tracked (latest result)\n${rep.prompts
+      .map((p) => `- ${p.text}${status.has(p.id) ? ` — ${status.get(p.id)}` : ""}`)
+      .join("\n")}`,
+  );
+  if (rep.competitors.length) {
+    parts.push(`# Competitors the assistants name most\n${rep.competitors.slice(0, 12).map((c) => `- ${c.name} (${c.mentions}×)`).join("\n")}`);
+  }
+  parts.push(
+    inp.gscQueries.length
+      ? `# Search Console queries (last 90 days; position is the average Google rank; key events are GA4 conversions on that page)\n${inp.gscQueries
+          .map((q) => `- "${q.query}" — ${q.impressions} impr, ${q.clicks} clicks, pos ${q.position.toFixed(1)}, page ${q.page}${q.keyEvents ? `, ${q.keyEvents} key events` : ""}`)
+          .join("\n")}`
+      : "# Search Console queries\nNot available — rate demand as estimated.",
+  );
+  parts.push(`# Live pages\n${inp.pages.map((p) => `${p.path} | ${p.title.slice(0, 80)}`).join("\n")}`);
+  return parts.join("\n\n");
+}
+
+export function suggestionsRunning(): boolean {
+  const r = sqlite.prepare("SELECT id, status, created_at FROM ai_vis_suggestions ORDER BY id DESC LIMIT 1").get() as any;
+  if (r?.status !== "generating") return false;
+  // A restart mid-generation leaves the row behind; don't let it block forever.
+  if (Date.now() - Date.parse(r.created_at) > 10 * 60_000) {
+    sqlite.prepare("UPDATE ai_vis_suggestions SET status = 'failed', error = 'Interrupted — try again' WHERE id = ?").run(r.id);
+    return false;
+  }
+  return true;
+}
+
+/** Start generating suggestions in the background. */
+export function startSuggestions(loadInputs: () => Promise<SuggestInputs>): number {
+  if (suggestionsRunning()) throw new Error("Suggestions are already being prepared");
+  if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
+    throw new Error("Suggestions need ANTHROPIC_API_KEY on the server");
+  }
+  const id = Number(
+    sqlite
+      .prepare("INSERT INTO ai_vis_suggestions (created_at, status) VALUES (?, 'generating')")
+      .run(new Date().toISOString()).lastInsertRowid,
+  );
+  (async () => {
+    const model = process.env.AI_VIS_SUGGEST_MODEL?.trim() || "claude-opus-5-5";
+    const inputs = await loadInputs();
+    const client = new Anthropic();
+    const msg: any = await client.beta.messages.create({
+      model,
+      max_tokens: 16000,
+      ...(model === "claude-opus-5-5"
+        ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }
+        : {}),
+      output_config: { effort: "medium", format: { type: "json_schema", schema: SUGGEST_SCHEMA as any } },
+      system: SUGGEST_SYSTEM,
+      messages: [{ role: "user", content: suggestPrompt(inputs) }],
+    } as any);
+    if (msg.stop_reason === "refusal") throw new Error("Claude declined this request — try again");
+    if (msg.stop_reason === "max_tokens") throw new Error("The answer was cut off — try again");
+    const text = (msg.content as any[]).filter((b) => b.type === "text").map((b) => b.text).join("");
+    const out = JSON.parse(text);
+    const tracked = new Set(listPrompts().map((p) => normQ(p.text)));
+    const livePaths = new Set(inputs.pages.map((p) => p.path));
+    const seen = new Set<string>();
+    const items: QuestionSuggestion[] = (Array.isArray(out?.suggestions) ? out.suggestions : [])
+      .map((s: any) => ({
+        question: String(s?.question ?? "").trim().slice(0, 300),
+        relatedQuery: String(s?.relatedQuery ?? "").trim(),
+        demand: levelOf(s?.demand),
+        demandEvidence: String(s?.demandEvidence ?? ""),
+        conversion: levelOf(s?.conversion),
+        conversionWhy: String(s?.conversionWhy ?? ""),
+        lowHanging: levelOf(s?.lowHanging),
+        lowHangingWhy: String(s?.lowHangingWhy ?? ""),
+        bestPage: livePaths.has(String(s?.bestPage ?? "")) ? String(s.bestPage) : "",
+        score: Math.max(0, Math.min(100, Math.round(Number(s?.score) || 0))),
+      }))
+      .filter((s: QuestionSuggestion) => {
+        const k = normQ(s.question);
+        if (!k || tracked.has(k) || seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      })
+      .sort((a: QuestionSuggestion, b: QuestionSuggestion) => b.score - a.score)
+      .slice(0, 15);
+    sqlite
+      .prepare("UPDATE ai_vis_suggestions SET status = 'ready', items = ?, model = ? WHERE id = ?")
+      .run(JSON.stringify(items), msg.model || model, id);
+  })().catch((err: any) => {
+    console.error("[ai-visibility] suggestions failed:", err?.message ?? err);
+    sqlite
+      .prepare("UPDATE ai_vis_suggestions SET status = 'failed', error = ? WHERE id = ?")
+      .run(String(err?.message ?? err).slice(0, 500), id);
+  });
+  return id;
+}
+
+// ---------------------------------------------------------------------------
 // Schedule
 // ---------------------------------------------------------------------------
 

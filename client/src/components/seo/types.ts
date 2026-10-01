@@ -54,7 +54,8 @@ export type FixSubject =
   | { kind: "page"; path: string }
   | { kind: "cluster"; clusterId: string }
   | { kind: "candidate"; candidateId: string }
-  | { kind: "topic"; clusterId: string; query: string; title: string };
+  | { kind: "topic"; clusterId: string; query: string; title: string }
+  | { kind: "ai_question"; promptId: number };
 
 export interface PlannedTopic { title: string; targetQuery: string; why: string; clusterId: string | null }
 

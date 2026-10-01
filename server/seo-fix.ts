@@ -54,6 +54,7 @@ import {
 } from "./seo-keywords";
 import type { Opportunity } from "./seo-opportunities";
 import type { ClusterAudit, ClusterCandidate } from "./seo-architecture";
+import { questionContext, hostOf, ENGINE_LABELS, type QuestionContext } from "./ai-visibility";
 
 /** Claude Opus 5 unless overridden. */
 const MODEL = process.env.SEO_FIX_MODEL?.trim() || "claude-opus-5";
@@ -71,7 +72,9 @@ export type FixSubject =
   | { kind: "page"; path: string }
   | { kind: "cluster"; clusterId: string }
   | { kind: "candidate"; candidateId: string }
-  | { kind: "topic"; clusterId: string; query: string; title: string };
+  | { kind: "topic"; clusterId: string; query: string; title: string }
+  /** Win one AI Visibility question (server/ai-visibility.ts). */
+  | { kind: "ai_question"; promptId: number };
 
 const NEIGHBOURHOOD_FIELDS = [
   "tagline", "story", "realEstateCopy", "lifeCopy", "outsideCopy", "amenitiesCopy", "shopDineCopy",
@@ -238,9 +241,22 @@ interface ResolvedSubject {
   cluster?: ClusterAudit;
   candidate?: ClusterCandidate;
   topic?: { query: string; title: string };
+  aiQuestion?: QuestionContext;
 }
 
 function resolveSubject(subject: FixSubject, report: SeoReport): ResolvedSubject {
+  if (subject.kind === "ai_question") {
+    const ctx = questionContext(subject.promptId);
+    if (!ctx) throw new Error("That question is no longer tracked.");
+    if (!ctx.results.length) throw new Error("Run a visibility check first — there are no answers for this question yet.");
+    return {
+      kind: "ai_question",
+      paths: pagesForQuestion(ctx, report),
+      opportunity: null,
+      label: `Win in AI answers: “${ctx.question}”`,
+      aiQuestion: ctx,
+    };
+  }
   if (subject.kind === "opportunity") {
     const opp = report.opportunities.find((o) => o.id === subject.opportunityId);
     if (!opp) throw new Error("That opportunity is no longer in the report — rescan and try again.");
@@ -422,6 +438,75 @@ function describeCandidate(cand: ClusterCandidate, report: SeoReport): string {
   ].join("\n");
 }
 
+/**
+ * Pages best placed to win an AI question: our own pages the assistants
+ * already cite for it, then the pages whose focus keyword or title is
+ * closest to the question. Capped — the fix is reviewed by a person.
+ */
+function pagesForQuestion(ctx: QuestionContext, report: SeoReport): string[] {
+  const live = report.pages.filter((p) => p.status === 200);
+  const livePaths = new Set(live.map((p) => p.path));
+  const out: string[] = [];
+  for (const r of ctx.results) {
+    for (const c of r.citations) {
+      const host = hostOf(c.url);
+      if (!host.endsWith("riversrealestate.ca") && !host.endsWith("luxuryhomescalgary.ca")) continue;
+      let path = "/";
+      try {
+        path = new URL(c.url).pathname.replace(/\/+$/, "") || "/";
+      } catch {
+        continue;
+      }
+      if (livePaths.has(path) && !out.includes(path)) out.push(path);
+    }
+  }
+  const ranked = live
+    .map((p) => ({
+      path: p.path,
+      s: Math.max(similarity(ctx.question, p.focusKeyword), similarity(ctx.question, p.title) * 0.9),
+    }))
+    .filter((x) => x.s >= 0.2 && !out.includes(x.path))
+    .sort((a, b) => b.s - a.s);
+  for (const x of ranked) {
+    if (out.length >= 3) break;
+    out.push(x.path);
+  }
+  return out.slice(0, 4);
+}
+
+function describeAiQuestion(ctx: QuestionContext): string {
+  const lines = [
+    `# AI assistant visibility for: "${ctx.question}"`,
+    `Checked ${ctx.checkedAt ? ctx.checkedAt.slice(0, 10) : "recently"} by asking each assistant the question with web search on.`,
+  ];
+  for (const r of ctx.results) {
+    const label = ENGINE_LABELS[r.engine] ?? r.engine;
+    if (r.error) {
+      lines.push(`\n## ${label}: the check failed (${r.error.slice(0, 120)})`);
+      continue;
+    }
+    const status = r.mentioned
+      ? `names Spencer${r.position ? ` at #${r.position} of the agents it recommends` : ""}${r.cited ? " and cites our site" : ""}`
+      : "does NOT name Spencer";
+    lines.push(`\n## ${label} ${status}`);
+    if (r.competitors.length) lines.push(`Named instead: ${r.competitors.slice(0, 10).join(", ")}`);
+    if (r.citations.length) {
+      lines.push(`Sources it relied on:\n${r.citations.slice(0, 10).map((c) => `  - ${hostOf(c.url)} — ${c.title ?? c.url}`).join("\n")}`);
+    }
+    lines.push(`Answer (excerpt):\n${r.answer.slice(0, 1800)}`);
+  }
+  lines.push(`
+# How to win this question
+Goal: make Spencer Rivers a name ChatGPT and Perplexity give when asked this question. Both search the web, then quote pages that answer the question directly and credibly, and repeat names that many sources agree on. In priority order:
+1. Strengthen the page best placed to answer it (the pages detailed below): open the relevant section with a direct 2–3 sentence answer that mirrors the question's wording, add specific facts from the supplied content, and name Spencer consistently as "Spencer Rivers, REALTOR®, CLHMS" with Rivers Real Estate and Calgary, so the entity is unambiguous.
+2. Add a question-and-answer block. On blog posts, use edit_blog to add or extend a "## Frequently Asked Questions" section with "### <the question>" followed by a 2–4 sentence answer. The site turns that section into FAQPage schema automatically, which is the structured data AI engines read. On pages whose copy lives in code (e.g. /work-with/*, which already has FAQ arrays that emit FAQPage schema), use code_change to add the Q&A to that page's FAQ list.
+3. Add internal links to the page that answers it from related posts (edit_blog), with anchor text close to the question.
+4. If no existing page genuinely answers this question, create one draft (create_blog_draft) that answers it in the first paragraph, has a FAQ section as above, and links to the relevant neighbourhood/condo pages.
+5. Adjust titles/descriptions only if they obscure that the page answers this question.
+Off-site work can't be done from here but matters most when the assistants cite third-party sites (directories, review sites, brokerage profiles, news). Name those specific sources from the lists above in the rationale as next steps for the owner (e.g. get a profile or review there). Put further pages worth writing in plannedTopics.`);
+  return lines.join("\n");
+}
+
 function buildPrompt(resolved: ResolvedSubject, report: SeoReport): string {
   const parts: string[] = [];
   parts.push(`# Task\n${resolved.label}`);
@@ -451,6 +536,8 @@ Prefer differentiating when both pages earn meaningful impressions for different
   if (resolved.opportunity?.type === "content_gap") {
     parts.push(`No page targets this query yet. Propose one create_blog_draft that would genuinely answer it for a Calgary buyer or seller, plus edit_blog link insertions on 1–2 existing related posts pointing to the new slug (only if a natural sentence exists to link from).`);
   }
+
+  if (resolved.kind === "ai_question" && resolved.aiQuestion) parts.push(describeAiQuestion(resolved.aiQuestion));
 
   if (resolved.cluster && resolved.kind !== "topic") parts.push(describeCluster(resolved.cluster, report));
   if (resolved.candidate) parts.push(describeCandidate(resolved.candidate, report));
@@ -485,7 +572,7 @@ Prefer differentiating when both pages earn meaningful impressions for different
   const pending = countConsoleDrafts();
   parts.push(pending >= MAX_PENDING_CONSOLE_DRAFTS
     ? `# Drafts\nThe owner already has ${pending} unpublished console drafts (the limit is ${MAX_PENDING_CONSOLE_DRAFTS}). Do not create any new post; put ideas in plannedTopics.`
-    : `# Drafts\n${pending} of ${MAX_PENDING_CONSOLE_DRAFTS} console drafts are waiting to be published. ${resolved.kind === "topic" || resolved.kind === "cluster" || resolved.kind === "candidate" || resolved.opportunity?.type === "content_gap" ? "A new post is allowed only if it passes the content policy." : "This is a single-page fix: do not create posts."}`);
+    : `# Drafts\n${pending} of ${MAX_PENDING_CONSOLE_DRAFTS} console drafts are waiting to be published. ${resolved.kind === "topic" || resolved.kind === "cluster" || resolved.kind === "candidate" || resolved.kind === "ai_question" || resolved.opportunity?.type === "content_gap" ? "A new post is allowed only if it passes the content policy." : "This is a single-page fix: do not create posts."}`);
   const list = report.pages
     .filter((p) => p.status === 200)
     .map((p) => `${p.path} | ${p.title.slice(0, 80)} | kw: ${p.focusKeyword}`)
@@ -964,7 +1051,7 @@ export function validateChanges(
           if (!title || !body) throw new Error("title and body are required");
           const draftsAllowed =
             subject.kind === "topic" || subject.kind === "cluster" || subject.kind === "candidate" ||
-            subject.opportunity?.type === "content_gap";
+            subject.kind === "ai_question" || subject.opportunity?.type === "content_gap";
           if (!draftsAllowed) {
             throw new Error("single-page fixes don't create posts — strengthen the existing page instead");
           }
