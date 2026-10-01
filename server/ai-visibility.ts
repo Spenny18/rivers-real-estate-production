@@ -476,6 +476,70 @@ export function startRun(trigger: "manual" | "schedule"): number {
   return id;
 }
 
+/** The newest finished run's failed checks, as [prompt, engine] pairs. */
+function failedChecks(): { runId: number; rows: { id: number; prompt_text: string; engine: Engine }[] } | null {
+  const run = sqlite.prepare("SELECT id FROM ai_vis_runs WHERE status != 'running' ORDER BY id DESC LIMIT 1").get() as any;
+  if (!run) return null;
+  const rows = sqlite
+    .prepare("SELECT id, prompt_text, engine FROM ai_vis_results WHERE run_id = ? AND error IS NOT NULL")
+    .all(run.id) as any[];
+  return { runId: run.id, rows };
+}
+
+/**
+ * Re-ask only the checks that failed in the newest run, updating them in
+ * place, so a few transient errors don't cost a whole new run.
+ */
+export function retryFailed(): number {
+  if (running !== null) throw new Error("A check is already running");
+  const f = failedChecks();
+  if (!f || !f.rows.length) throw new Error("The latest check has no failed results");
+  const configured = configuredEngines();
+  const jobs = f.rows.filter((r) => configured.includes(r.engine));
+  if (!jobs.length) throw new Error("The engines that failed are no longer connected");
+  running = f.runId;
+  const update = sqlite.prepare(
+    `UPDATE ai_vis_results SET answer = ?, citations = ?, mentioned = ?, cited = ?, position = ?, competitors = ?,
+       error = ?, shown = ?, created_at = ? WHERE id = ?`,
+  );
+  const worker = async () => {
+    for (let r = jobs.shift(); r; r = jobs.shift()) {
+      const now = new Date().toISOString();
+      try {
+        const ans = await withEngine(r.engine, r.prompt_text);
+        if (ans.shown === false) {
+          update.run("", "[]", 0, 0, null, "[]", null, 0, now, r.id);
+          continue;
+        }
+        const an = await analyseAnswer(ans);
+        update.run(
+          ans.text, JSON.stringify(ans.citations), an.mentioned ? 1 : 0, an.cited ? 1 : 0, an.position,
+          JSON.stringify(an.competitors), null, 1, now, r.id,
+        );
+      } catch (err: any) {
+        update.run("", "[]", 0, 0, null, "[]", String(err?.message ?? err).slice(0, 500), 1, now, r.id);
+      }
+    }
+  };
+  const count = jobs.length;
+  Promise.all([worker(), worker(), worker()])
+    .then(() => {
+      const t = sqlite
+        .prepare("SELECT COUNT(*) AS total, SUM(error IS NOT NULL) AS failed FROM ai_vis_results WHERE run_id = ?")
+        .get(f.runId) as any;
+      const failed = Number(t.failed ?? 0);
+      sqlite
+        .prepare("UPDATE ai_vis_runs SET status = ?, error = ? WHERE id = ?")
+        .run(failed === t.total ? "failed" : "done", failed ? `${failed} of ${t.total} checks failed` : null, f.runId);
+      console.log(`[ai-visibility] retried ${count} failed checks in run ${f.runId}; ${failed} still failing`);
+    })
+    .catch((err) => console.error("[ai-visibility] retry failed:", err?.message ?? err))
+    .finally(() => {
+      running = null;
+    });
+  return count;
+}
+
 // ---------------------------------------------------------------------------
 // Report
 // ---------------------------------------------------------------------------
