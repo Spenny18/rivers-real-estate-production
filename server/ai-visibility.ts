@@ -436,6 +436,79 @@ function compKey(name: string): string {
   return name.toLowerCase().replace(/\s*[-–—|,(].*$/, "").replace(/[^a-z0-9& ]/g, "").trim();
 }
 
+/**
+ * Share of voice: every name the answers recommend, Spencer included,
+ * counted once per answer. Rank is 1 + the number of names named in more
+ * answers, so equal counts share a rank ("tied #2").
+ */
+export function leaderboard(rows: ResultRow[]) {
+  const YOU = "__you__";
+  const by = new Map<string, { name: string; answers: number; isYou: boolean }>();
+  let answers = 0;
+  for (const r of rows) {
+    if (r.error) continue;
+    answers++;
+    const keys = new Set<string>();
+    if (r.mentioned) keys.add(YOU);
+    for (const c of r.competitors) {
+      const k = compKey(c);
+      if (k && !keys.has(k)) {
+        keys.add(k);
+        if (!by.has(k)) by.set(k, { name: c, answers: 0, isYou: false });
+      }
+    }
+    for (const k of Array.from(keys)) {
+      const e = by.get(k) ?? { name: "Spencer Rivers (you)", answers: 0, isYou: true };
+      e.answers++;
+      by.set(k, e);
+    }
+  }
+  const list = Array.from(by.values()).sort((a, b) => b.answers - a.answers || Number(b.isYou) - Number(a.isYou));
+  const rankOf = (n: number) => 1 + list.filter((x) => x.answers > n).length;
+  const ranked = list.map((x) => ({ ...x, rank: rankOf(x.answers), tied: list.filter((y) => y.answers === x.answers).length > 1 }));
+  const you = ranked.find((x) => x.isYou) ?? null;
+  return {
+    answers,
+    names: ranked.length,
+    you: you ? { rank: you.rank, tied: you.tied, answers: you.answers } : null,
+    top: ranked.slice(0, 30),
+  };
+}
+
+const OWN_DOMAINS = ["riversrealestate.ca", "luxuryhomescalgary.ca"];
+
+/**
+ * Third-party sites the answers lean on, across every question: the places
+ * worth getting listed, reviewed or published on. Ranked by how many
+ * questions cite them where Spencer was NOT named — those are the gaps.
+ */
+export function citedSources(rows: ResultRow[]) {
+  const by = new Map<string, { host: string; questions: Set<string>; gaps: Set<string>; engines: Set<string>; example: string }>();
+  for (const r of rows) {
+    if (r.error) continue;
+    const hosts = new Set(r.citations.map((c) => hostOf(c.url)).filter((h) => h && !OWN_DOMAINS.some((d) => h.endsWith(d))));
+    for (const h of Array.from(hosts)) {
+      const e = by.get(h) ?? { host: h, questions: new Set(), gaps: new Set(), engines: new Set(), example: "" };
+      e.questions.add(r.prompt);
+      if (!r.mentioned) e.gaps.add(r.prompt);
+      e.engines.add(r.engine);
+      if (!e.example) e.example = r.citations.find((c) => hostOf(c.url) === h)?.url ?? "";
+      by.set(h, e);
+    }
+  }
+  return Array.from(by.values())
+    .sort((a, b) => b.gaps.size - a.gaps.size || b.questions.size - a.questions.size)
+    .slice(0, 20)
+    .map((e) => ({
+      host: e.host,
+      questions: e.questions.size,
+      gaps: e.gaps.size,
+      engines: Array.from(e.engines),
+      example: e.example,
+      gapQuestions: Array.from(e.gaps),
+    }));
+}
+
 export function intervalDays(): number {
   const n = Number(process.env.AI_VIS_INTERVAL_DAYS);
   return Number.isFinite(n) && n >= 1 ? n : 7;
@@ -444,18 +517,21 @@ export function intervalDays(): number {
 export function report() {
   const engines = configuredEngines();
   const prompts = listPrompts();
-  const runs = (sqlite.prepare("SELECT * FROM ai_vis_runs ORDER BY id DESC LIMIT 12").all() as any[]).map((r) => ({
-    id: r.id,
-    startedAt: r.started_at,
-    finishedAt: r.finished_at,
-    status: r.status,
-    trigger: r.trigger,
-    promptCount: r.prompt_count,
-    error: r.error,
-    engines: engineSummary(
-      (sqlite.prepare("SELECT * FROM ai_vis_results WHERE run_id = ?").all(r.id) as any[]).map(rowToResult),
-    ),
-  }));
+  const runs = (sqlite.prepare("SELECT * FROM ai_vis_runs ORDER BY id DESC LIMIT 12").all() as any[]).map((r) => {
+    const rows = (sqlite.prepare("SELECT * FROM ai_vis_results WHERE run_id = ?").all(r.id) as any[]).map(rowToResult);
+    const lb = leaderboard(rows);
+    return {
+      id: r.id,
+      startedAt: r.started_at,
+      finishedAt: r.finished_at,
+      status: r.status,
+      trigger: r.trigger,
+      promptCount: r.prompt_count,
+      error: r.error,
+      engines: engineSummary(rows),
+      rank: lb.you ? { rank: lb.you.rank, tied: lb.you.tied, of: lb.names } : null,
+    };
+  });
   const latest = runs.find((r) => r.status !== "running") ?? null;
   const results = latest
     ? (sqlite.prepare("SELECT * FROM ai_vis_results WHERE run_id = ? ORDER BY prompt_id, engine").all(latest.id) as any[]).map(rowToResult)
@@ -499,6 +575,8 @@ export function report() {
     latestRunId: latest?.id ?? null,
     results,
     competitors,
+    shareOfVoice: leaderboard(results),
+    sources: citedSources(results),
   };
 }
 
@@ -763,6 +841,105 @@ export function startSuggestions(loadInputs: () => Promise<SuggestInputs>): numb
 }
 
 // ---------------------------------------------------------------------------
+// Blog queue — "Send to blog routine"
+// ---------------------------------------------------------------------------
+// A question the assistants don't name Spencer for can be queued for the
+// BOFU blog routine, which reads GET /api/public/blog-queue (through a Make
+// tool, like the blog list) before its 12-week plan and writes one queued
+// question per run. It sends queueId with the draft, which marks the item
+// written. Only the question and non-sensitive context are public.
+
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS ai_vis_blog_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    prompt_id INTEGER,
+    question TEXT NOT NULL,
+    best_page TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'queued',   -- queued | written | dismissed
+    slug TEXT,
+    created_at TEXT NOT NULL,
+    done_at TEXT
+  );
+`);
+
+export interface QueueItem {
+  id: number;
+  promptId: number | null;
+  question: string;
+  bestPage: string;
+  notes: string;
+  status: "queued" | "written" | "dismissed";
+  slug: string | null;
+  createdAt: string;
+  doneAt: string | null;
+}
+
+function rowToQueue(r: any): QueueItem {
+  return {
+    id: r.id,
+    promptId: r.prompt_id ?? null,
+    question: r.question,
+    bestPage: r.best_page,
+    notes: r.notes,
+    status: r.status,
+    slug: r.slug ?? null,
+    createdAt: r.created_at,
+    doneAt: r.done_at ?? null,
+  };
+}
+
+export function listBlogQueue(limit = 30): QueueItem[] {
+  return (sqlite.prepare("SELECT * FROM ai_vis_blog_queue ORDER BY id DESC LIMIT ?").all(limit) as any[]).map(rowToQueue);
+}
+
+/** What the blog routine reads: queued items, oldest first. */
+export function publicBlogQueue() {
+  return (sqlite.prepare("SELECT * FROM ai_vis_blog_queue WHERE status = 'queued' ORDER BY id").all() as any[])
+    .map(rowToQueue)
+    .map((q) => ({ queueId: q.id, question: q.question, bestPage: q.bestPage, notes: q.notes, queuedAt: q.createdAt }));
+}
+
+export function queueBlogForPrompt(promptId: number, bestPage = ""): QueueItem {
+  const ctx = questionContext(promptId);
+  if (!ctx) throw new Error("That question is no longer tracked");
+  const open = sqlite
+    .prepare("SELECT id FROM ai_vis_blog_queue WHERE prompt_id = ? AND status = 'queued'")
+    .get(promptId) as any;
+  if (open) throw new Error("This question is already queued for the blog routine");
+  const ok = ctx.results.filter((r) => !r.error);
+  const notNamed = ok.filter((r) => !r.mentioned).map((r) => ENGINE_LABELS[r.engine]);
+  const hosts = Array.from(
+    new Set(ok.flatMap((r) => r.citations.map((c) => hostOf(c.url))).filter((h) => h && !OWN_DOMAINS.some((d) => h.endsWith(d)))),
+  ).slice(0, 8);
+  const notes = [
+    notNamed.length ? `Not named by ${notNamed.join(" or ")} for this question.` : "Named, but not reliably — strengthen it.",
+    hosts.length ? `Sources the assistants relied on: ${hosts.join(", ")}.` : "",
+    "Answer the question directly in the first paragraph, name Spencer Rivers (REALTOR®, CLHMS) as the answer where it's honest to do so, and end with a \"## Frequently Asked Questions\" section using ### questions (the site emits FAQPage schema from it).",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const r = sqlite
+    .prepare("INSERT INTO ai_vis_blog_queue (prompt_id, question, best_page, notes, created_at) VALUES (?, ?, ?, ?, ?)")
+    .run(promptId, ctx.question, bestPage, notes, new Date().toISOString());
+  return rowToQueue(sqlite.prepare("SELECT * FROM ai_vis_blog_queue WHERE id = ?").get(Number(r.lastInsertRowid)));
+}
+
+/** Called when the routine posts a draft with queueId. */
+export function markQueueWritten(id: number, slug: string): boolean {
+  const r = sqlite
+    .prepare("UPDATE ai_vis_blog_queue SET status = 'written', slug = ?, done_at = ? WHERE id = ? AND status = 'queued'")
+    .run(slug, new Date().toISOString(), id);
+  return r.changes > 0;
+}
+
+export function dismissQueueItem(id: number): void {
+  sqlite
+    .prepare("UPDATE ai_vis_blog_queue SET status = 'dismissed', done_at = ? WHERE id = ? AND status = 'queued'")
+    .run(new Date().toISOString(), id);
+}
+
+// ---------------------------------------------------------------------------
 // Schedule
 // ---------------------------------------------------------------------------
 
@@ -786,7 +963,16 @@ export function startAiVisibilityCron() {
     console.log("[ai-visibility] weekly check disabled (not production or AI_VIS_AUTORUN=0)");
     return;
   }
-  timer = setInterval(maybeRun, 60 * 60 * 1000);
+  timer = setInterval(() => {
+    maybeRun();
+    // The crawler audit runs on the same weekly rhythm.
+    import("./ai-crawler-audit")
+      .then(({ latestCrawlerAudit, startCrawlerAudit }) => {
+        const last = latestCrawlerAudit();
+        if (!last || Date.now() - Date.parse(last.at) > intervalDays() * 86_400_000) startCrawlerAudit();
+      })
+      .catch((e) => console.error("[crawler-audit] schedule failed:", e?.message ?? e));
+  }, 60 * 60 * 1000);
   timer.unref?.();
   console.log(`[ai-visibility] check every ${intervalDays()} days (hourly due-check)`);
 }

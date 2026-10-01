@@ -2746,7 +2746,7 @@ export async function registerRoutes(
 
   // POST — create a new post. Defaults to status="draft" unless explicitly
   // overridden. Used by the BOFU auto-blog pipeline.
-  app.post("/api/admin/blog", requireAdminOrToken, (req, res) => {
+  app.post("/api/admin/blog", requireAdminOrToken, async (req, res) => {
     const body = req.body || {};
     if (!body.slug || typeof body.slug !== "string" || !/^[a-z0-9-]+$/i.test(body.slug)) {
       return res.status(400).json({ message: "slug is required (lowercase letters, digits, hyphens)" });
@@ -2793,6 +2793,11 @@ export async function registerRoutes(
         videoDuration: typeof body.videoDuration === "string" && body.videoDuration.trim() ? body.videoDuration.trim() : null,
       } as any);
       if (heroStatus === "generating") queueHeroImage(created.slug, heroImage);
+      // A post written from the AI Visibility blog queue closes its item.
+      if (Number.isInteger(body.queueId)) {
+        const { markQueueWritten } = await import("./ai-visibility");
+        markQueueWritten(body.queueId, created.slug);
+      }
       res.status(201).json({ ...created, heroStatus });
     } catch (err: any) {
       console.error("[admin] create blog failed:", err);
@@ -3862,14 +3867,46 @@ export async function registerRoutes(
   // AI search visibility tracker (server/ai-visibility.ts): questions asked of
   // ChatGPT / Perplexity weekly, with mentions, citations and competitors.
   app.get("/api/admin/ai-visibility", requireAuth, async (_req, res) => {
-    const { report, latestSuggestions } = await import("./ai-visibility");
+    const { report, latestSuggestions, listBlogQueue } = await import("./ai-visibility");
+    const { latestCrawlerAudit, auditRunning } = await import("./ai-crawler-audit");
     // "Improve" needs the crawled SEO report; start it early so it's ready.
     // This page polls while a check runs, so never restart a crawl that is
     // running or has just failed (the SEO page's Rescan retries those).
     const seoReady = !!seoReports.cachedSeoReport();
     const st = seoReports.seoReportState();
     if (!seoReady && !st.building && !st.error) seoReports.startSeoReportBuild();
-    res.json({ ...report(), suggestions: latestSuggestions(), seoReady });
+    res.json({
+      ...report(),
+      suggestions: latestSuggestions(),
+      seoReady,
+      blogQueue: listBlogQueue(),
+      crawlerAudit: latestCrawlerAudit(),
+      auditRunning: auditRunning(),
+    });
+  });
+  app.post("/api/admin/ai-visibility/prompts/:id/queue-blog", requireAuth, async (req, res) => {
+    const { queueBlogForPrompt } = await import("./ai-visibility");
+    try {
+      const bestPage = typeof req.body?.bestPage === "string" ? req.body.bestPage.slice(0, 200) : "";
+      res.status(201).json(queueBlogForPrompt(Number(req.params.id), bestPage));
+    } catch (err: any) {
+      res.status(400).json({ message: err?.message ?? "Couldn't queue" });
+    }
+  });
+  app.post("/api/admin/ai-visibility/blog-queue/:id/dismiss", requireAuth, async (req, res) => {
+    const { dismissQueueItem } = await import("./ai-visibility");
+    dismissQueueItem(Number(req.params.id));
+    res.json({ ok: true });
+  });
+  app.post("/api/admin/ai-visibility/crawler-audit", requireAuth, async (_req, res) => {
+    const { startCrawlerAudit } = await import("./ai-crawler-audit");
+    res.status(startCrawlerAudit() ? 202 : 409).json({ ok: true });
+  });
+  // Read by the BOFU blog routine (via a Make tool) before its 12-week plan.
+  // Only the questions to write about and writing notes — nothing private.
+  app.get("/api/public/blog-queue", async (_req, res) => {
+    const { publicBlogQueue } = await import("./ai-visibility");
+    res.json(publicBlogQueue());
   });
   app.post("/api/admin/ai-visibility/suggestions", requireAuth, async (_req, res) => {
     const { startSuggestions } = await import("./ai-visibility");
