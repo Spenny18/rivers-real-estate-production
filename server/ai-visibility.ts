@@ -198,8 +198,10 @@ async function askGoogle(engine: "google_aio" | "google_ai_mode", question: stri
   const overviews = (t?.result?.[0]?.items ?? []).filter((i: any) => i?.type === "ai_overview");
   if (!overviews.length) return { text: "", citations: [], shown: false };
   const text = overviews.map(overviewText).join("\n\n").trim();
-  const citations: EngineAnswer["citations"] = [];
-  collectRefs(overviews, citations);
+  const found: EngineAnswer["citations"] = [];
+  collectRefs(overviews, found);
+  // Google's own viewer links and DataForSEO's image CDN aren't sources.
+  const citations = found.filter((c) => !/(^|\.)google\.[a-z.]+$|(^|\.)dataforseo\.com$/.test(hostOf(c.url)));
   if (!text && !citations.length) return { text: "", citations: [], shown: false };
   return { text, citations: dedupe(citations), shown: true };
 }
