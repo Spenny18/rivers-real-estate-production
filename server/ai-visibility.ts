@@ -13,6 +13,11 @@
 //               AI_VIS_OPENAI_MODEL (default gpt-5-mini)
 //   Perplexity  PERPLEXITY_API_KEY  Sonar API (searches the web itself)
 //               AI_VIS_PERPLEXITY_MODEL (default sonar)
+//   Google AI Overviews and Google AI Mode
+//               DATAFORSEO_LOGIN + DATAFORSEO_PASSWORD  DataForSEO SERP API,
+//               searched from Calgary. Google only shows an AI Overview for
+//               some searches; when it doesn't, the result is stored as "not
+//               shown" and left out of the mention rates.
 // Competitor extraction uses Claude (ANTHROPIC_API_KEY, AI_VIS_EXTRACT_MODEL,
 // default claude-opus-5-5 at low effort); without it, competitors come from
 // the cited domains only.
@@ -55,6 +60,12 @@ sqlite.exec(`
   );
   CREATE INDEX IF NOT EXISTS ai_vis_results_run ON ai_vis_results(run_id);
 `);
+// 0 = the engine gave no AI answer for this search (Google AI Overviews).
+try {
+  sqlite.exec("ALTER TABLE ai_vis_results ADD COLUMN shown INTEGER NOT NULL DEFAULT 1");
+} catch {
+  // already added
+}
 
 // ---------------------------------------------------------------------------
 // Brand + engines
@@ -68,15 +79,28 @@ const BRAND_RE = new RegExp(
   "i",
 );
 
-export type Engine = "chatgpt" | "perplexity";
-export const ENGINE_LABELS: Record<Engine, string> = { chatgpt: "ChatGPT", perplexity: "Perplexity" };
+export type Engine = "chatgpt" | "perplexity" | "google_aio" | "google_ai_mode";
+export const ENGINE_LABELS: Record<Engine, string> = {
+  chatgpt: "ChatGPT",
+  perplexity: "Perplexity",
+  google_aio: "Google AI Overviews",
+  google_ai_mode: "Google AI Mode",
+};
+
+function dataForSeoConfigured(): boolean {
+  return Boolean(process.env.DATAFORSEO_LOGIN && process.env.DATAFORSEO_PASSWORD);
+}
 
 export function configuredEngines(): Engine[] {
   const out: Engine[] = [];
   if (process.env.OPENAI_API_KEY) out.push("chatgpt");
   if (process.env.PERPLEXITY_API_KEY) out.push("perplexity");
+  if (dataForSeoConfigured()) out.push("google_aio", "google_ai_mode");
   return out;
 }
+
+/** Rough cost of one question on one engine, including the Claude extraction. */
+const ENGINE_COST: Record<Engine, number> = { chatgpt: 0.03, perplexity: 0.03, google_aio: 0.015, google_ai_mode: 0.015 };
 
 const SYSTEM_HINT =
   "The person asking lives in or is moving to Calgary, Alberta, Canada. Answer as you normally would, " +
@@ -85,6 +109,8 @@ const SYSTEM_HINT =
 export interface EngineAnswer {
   text: string;
   citations: { url: string; title?: string }[];
+  /** False when the engine gave no AI answer for this search. */
+  shown?: boolean;
 }
 
 async function askChatGpt(question: string): Promise<EngineAnswer> {
@@ -142,6 +168,65 @@ async function askPerplexity(question: string): Promise<EngineAnswer> {
     ...(data?.citations ?? []).map((u: any) => ({ url: typeof u === "string" ? u : u?.url })),
   ].filter((c) => typeof c.url === "string" && c.url);
   return { text, citations: dedupe(citations) };
+}
+
+// Google's AI answers through DataForSEO's SERP API. AI Overviews come from a
+// normal results page (when Google shows one); AI Mode has its own endpoint.
+async function askGoogle(engine: "google_aio" | "google_ai_mode", question: string): Promise<EngineAnswer> {
+  const base = (process.env.DATAFORSEO_BASE_URL || "https://api.dataforseo.com").replace(/\/+$/, "");
+  const path = engine === "google_aio" ? "/v3/serp/google/organic/live/advanced" : "/v3/serp/google/ai_mode/live/advanced";
+  const auth = Buffer.from(`${process.env.DATAFORSEO_LOGIN}:${process.env.DATAFORSEO_PASSWORD}`).toString("base64");
+  const task: Record<string, unknown> = {
+    keyword: question,
+    location_name: process.env.AI_VIS_GOOGLE_LOCATION || "Calgary,Alberta,Canada",
+    language_code: "en",
+    device: "desktop",
+  };
+  // Without this, AI Overviews that Google loads after the page are missed.
+  if (engine === "google_aio") Object.assign(task, { load_async_ai_overview: true, depth: 10 });
+  const res = await fetch(`${base}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Basic ${auth}` },
+    body: JSON.stringify([task]),
+    signal: AbortSignal.timeout(180_000),
+  });
+  if (!res.ok) throw new Error(`DataForSEO ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const data: any = await res.json();
+  if (data?.status_code !== 20000) throw new Error(`DataForSEO: ${data?.status_message ?? "request failed"}`);
+  const t = data?.tasks?.[0];
+  if (t?.status_code !== 20000) throw new Error(`DataForSEO: ${t?.status_message ?? "task failed"}`);
+  const overviews = (t?.result?.[0]?.items ?? []).filter((i: any) => i?.type === "ai_overview");
+  if (!overviews.length) return { text: "", citations: [], shown: false };
+  const text = overviews.map(overviewText).join("\n\n").trim();
+  const citations: EngineAnswer["citations"] = [];
+  collectRefs(overviews, citations);
+  if (!text && !citations.length) return { text: "", citations: [], shown: false };
+  return { text, citations: dedupe(citations), shown: true };
+}
+
+/** The overview's text: its markdown when given, else every text field in order. */
+function overviewText(o: any): string {
+  if (typeof o?.markdown === "string" && o.markdown.trim()) return o.markdown.trim();
+  const out: string[] = [];
+  const walk = (n: any, key = "") => {
+    if (Array.isArray(n)) return n.forEach((x) => walk(x, key));
+    if (!n || typeof n !== "object") return;
+    for (const [k, v] of Object.entries(n)) {
+      if (k === "references") continue;
+      if ((k === "text" || k === "title") && typeof v === "string" && v.trim()) out.push(v.trim());
+      else if (typeof v === "object") walk(v, k);
+    }
+  };
+  walk(o);
+  return out.join("\n");
+}
+
+/** Every linked source anywhere in the overview (references, links, nested elements). */
+function collectRefs(n: any, out: EngineAnswer["citations"]): void {
+  if (Array.isArray(n)) return n.forEach((x) => collectRefs(x, out));
+  if (!n || typeof n !== "object") return;
+  if (typeof n.url === "string" && /^https?:\/\//.test(n.url)) out.push({ url: n.url, title: n.title ?? n.source ?? undefined });
+  for (const v of Object.values(n)) if (v && typeof v === "object") collectRefs(v, out);
 }
 
 function dedupe(cs: EngineAnswer["citations"]): EngineAnswer["citations"] {
@@ -316,6 +401,7 @@ export function isRunning(): boolean {
 }
 
 async function withEngine(engine: Engine, q: string): Promise<EngineAnswer> {
+  if (engine === "google_aio" || engine === "google_ai_mode") return askGoogle(engine, q);
   return engine === "chatgpt" ? askChatGpt(q) : askPerplexity(q);
 }
 
@@ -323,7 +409,7 @@ async function withEngine(engine: Engine, q: string): Promise<EngineAnswer> {
 export function startRun(trigger: "manual" | "schedule"): number {
   if (running !== null) throw new Error("A check is already running");
   const engines = configuredEngines();
-  if (!engines.length) throw new Error("No AI engine is configured (OPENAI_API_KEY or PERPLEXITY_API_KEY)");
+  if (!engines.length) throw new Error("No AI engine is configured (OPENAI_API_KEY, PERPLEXITY_API_KEY or DATAFORSEO_LOGIN)");
   const prompts = listPrompts().filter((p) => p.active);
   if (!prompts.length) throw new Error("No active questions to check");
   const id = Number(
@@ -336,8 +422,8 @@ export function startRun(trigger: "manual" | "schedule"): number {
   running = id;
   const insert = sqlite.prepare(
     `INSERT INTO ai_vis_results
-       (run_id, prompt_id, prompt_text, engine, answer, citations, mentioned, cited, position, competitors, error, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (run_id, prompt_id, prompt_text, engine, answer, citations, mentioned, cited, position, competitors, error, created_at, shown)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const jobs = prompts.flatMap((p) => engines.map((e) => ({ p, e })));
   const worker = async () => {
@@ -345,13 +431,17 @@ export function startRun(trigger: "manual" | "schedule"): number {
       const { p, e } = job;
       try {
         const ans = await withEngine(e, p.text);
+        if (ans.shown === false) {
+          insert.run(id, p.id, p.text, e, "", "[]", 0, 0, null, "[]", null, new Date().toISOString(), 0);
+          continue;
+        }
         const an = await analyseAnswer(ans);
         insert.run(
           id, p.id, p.text, e, ans.text, JSON.stringify(ans.citations), an.mentioned ? 1 : 0, an.cited ? 1 : 0,
-          an.position, JSON.stringify(an.competitors), null, new Date().toISOString(),
+          an.position, JSON.stringify(an.competitors), null, new Date().toISOString(), 1,
         );
       } catch (err: any) {
-        insert.run(id, p.id, p.text, e, "", "[]", 0, 0, null, "[]", String(err?.message ?? err).slice(0, 500), new Date().toISOString());
+        insert.run(id, p.id, p.text, e, "", "[]", 0, 0, null, "[]", String(err?.message ?? err).slice(0, 500), new Date().toISOString(), 1);
       }
     }
   };
@@ -392,6 +482,13 @@ interface ResultRow {
   position: number | null;
   competitors: string[];
   error: string | null;
+  /** False when the engine gave no AI answer for this search. */
+  shown: boolean;
+}
+
+/** An answer that can be scored: the check worked and there was an AI answer. */
+export function answered(r: { error: string | null; shown: boolean }): boolean {
+  return !r.error && r.shown;
 }
 
 function rowToResult(r: any): ResultRow {
@@ -413,15 +510,20 @@ function rowToResult(r: any): ResultRow {
     position: r.position ?? null,
     competitors: parse(r.competitors, []),
     error: r.error ?? null,
+    shown: r.shown !== 0,
   };
 }
 
 function engineSummary(rows: ResultRow[]) {
-  const by: Record<string, { engine: string; checked: number; mentioned: number; cited: number; errors: number }> = {};
+  const by: Record<string, { engine: string; checked: number; mentioned: number; cited: number; errors: number; notShown: number }> = {};
   for (const r of rows) {
-    const e = (by[r.engine] ??= { engine: r.engine, checked: 0, mentioned: 0, cited: 0, errors: 0 });
+    const e = (by[r.engine] ??= { engine: r.engine, checked: 0, mentioned: 0, cited: 0, errors: 0, notShown: 0 });
     if (r.error) {
       e.errors++;
+      continue;
+    }
+    if (!r.shown) {
+      e.notShown++;
       continue;
     }
     e.checked++;
@@ -446,7 +548,7 @@ export function leaderboard(rows: ResultRow[]) {
   const by = new Map<string, { name: string; answers: number; isYou: boolean }>();
   let answers = 0;
   for (const r of rows) {
-    if (r.error) continue;
+    if (!answered(r)) continue;
     answers++;
     const keys = new Set<string>();
     if (r.mentioned) keys.add(YOU);
@@ -485,7 +587,7 @@ const OWN_DOMAINS = ["riversrealestate.ca", "luxuryhomescalgary.ca"];
 export function citedSources(rows: ResultRow[]) {
   const by = new Map<string, { host: string; questions: Set<string>; gaps: Set<string>; engines: Set<string>; example: string }>();
   for (const r of rows) {
-    if (r.error) continue;
+    if (!answered(r)) continue;
     const hosts = new Set(r.citations.map((c) => hostOf(c.url)).filter((h) => h && !OWN_DOMAINS.some((d) => h.endsWith(d))));
     for (const h of Array.from(hosts)) {
       const e = by.get(h) ?? { host: h, questions: new Set(), gaps: new Set(), engines: new Set(), example: "" };
@@ -561,14 +663,20 @@ export function report() {
       : new Date((lastDone ? Date.parse(lastDone.startedAt) : Date.now()) + intervalDays() * 86_400_000).toISOString();
 
   return {
-    engines: { chatgpt: engines.includes("chatgpt"), perplexity: engines.includes("perplexity") },
+    engines: {
+      chatgpt: engines.includes("chatgpt"),
+      perplexity: engines.includes("perplexity"),
+      google_aio: engines.includes("google_aio"),
+      google_ai_mode: engines.includes("google_ai_mode"),
+    },
     extractor: Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN),
     running: isRunning(),
     schedule: { intervalDays: intervalDays(), nextRunAt },
-    // Rough per-run cost: ~$0.02 per engine check with web search, plus
-    // ~$0.01 per answer for the Claude extraction.
+    // Rough per-run cost: the engine call (~$0.02 for ChatGPT/Perplexity with
+    // web search, under $0.01 for Google via DataForSEO) plus ~$0.01 per
+    // answer for the Claude extraction.
     estimatedCostPerRun: Number(
-      (prompts.filter((p) => p.active).length * engines.length * 0.03).toFixed(2),
+      (prompts.filter((p) => p.active).length * engines.reduce((s, e) => s + ENGINE_COST[e], 0)).toFixed(2),
     ),
     prompts,
     runs,
@@ -597,6 +705,7 @@ export interface QuestionContext {
     citations: { url: string; title?: string }[];
     answer: string;
     error: string | null;
+    shown: boolean;
   }>;
 }
 
@@ -623,6 +732,7 @@ export function questionContext(promptId: number): QuestionContext | null {
       citations: r.citations,
       answer: r.answer,
       error: r.error,
+      shown: r.shown,
     })),
   };
 }
@@ -741,7 +851,7 @@ function suggestPrompt(inp: SuggestInputs): string {
   const rep = report();
   const status = new Map<number, string>();
   for (const r of rep.results) {
-    const s = r.error ? "error" : r.mentioned ? `named${r.position ? ` #${r.position}` : ""}` : "not named";
+    const s = r.error ? "error" : !r.shown ? "no AI answer shown" : r.mentioned ? `named${r.position ? ` #${r.position}` : ""}` : "not named";
     status.set(r.promptId, `${status.get(r.promptId) ? `${status.get(r.promptId)}, ` : ""}${ENGINE_LABELS[r.engine]}: ${s}`);
   }
   const parts: string[] = [];
@@ -907,7 +1017,7 @@ export function queueBlogForPrompt(promptId: number, bestPage = ""): QueueItem {
     .prepare("SELECT id FROM ai_vis_blog_queue WHERE prompt_id = ? AND status = 'queued'")
     .get(promptId) as any;
   if (open) throw new Error("This question is already queued for the blog routine");
-  const ok = ctx.results.filter((r) => !r.error);
+  const ok = ctx.results.filter(answered);
   const notNamed = ok.filter((r) => !r.mentioned).map((r) => ENGINE_LABELS[r.engine]);
   const hosts = Array.from(
     new Set(ok.flatMap((r) => r.citations.map((c) => hostOf(c.url))).filter((h) => h && !OWN_DOMAINS.some((d) => h.endsWith(d)))),
