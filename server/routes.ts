@@ -3951,6 +3951,14 @@ export async function registerRoutes(
       res.status(409).json({ message: err?.message ?? "Couldn't start" });
     }
   });
+  app.post("/api/admin/ai-visibility/retry-failed", requireAuth, async (_req, res) => {
+    const { retryFailed } = await import("./ai-visibility");
+    try {
+      res.status(202).json({ retrying: retryFailed() });
+    } catch (err: any) {
+      res.status(409).json({ message: err?.message ?? "Couldn't retry" });
+    }
+  });
   app.post("/api/admin/ai-visibility/prompts", requireAuth, async (req, res) => {
     const { addPrompt } = await import("./ai-visibility");
     try {

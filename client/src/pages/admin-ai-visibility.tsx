@@ -3,7 +3,7 @@
 // instead. Data and scheduling live in server/ai-visibility.ts.
 import { Fragment, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Bot, Play, Plus, Trash2, ChevronDown, ChevronRight, AlertTriangle, Check, X, Loader2, Sparkles, Lightbulb, FileText, ShieldCheck } from "lucide-react";
+import { Bot, Play, Plus, Trash2, ChevronDown, ChevronRight, AlertTriangle, Check, X, Loader2, Sparkles, Lightbulb, FileText, ShieldCheck, RotateCcw } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -187,6 +187,14 @@ export default function AdminAiVisibilityPage() {
     },
     onError: (e) => toast({ title: "Couldn't start", description: errMsg(e), variant: "destructive" }),
   });
+  const retry = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/admin/ai-visibility/retry-failed"),
+    onSuccess: () => {
+      toast({ title: "Retrying failed checks", description: "Only the failed results are re-checked; they update here in a minute." });
+      refresh();
+    },
+    onError: (e) => toast({ title: "Couldn't retry", description: errMsg(e), variant: "destructive" }),
+  });
   const add = useMutation({
     mutationFn: (text: string) => apiRequest("POST", "/api/admin/ai-visibility/prompts", { text }),
     onSuccess: () => {
@@ -257,6 +265,7 @@ export default function AdminAiVisibilityPage() {
   }
   const positions = data.results.filter((r) => r.position).map((r) => r.position as number);
   const activeCount = data.prompts.filter((p) => p.active).length;
+  const failedCount = data.results.filter((r) => r.error).length;
 
   return (
     <AppShell pageTitle="AI Visibility">
@@ -279,6 +288,19 @@ export default function AdminAiVisibilityPage() {
               {engines.length === 1 ? "engine" : "engines"})
             </p>
           </div>
+          <div className="flex gap-2">
+          {failedCount > 0 && !data.running && (
+            <Button
+              variant="outline"
+              onClick={() => retry.mutate()}
+              disabled={retry.isPending}
+              title="Re-ask only the questions that failed, on the engines that failed"
+              data-testid="btn-retry-failed"
+            >
+              <RotateCcw className="w-3.5 h-3.5 mr-1.5" strokeWidth={1.8} />
+              Retry {failedCount} failed
+            </Button>
+          )}
           <Button
             onClick={() => run.mutate()}
             disabled={data.running || run.isPending || !engines.length}
@@ -291,6 +313,7 @@ export default function AdminAiVisibilityPage() {
             )}
             {data.running ? "Checking…" : "Run check now"}
           </Button>
+          </div>
         </div>
 
         {(!data.engines.chatgpt || !data.engines.perplexity || !data.engines.google_aio || !data.extractor) && (
