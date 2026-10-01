@@ -3,7 +3,7 @@
 // instead. Data and scheduling live in server/ai-visibility.ts.
 import { Fragment, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Bot, Play, Plus, Trash2, ChevronDown, ChevronRight, AlertTriangle, Check, X, Loader2, Sparkles, Lightbulb } from "lucide-react";
+import { Bot, Play, Plus, Trash2, ChevronDown, ChevronRight, AlertTriangle, Check, X, Loader2, Sparkles, Lightbulb, FileText, ShieldCheck } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -51,12 +51,31 @@ interface Report {
     promptCount: number;
     error: string | null;
     engines: EngineSummary[];
+    rank: { rank: number; tied: boolean; of: number } | null;
   }[];
   latestRunId: number | null;
   results: Result[];
   competitors: { name: string; mentions: number; engines: Engine[]; prompts: string[] }[];
   /** The crawled SEO report "Improve" plans against is ready. */
   seoReady: boolean;
+  shareOfVoice: {
+    answers: number;
+    names: number;
+    you: { rank: number; tied: boolean; answers: number } | null;
+    top: { name: string; answers: number; isYou: boolean; rank: number; tied: boolean }[];
+  };
+  sources: { host: string; questions: number; gaps: number; engines: Engine[]; example: string; gapQuestions: string[] }[];
+  blogQueue: {
+    id: number;
+    promptId: number | null;
+    question: string;
+    status: "queued" | "written" | "dismissed";
+    slug: string | null;
+    createdAt: string;
+    doneAt: string | null;
+  }[];
+  crawlerAudit: CrawlerAudit | null;
+  auditRunning: boolean;
   suggestions: {
     status: "generating" | "ready" | "failed";
     createdAt: string;
@@ -64,6 +83,25 @@ interface Report {
     items: Suggestion[];
   } | null;
 }
+
+interface CrawlerAudit {
+  at: string;
+  testedUrl: string;
+  robotsFound: boolean;
+  sitemapListed: boolean;
+  llmsTxt: boolean;
+  blocked: number;
+  crawlers: {
+    token: string;
+    owner: string;
+    role: string;
+    robots: { allowed: boolean; group: string; rule: string | null };
+    fetch: { status: number; contentVisible: boolean; error?: string } | null;
+    ok: boolean;
+  }[];
+}
+
+const rankLabel = (r: { rank: number; tied: boolean }) => `${r.tied ? "tied " : ""}#${r.rank}`;
 
 type Level = "high" | "medium" | "low";
 interface Suggestion {
@@ -118,7 +156,7 @@ export default function AdminAiVisibilityPage() {
     // slowly while the site data "Improve" needs is still being prepared.
     refetchInterval: (q) => {
       const d = q.state.data as Report | undefined;
-      if (d?.running || d?.suggestions?.status === "generating") return 5000;
+      if (d?.running || d?.suggestions?.status === "generating" || d?.auditRunning) return 5000;
       return d && !d.seoReady ? 15000 : false;
     },
   });
@@ -159,6 +197,23 @@ export default function AdminAiVisibilityPage() {
   });
   const suggest = useMutation({
     mutationFn: () => apiRequest("POST", "/api/admin/ai-visibility/suggestions"),
+    onSuccess: refresh,
+    onError: (e) => toast({ title: "Couldn't start", description: apiErrorMessage(e), variant: "destructive" }),
+  });
+  const queueBlog = useMutation({
+    mutationFn: (promptId: number) => apiRequest("POST", `/api/admin/ai-visibility/prompts/${promptId}/queue-blog`, {}),
+    onSuccess: () => {
+      toast({ title: "Queued for the blog routine", description: "Its next run writes this post as a draft." });
+      refresh();
+    },
+    onError: (e) => toast({ title: "Couldn't queue", description: apiErrorMessage(e), variant: "destructive" }),
+  });
+  const dismissQueued = useMutation({
+    mutationFn: (id: number) => apiRequest("POST", `/api/admin/ai-visibility/blog-queue/${id}/dismiss`),
+    onSuccess: refresh,
+  });
+  const audit = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/admin/ai-visibility/crawler-audit"),
     onSuccess: refresh,
     onError: (e) => toast({ title: "Couldn't start", description: apiErrorMessage(e), variant: "destructive" }),
   });
@@ -305,7 +360,7 @@ export default function AdminAiVisibilityPage() {
                         {ENGINE_LABEL[e]}
                       </th>
                     ))}
-                    <th className="w-[150px]" />
+                    <th className="w-[215px]" />
                   </tr>
                 </thead>
                 <tbody>
@@ -368,6 +423,22 @@ export default function AdminAiVisibilityPage() {
                               {pendingFix === p.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
                               Improve
                             </button>
+                            {(() => {
+                              const queued = data.blogQueue.some((q) => q.promptId === p.id && q.status === "queued");
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={() => queueBlog.mutate(p.id)}
+                                  disabled={queued || !Object.keys(res).length || queueBlog.isPending}
+                                  className="mr-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm border border-border text-[11px] hover:bg-muted disabled:opacity-40 align-middle"
+                                  title={queued ? "Queued — the blog routine writes it next" : "Have the blog routine write a full post answering this question"}
+                                  data-testid={`btn-queue-${p.id}`}
+                                >
+                                  <FileText className="w-3 h-3" />
+                                  {queued ? "Queued" : "Blog"}
+                                </button>
+                              );
+                            })()}
                             <Switch
                               checked={p.active}
                               onCheckedChange={(v) => toggle.mutate({ id: p.id, active: v })}
@@ -451,28 +522,9 @@ export default function AdminAiVisibilityPage() {
           </Card>
 
           <div className="space-y-4">
-            {/* Competitors */}
-            <Card>
-              <CardContent className="p-5">
-                <div className="eyebrow text-muted-foreground mb-3">
-                  {data.extractor ? "Named instead of you" : "Sites cited instead of you"}
-                </div>
-                {data.competitors.length ? (
-                  <ul className="space-y-1.5 text-xs">
-                    {data.competitors.map((c) => (
-                      <li key={c.name} className="flex justify-between gap-2" title={c.prompts.join("\n")}>
-                        <span className="truncate">{c.name}</span>
-                        <span className="text-muted-foreground tabular-nums whitespace-nowrap">
-                          {c.mentions}× · {c.engines.map((e) => ENGINE_LABEL[e]).join(", ")}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <div className="text-xs text-muted-foreground">Appears after the first check.</div>
-                )}
-              </CardContent>
-            </Card>
+            <ShareOfVoiceCard sov={data.shareOfVoice} extractor={data.extractor} />
+            <GetListedCard sources={data.sources} />
+            <BlogQueueCard queue={data.blogQueue} onDismiss={(id) => dismissQueued.mutate(id)} />
 
             {/* History */}
             <Card>
@@ -483,6 +535,7 @@ export default function AdminAiVisibilityPage() {
                     <thead className="text-muted-foreground text-[10px] tracking-[0.1em] uppercase">
                       <tr>
                         <th className="text-left py-1 font-medium">Date</th>
+                        <th className="text-right font-medium">Rank</th>
                         {engines.map((e) => (
                           <th key={e} className="text-right font-medium">
                             {ENGINE_LABEL[e]}
@@ -497,6 +550,9 @@ export default function AdminAiVisibilityPage() {
                             {fmtDate(r.startedAt)}
                             {r.status === "running" && <span className="ml-1 text-muted-foreground">(running)</span>}
                             {r.status === "failed" && <span className="ml-1 text-destructive/80">(failed)</span>}
+                          </td>
+                          <td className="text-right tabular-nums" title={r.rank ? `of ${r.rank.of} names` : ""}>
+                            {r.rank ? rankLabel(r.rank) : "—"}
                           </td>
                           {engines.map((e) => {
                             const s = r.engines.find((x) => x.engine === e);
@@ -517,6 +573,7 @@ export default function AdminAiVisibilityPage() {
             </Card>
           </div>
         </div>
+        <CrawlerAuditCard audit={data.crawlerAudit} running={data.auditRunning || audit.isPending} onRun={() => audit.mutate()} />
       </div>
       <FixDialog fixId={fixId} onClose={() => setFixId(null)} onRevised={setFixId} />
     </AppShell>
@@ -585,6 +642,186 @@ function SuggestionsCard({
               </li>
             ))}
           </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ShareOfVoiceCard({ sov, extractor }: { sov: Report["shareOfVoice"]; extractor: boolean }) {
+  return (
+    <Card>
+      <CardContent className="p-5">
+        <div className="eyebrow text-muted-foreground mb-1">Share of voice</div>
+        {sov.you ? (
+          <div className="text-sm mb-3">
+            You're <span className="font-semibold">{rankLabel(sov.you)}</span> of {sov.names} names, in {sov.you.answers} of{" "}
+            {sov.answers} answers.
+          </div>
+        ) : (
+          <div className="text-xs text-muted-foreground mb-3">
+            {sov.answers ? `Not named in any of ${sov.answers} answers yet.` : "Appears after the first check."}
+          </div>
+        )}
+        {!extractor && (
+          <div className="text-[11px] text-muted-foreground mb-2">Needs ANTHROPIC_API_KEY to read names from answers.</div>
+        )}
+        <ol className="space-y-1 text-xs max-h-[340px] overflow-y-auto">
+          {sov.top.map((n) => (
+            <li
+              key={n.name}
+              className={`flex justify-between gap-2 px-1.5 py-0.5 rounded-sm ${n.isYou ? "bg-emerald-500/15 font-medium" : ""}`}
+            >
+              <span className="truncate">
+                <span className="text-muted-foreground tabular-nums mr-1.5">{rankLabel(n)}</span>
+                {n.name}
+              </span>
+              <span className="text-muted-foreground tabular-nums whitespace-nowrap">{n.answers} answers</span>
+            </li>
+          ))}
+        </ol>
+      </CardContent>
+    </Card>
+  );
+}
+
+function GetListedCard({ sources }: { sources: Report["sources"] }) {
+  return (
+    <Card>
+      <CardContent className="p-5">
+        <div className="eyebrow text-muted-foreground mb-1">Get listed here</div>
+        <p className="text-[11px] text-muted-foreground mb-3">
+          Sites the assistants rely on, ranked by how many questions cite them where you weren't named. A profile,
+          review or article on these feeds the answers directly.
+        </p>
+        {sources.length ? (
+          <ul className="space-y-1.5 text-xs">
+            {sources.map((s) => (
+              <li key={s.host} className="flex justify-between gap-2" title={s.gapQuestions.join("\n")}>
+                <a href={s.example || `https://${s.host}`} target="_blank" rel="noopener noreferrer" className="truncate underline">
+                  {s.host}
+                </a>
+                <span className="text-muted-foreground tabular-nums whitespace-nowrap">
+                  {s.gaps ? `${s.gaps} gap${s.gaps === 1 ? "" : "s"} · ` : ""}
+                  {s.questions} question{s.questions === 1 ? "" : "s"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="text-xs text-muted-foreground">Appears after the first check.</div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function BlogQueueCard({ queue, onDismiss }: { queue: Report["blogQueue"]; onDismiss: (id: number) => void }) {
+  if (!queue.length) return null;
+  return (
+    <Card>
+      <CardContent className="p-5">
+        <div className="eyebrow text-muted-foreground mb-1">Blog queue</div>
+        <p className="text-[11px] text-muted-foreground mb-3">
+          The BOFU blog routine writes queued questions first, one per run, as drafts in Blog CMS.
+        </p>
+        <ul className="space-y-2 text-xs">
+          {queue.map((q) => (
+            <li key={q.id} className="flex items-start justify-between gap-2">
+              <span className={q.status === "dismissed" ? "line-through text-muted-foreground" : ""}>{q.question}</span>
+              <span className="whitespace-nowrap text-muted-foreground">
+                {q.status === "queued" ? (
+                  <>
+                    queued{" "}
+                    <button type="button" className="underline ml-1" onClick={() => onDismiss(q.id)}>
+                      remove
+                    </button>
+                  </>
+                ) : q.status === "written" ? (
+                  <a href={`/admin/blog`} className="underline text-emerald-700 dark:text-emerald-400">
+                    drafted{q.slug ? `: ${q.slug}` : ""}
+                  </a>
+                ) : (
+                  "removed"
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  );
+}
+
+function CrawlerAuditCard({ audit, running, onRun }: { audit: CrawlerAudit | null; running: boolean; onRun: () => void }) {
+  return (
+    <Card className="mt-6">
+      <CardContent className="p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
+          <div>
+            <div className="eyebrow text-muted-foreground">AI crawler access</div>
+            <p className="text-xs text-muted-foreground mt-1 max-w-[760px]">
+              Whether each AI and search crawler may read the site (robots.txt) and actually gets the article text when
+              it asks for a page. Checked weekly. A block here means that assistant can't recommend what it can't read.
+            </p>
+            {audit && (
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Checked {fmtDate(audit.at)} on {audit.testedUrl.replace(/^https?:\/\//, "")} · robots.txt{" "}
+                {audit.robotsFound ? "found" : "missing"} · sitemap {audit.sitemapListed ? "listed" : "not listed"} · llms.txt{" "}
+                {audit.llmsTxt ? "found" : "missing"}
+              </p>
+            )}
+          </div>
+          <Button variant="outline" onClick={onRun} disabled={running} data-testid="btn-crawler-audit">
+            {running ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5 mr-1.5" />}
+            {running ? "Checking…" : audit ? "Check again" : "Run check"}
+          </Button>
+        </div>
+        {!audit ? (
+          <div className="text-xs text-muted-foreground">{running ? "Checking each crawler…" : "Not checked yet."}</div>
+        ) : (
+          <>
+            <div className={`text-sm mb-3 ${audit.blocked ? "text-destructive" : "text-emerald-700 dark:text-emerald-400"}`}>
+              {audit.blocked
+                ? `${audit.blocked} crawler${audit.blocked === 1 ? " is" : "s are"} blocked or can't see the content — share this with whoever manages the site.`
+                : `All ${audit.crawlers.length} crawlers can read the site.`}
+            </div>
+            <table className="w-full text-xs">
+              <thead className="text-muted-foreground text-[10px] tracking-[0.1em] uppercase">
+                <tr>
+                  <th className="text-left py-1.5 font-medium">Crawler</th>
+                  <th className="text-left font-medium">Used for</th>
+                  <th className="text-center font-medium">robots.txt</th>
+                  <th className="text-center font-medium">Page loads with content</th>
+                </tr>
+              </thead>
+              <tbody>
+                {audit.crawlers.map((c) => (
+                  <tr key={c.token} className="border-t border-border/60">
+                    <td className="py-1.5">
+                      <span className="font-medium">{c.token}</span>
+                      <span className="text-muted-foreground"> · {c.owner}</span>
+                    </td>
+                    <td className="text-muted-foreground">{c.role}</td>
+                    <td className="text-center" title={c.robots.rule ? `${c.robots.rule} (group: ${c.robots.group})` : `group: ${c.robots.group}`}>
+                      {c.robots.allowed ? <Check className="w-3.5 h-3.5 inline text-emerald-600" /> : <X className="w-3.5 h-3.5 inline text-destructive" />}
+                    </td>
+                    <td className="text-center">
+                      {!c.fetch ? (
+                        <span className="text-muted-foreground" title="robots.txt-only token; it has no crawler of its own">n/a</span>
+                      ) : c.fetch.contentVisible ? (
+                        <Check className="w-3.5 h-3.5 inline text-emerald-600" />
+                      ) : (
+                        <span className="text-destructive" title={c.fetch.error ?? ""}>
+                          {c.fetch.status ? `HTTP ${c.fetch.status}${c.fetch.status === 200 ? ", no content" : ""}` : "failed"}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
         )}
       </CardContent>
     </Card>
