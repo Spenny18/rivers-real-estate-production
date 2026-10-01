@@ -184,17 +184,24 @@ async function askGoogle(engine: "google_aio" | "google_ai_mode", question: stri
   };
   // Without this, AI Overviews that Google loads after the page are missed.
   if (engine === "google_aio") Object.assign(task, { load_async_ai_overview: true, depth: 10 });
-  const res = await fetch(`${base}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Basic ${auth}` },
-    body: JSON.stringify([task]),
-    signal: AbortSignal.timeout(180_000),
-  });
-  if (!res.ok) throw new Error(`DataForSEO ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const data: any = await res.json();
-  if (data?.status_code !== 20000) throw new Error(`DataForSEO: ${data?.status_message ?? "request failed"}`);
-  const t = data?.tasks?.[0];
-  if (t?.status_code !== 20000) throw new Error(`DataForSEO: ${t?.status_message ?? "task failed"}`);
+  let t: any;
+  // A failed task (e.g. 40101 "Internal SE Server Error": DataForSEO couldn't
+  // fetch Google this time) isn't billed and usually works on a retry.
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetch(`${base}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Basic ${auth}` },
+      body: JSON.stringify([task]),
+      signal: AbortSignal.timeout(180_000),
+    });
+    if (!res.ok) throw new Error(`DataForSEO ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    const data: any = await res.json();
+    if (data?.status_code !== 20000) throw new Error(`DataForSEO: ${data?.status_message ?? "request failed"}`);
+    t = data?.tasks?.[0];
+    if (t?.status_code === 20000) break;
+    if (attempt >= 3) throw new Error(`DataForSEO: ${t?.status_message ?? "task failed"} (after ${attempt} tries)`);
+    await new Promise((r) => setTimeout(r, Number(process.env.AI_VIS_GOOGLE_RETRY_MS ?? 5000) * attempt));
+  }
   const overviews = (t?.result?.[0]?.items ?? []).filter((i: any) => i?.type === "ai_overview");
   if (!overviews.length) return { text: "", citations: [], shown: false };
   const text = overviews.map(overviewText).join("\n\n").trim();
