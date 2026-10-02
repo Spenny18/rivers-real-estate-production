@@ -34,6 +34,8 @@ interface EngineSummary {
   checked: number;
   mentioned: number;
   cited: number;
+  /** Named in the answer and linked as a source: the headline metric. */
+  namedCited: number;
   errors: number;
   /** Searches where Google showed no AI answer. */
   notShown?: number;
@@ -266,6 +268,12 @@ export default function AdminAiVisibilityPage() {
   const positions = data.results.filter((r) => r.position).map((r) => r.position as number);
   const activeCount = data.prompts.filter((p) => p.active).length;
   const failedCount = data.results.filter((r) => r.error).length;
+  const answeredResults = data.results.filter((r) => !r.error && r.shown);
+  const namedCitedCount = answeredResults.filter((r) => r.mentioned && r.cited).length;
+  const namedCount = answeredResults.filter((r) => r.mentioned).length;
+  const citedCount = answeredResults.filter((r) => r.cited).length;
+  /** Named but not linked: the page exists in their mind, not in the sources. Quick wins. */
+  const namedNotCited = answeredResults.filter((r) => r.mentioned && !r.cited);
 
   return (
     <AppShell pageTitle="AI Visibility">
@@ -343,20 +351,52 @@ export default function AdminAiVisibilityPage() {
           </Card>
         )}
 
-        {/* Latest check */}
+        {/* Headline: named and cited */}
+        {latest && answeredResults.length > 0 && (
+          <Card className="mb-3">
+            <CardContent className="p-5 flex flex-wrap items-end justify-between gap-4">
+              <div>
+                <div className="eyebrow text-muted-foreground mb-2">Named and cited</div>
+                <div className="font-serif text-4xl" style={{ letterSpacing: "-0.02em" }}>
+                  {pct(namedCitedCount, answeredResults.length)}
+                </div>
+                <div className="text-xs text-muted-foreground mt-1 max-w-[560px]">
+                  {namedCitedCount} of {answeredResults.length} answers name you <em>and</em> link your site as a source, so the
+                  reader can click straight through · checked {fmtDate(latest.startedAt)}
+                </div>
+              </div>
+              <div className="flex gap-6 text-sm">
+                <div>
+                  <div className="eyebrow text-muted-foreground mb-1">Named</div>
+                  <div className="tabular-nums">{pct(namedCount, answeredResults.length)}</div>
+                </div>
+                <div>
+                  <div className="eyebrow text-muted-foreground mb-1">Cited</div>
+                  <div className="tabular-nums">{pct(citedCount, answeredResults.length)}</div>
+                </div>
+                <div title="Named in the answer, but your site isn't one of its sources. Use Improve on these questions.">
+                  <div className="eyebrow text-amber-600 dark:text-amber-500 mb-1">Quick wins</div>
+                  <div className="tabular-nums">{namedNotCited.length} named, not cited</div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Latest check, per engine */}
         <div className={`grid grid-cols-1 md:grid-cols-3 ${(latest?.engines.length ?? 0) > 2 ? "xl:grid-cols-5" : ""} gap-3 mb-6`}>
           {(latest?.engines ?? []).map((e) => (
             <Card key={e.engine}>
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-2">
                   <Bot className="w-3.5 h-3.5 text-muted-foreground" strokeWidth={1.6} />
-                  <div className="eyebrow text-muted-foreground">{ENGINE_LABEL[e.engine]} mentions you</div>
+                  <div className="eyebrow text-muted-foreground">{ENGINE_LABEL[e.engine]} · named &amp; cited</div>
                 </div>
                 <div className="font-serif text-2xl" style={{ letterSpacing: "-0.02em" }}>
-                  {pct(e.mentioned, e.checked)}
+                  {pct(e.namedCited ?? 0, e.checked)}
                 </div>
                 <div className="text-[11px] text-muted-foreground mt-0.5">
-                  {e.mentioned} of {e.checked} answers · cited as a source in {e.cited}
+                  {e.namedCited ?? 0} of {e.checked} answers · named in {e.mentioned} · cited in {e.cited}
                   {e.errors ? ` · ${e.errors} failed` : ""}
                   {e.notShown ? ` · no AI answer on ${e.notShown} searches` : ""}
                 </div>
@@ -444,11 +484,18 @@ export default function AdminAiVisibilityPage() {
                                   <span className="text-muted-foreground text-[11px]" title="Google showed no AI answer for this search">
                                     none shown
                                   </span>
-                                ) : r.mentioned ? (
-                                  <span className="inline-flex items-center gap-0.5 text-emerald-700 dark:text-emerald-400">
+                                ) : r.mentioned && r.cited ? (
+                                  <span className="inline-flex items-center gap-0.5 text-emerald-700 dark:text-emerald-400" title="Named and your site is cited">
                                     <Check className="w-3 h-3" />
-                                    {r.position ? `#${r.position}` : "named"}
-                                    {r.cited ? " · cited" : ""}
+                                    {r.position ? `#${r.position}` : "named"} · cited
+                                  </span>
+                                ) : r.mentioned ? (
+                                  <span
+                                    className="inline-flex items-center gap-0.5 text-amber-600 dark:text-amber-500"
+                                    title="Named, but your site isn't one of the sources — a quick win for Improve"
+                                  >
+                                    <Check className="w-3 h-3" />
+                                    {r.position ? `#${r.position}` : "named"} · not cited
                                   </span>
                                 ) : (
                                   <X className="w-3 h-3 inline text-muted-foreground" />
@@ -457,23 +504,32 @@ export default function AdminAiVisibilityPage() {
                             );
                           })}
                           <td className="text-right whitespace-nowrap">
+                            {(() => {
+                              const quickWin = Object.values(res).some((r) => r && !r.error && r.shown && r.mentioned && !r.cited);
+                              return (
                             <button
                               type="button"
                               onClick={() => improve.mutate(p.id)}
                               disabled={!Object.keys(res).length || !data.seoReady || pendingFix !== null}
-                              className="mr-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm border border-border text-[11px] hover:bg-muted disabled:opacity-40 align-middle"
+                              className={`mr-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm border text-[11px] hover:bg-muted disabled:opacity-40 align-middle ${
+                                quickWin ? "border-amber-500/60 text-amber-700 dark:text-amber-400" : "border-border"
+                              }`}
                               title={
                                 !Object.keys(res).length
                                   ? "Run a check first"
                                   : !data.seoReady
                                     ? "Preparing site data — ready in a minute or two"
-                                    : "Draft changes to win this question in AI answers"
+                                    : quickWin
+                                      ? "Quick win: you're named but your site isn't cited — draft changes to become the source"
+                                      : "Draft changes to win this question in AI answers"
                               }
                               data-testid={`btn-improve-${p.id}`}
                             >
                               {pendingFix === p.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
                               Improve
                             </button>
+                              );
+                            })()}
                             {(() => {
                               const queued = data.blogQueue.some((q) => q.promptId === p.id && q.status === "queued");
                               return (
@@ -584,7 +640,7 @@ export default function AdminAiVisibilityPage() {
             {/* History */}
             <Card>
               <CardContent className="p-5">
-                <div className="eyebrow text-muted-foreground mb-3">Check history</div>
+                <div className="eyebrow text-muted-foreground mb-3">Check history · named &amp; cited</div>
                 {data.runs.length ? (
                   <table className="w-full text-xs">
                     <thead className="text-muted-foreground text-[10px] tracking-[0.1em] uppercase">
@@ -613,7 +669,7 @@ export default function AdminAiVisibilityPage() {
                             const s = r.engines.find((x) => x.engine === e);
                             return (
                               <td key={e} className="text-right tabular-nums">
-                                {s ? pct(s.mentioned, s.checked) : "—"}
+                                {s ? pct(s.namedCited ?? 0, s.checked) : "—"}
                               </td>
                             );
                           })}
