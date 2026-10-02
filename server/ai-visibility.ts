@@ -79,6 +79,22 @@ const BRAND_RE = new RegExp(
   "i",
 );
 
+/**
+ * Spencer's brokerage. An answer that recommends "Synterra Realty" on its
+ * own is almost always pointing at Spencer, so the bare brokerage name counts
+ * as him. A different agent "of Synterra Realty" stays that agent.
+ */
+const BROKERAGE_ALIAS_RE = /^synterra( realty)?( (inc|ltd|calgary|real estate))*$/;
+
+function isBrokerageAlias(name: string): boolean {
+  return BROKERAGE_ALIAS_RE.test(name.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim());
+}
+
+/** A recommended name that is Spencer: his name, his sites, or his brokerage alone. */
+function isYou(name: string): boolean {
+  return BRAND_RE.test(name) || isBrokerageAlias(name);
+}
+
 export type Engine = "chatgpt" | "perplexity" | "google_aio" | "google_ai_mode";
 export const ENGINE_LABELS: Record<Engine, string> = {
   chatgpt: "ChatGPT",
@@ -318,9 +334,9 @@ export async function analyseAnswer(a: EngineAnswer): Promise<Analysis> {
   let position: number | null = null;
   let competitors: string[];
   if (named) {
-    const idx = named.findIndex((n) => BRAND_RE.test(n));
+    const idx = named.findIndex(isYou);
     position = idx >= 0 ? idx + 1 : null;
-    competitors = named.filter((n) => !BRAND_RE.test(n));
+    competitors = named.filter((n) => !isYou(n));
   } else {
     // No extractor: the cited sites are the best available competitor signal.
     competitors = Array.from(
@@ -572,16 +588,28 @@ function rowToResult(r: any): ResultRow {
       return d;
     }
   };
+  let competitors: string[] = parse(r.competitors, []);
+  let mentioned = Boolean(r.mentioned);
+  let position: number | null = r.position ?? null;
+  // Answers stored before the brokerage alias existed: "Synterra Realty"
+  // there is Spencer too. Competitors keep the answer's order (minus
+  // Spencer), so its index is his rank when he wasn't otherwise placed.
+  const alias = competitors.findIndex(isBrokerageAlias);
+  if (alias >= 0) {
+    competitors = competitors.filter((c) => !isBrokerageAlias(c));
+    if (position === null) position = alias + 1;
+    mentioned = true;
+  }
   return {
     promptId: r.prompt_id,
     prompt: r.prompt_text,
     engine: r.engine,
     answer: r.answer,
     citations: parse(r.citations, []),
-    mentioned: Boolean(r.mentioned),
+    mentioned,
     cited: Boolean(r.cited),
-    position: r.position ?? null,
-    competitors: parse(r.competitors, []),
+    position,
+    competitors,
     error: r.error ?? null,
     shown: r.shown !== 0,
   };
