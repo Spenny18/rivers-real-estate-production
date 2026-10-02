@@ -616,9 +616,12 @@ function rowToResult(r: any): ResultRow {
 }
 
 function engineSummary(rows: ResultRow[]) {
-  const by: Record<string, { engine: string; checked: number; mentioned: number; cited: number; errors: number; notShown: number }> = {};
+  const by: Record<
+    string,
+    { engine: string; checked: number; mentioned: number; cited: number; namedCited: number; errors: number; notShown: number }
+  > = {};
   for (const r of rows) {
-    const e = (by[r.engine] ??= { engine: r.engine, checked: 0, mentioned: 0, cited: 0, errors: 0, notShown: 0 });
+    const e = (by[r.engine] ??= { engine: r.engine, checked: 0, mentioned: 0, cited: 0, namedCited: 0, errors: 0, notShown: 0 });
     if (r.error) {
       e.errors++;
       continue;
@@ -630,6 +633,9 @@ function engineSummary(rows: ResultRow[]) {
     e.checked++;
     if (r.mentioned) e.mentioned++;
     if (r.cited) e.cited++;
+    // The headline: named in the answer AND linked as a source, so the
+    // reader can click straight through.
+    if (r.mentioned && r.cited) e.namedCited++;
   }
   return Object.values(by);
 }
