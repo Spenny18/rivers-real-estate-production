@@ -636,6 +636,19 @@ export async function registerRoutes(
   });
   app.get("/condos-calgary", (_req, res) => res.redirect(301, "/condos"));
 
+  // Sample blog posts removed in Oct 2026 (server/seed.ts removeSampleData):
+  // send their old URLs to the blog index rather than a 404.
+  for (const slug of [
+    "calgary-luxury-q1-2026-recap",
+    "upper-mount-royal-buyers-guide",
+    "pricing-a-luxury-listing",
+    "off-market-luxury-listings",
+    "renovating-vs-rebuilding-mount-royal",
+    "aspen-woods-vs-springbank-hill",
+  ]) {
+    app.get(`/blog/${slug}`, (_req, res) => res.redirect(301, "/blog"));
+  }
+
   // Neighbourhood URL patterns. WP uses /neighbourhood/aspen-woods-homes-for-sale,
   // React app uses /neighbourhoods/aspen-woods.
   app.get("/neighbourhood/:slug", (req, res) => {

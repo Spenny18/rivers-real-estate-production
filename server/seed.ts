@@ -2,10 +2,12 @@
 // (neighbourhoods, condos, migrated blog posts, booking defaults).
 // Idempotent — only runs when tables are empty.
 //
-// The original demo data (six invented listings, nine invented leads, eight
-// invented testimonials and their fallback MLS rows) is no longer inserted,
-// and removeSampleData() deletes any copies left in the database — they
-// were showing on the public site and inflating the admin analytics.
+// The original demo data (six invented listings, nine invented leads, their
+// fallback MLS rows and six sample blog posts) is no longer inserted, and
+// removeSampleData() deletes any copies left in the database — they were
+// showing on the public site and inflating the admin analytics.
+// Testimonials are kept as they are (Spencer's call); new ones are added in
+// the admin.
 
 import bcrypt from "bcryptjs";
 import { eq } from "drizzle-orm";
@@ -681,7 +683,7 @@ export function seedDatabase() {
   const existingSlugs = new Set(
     db.select({ slug: blogPosts.slug }).from(blogPosts).all().map((r) => r.slug),
   );
-  const ALL_BLOG_POSTS = [...SEED_BLOG_POSTS, ...MIGRATED_BLOG_POSTS];
+  const ALL_BLOG_POSTS = [...MIGRATED_BLOG_POSTS];
   let blogInserted = 0;
   for (const p of ALL_BLOG_POSTS) {
     if (existingSlugs.has(p.slug!)) continue;
@@ -708,7 +710,7 @@ export function seedDatabase() {
   }
   console.log(`[seed] Filled ${blogImagesFilled} missing blog featured images`);
 
-  // 6. Testimonials: only real ones, added in the admin (demo ones removed above).
+  // 6. Testimonials: managed in the admin; nothing is inserted here.
 
   // 7. No fallback MLS rows: the RETS sync is the only source of MLS data.
 
@@ -767,19 +769,17 @@ export function removeSampleData(): void {
         listingsRemoved += sqlite.prepare("DELETE FROM listings WHERE id = ?").run(l.id).changes;
       }
       const mlsRemoved = sqlite.prepare("DELETE FROM mls_listings WHERE source = 'seed'").run().changes;
-      let testimonialsRemoved = 0;
-      for (const t of SAMPLE_TESTIMONIALS) {
-        testimonialsRemoved += sqlite
-          .prepare("DELETE FROM testimonials WHERE author_name = ? AND author_role = ? AND body = ?")
-          .run(t.authorName, t.authorRole, t.body).changes;
+      let postsRemoved = 0;
+      for (const p of SAMPLE_BLOG_POSTS) {
+        postsRemoved += sqlite.prepare("DELETE FROM blog_posts WHERE slug = ? AND title = ?").run(p.slug, p.title).changes;
       }
-      return { leadsRemoved, listingsRemoved, mlsRemoved, testimonialsRemoved };
+      return { leadsRemoved, listingsRemoved, mlsRemoved, postsRemoved };
     });
     const r = tx();
-    if (r.leadsRemoved || r.listingsRemoved || r.mlsRemoved || r.testimonialsRemoved) {
+    if (r.leadsRemoved || r.listingsRemoved || r.mlsRemoved || r.postsRemoved) {
       console.log(
         `[seed] Removed sample data: ${r.listingsRemoved} listings, ${r.leadsRemoved} leads, ` +
-          `${r.mlsRemoved} fallback MLS rows, ${r.testimonialsRemoved} testimonials`,
+          `${r.mlsRemoved} fallback MLS rows, ${r.postsRemoved} blog posts`,
       );
       if (r.mlsRemoved) storage.refreshNeighbourhoodActiveCounts();
     }
@@ -1002,7 +1002,9 @@ const SEED_NEIGHBOURHOODS = [
   },
 ];
 
-const SEED_BLOG_POSTS = [
+// Sample posts from the first version of the site (one with invented market
+// figures). Not inserted any more; kept so removeSampleData() can delete them.
+const SAMPLE_BLOG_POSTS = [
   {
     slug: "calgary-luxury-q1-2026-recap",
     title: "Q1 2026: Calgary Luxury Recap",
@@ -1101,61 +1103,3 @@ const SEED_BLOG_POSTS = [
   },
 ];
 
-const SAMPLE_TESTIMONIALS = [
-  {
-    authorName: "Jane & Marcus W.",
-    authorRole: "Upper Mount Royal Sellers",
-    rating: 5,
-    body: "Spencer sold our Upper Mount Royal home off-market in 14 days, $200K above what two other agents had quoted. He was direct, prepared, and never wasted our time. Highest recommendation.",
-    sortOrder: 1,
-  },
-  {
-    authorName: "David L.",
-    authorRole: "Aspen Woods Buyer",
-    rating: 5,
-    body: "We were relocating from Toronto and needed an agent who actually knew the difference between Calgary's communities. Spencer walked us through Aspen, Springbank, and Mount Royal in two days and helped us land a home that hadn't hit MLS yet.",
-    sortOrder: 2,
-  },
-  {
-    authorName: "Priya & Anand R.",
-    authorRole: "Elbow Park Buyers",
-    rating: 5,
-    body: "What stood out was the data. Spencer ran the comps live during our showing and explained exactly why one house was priced right and the other wasn't. We ended up writing on the right one.",
-    sortOrder: 3,
-  },
-  {
-    authorName: "Robert T.",
-    authorRole: "Britannia Seller",
-    rating: 5,
-    body: "Six other agents told us we should list at $2.8M. Spencer told us $3.1M was supportable if we addressed three specific items. We sold at $3.05M in eleven days.",
-    sortOrder: 4,
-  },
-  {
-    authorName: "Hannah B.",
-    authorRole: "Bel-Aire Buyer",
-    rating: 5,
-    body: "Spencer is the rare agent who will tell you not to write on a house. He talked us out of two offers and into the right one. We've been in our Bel-Aire home for two years and still feel he saved us a million dollars in regret.",
-    sortOrder: 5,
-  },
-  {
-    authorName: "James W.",
-    authorRole: "Springbank Hill Seller",
-    rating: 5,
-    body: "Sold our home in eight days. The marketing package — photos, video, the listing copy itself — was at a different level than what other agents had shown us.",
-    sortOrder: 6,
-  },
-  {
-    authorName: "Sofia M.",
-    authorRole: "Aspen Woods Seller & Buyer",
-    rating: 5,
-    body: "Spencer represented us on both sides of a move within Aspen. The execution on both transactions was clean — he negotiated firm on our sale and patient on our purchase, exactly as the situation needed.",
-    sortOrder: 7,
-  },
-  {
-    authorName: "Ken & Lila P.",
-    authorRole: "Mount Royal Sellers",
-    rating: 5,
-    body: "We had a heritage home with restrictions on what could be advertised. Spencer ran a quiet, controlled process — three private showings, two offers, sale closed in 23 days at full ask.",
-    sortOrder: 8,
-  },
-];
