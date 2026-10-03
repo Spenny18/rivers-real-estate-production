@@ -636,6 +636,19 @@ export async function registerRoutes(
   });
   app.get("/condos-calgary", (_req, res) => res.redirect(301, "/condos"));
 
+  // Sample blog posts removed in Oct 2026 (server/seed.ts removeSampleData):
+  // send their old URLs to the blog index rather than a 404.
+  for (const slug of [
+    "calgary-luxury-q1-2026-recap",
+    "upper-mount-royal-buyers-guide",
+    "pricing-a-luxury-listing",
+    "off-market-luxury-listings",
+    "renovating-vs-rebuilding-mount-royal",
+    "aspen-woods-vs-springbank-hill",
+  ]) {
+    app.get(`/blog/${slug}`, (_req, res) => res.redirect(301, "/blog"));
+  }
+
   // Neighbourhood URL patterns. WP uses /neighbourhood/aspen-woods-homes-for-sale,
   // React app uses /neighbourhoods/aspen-woods.
   app.get("/neighbourhood/:slug", (req, res) => {
@@ -4038,10 +4051,10 @@ export async function registerRoutes(
     const nbMap = new Map<string, number>();
     for (const l of allLeads) {
       if (!l.listingId) continue;
-      const lst = storage.getListingById(l.listingId);
-      if (lst?.neighbourhood) {
-        nbMap.set(lst.neighbourhood, (nbMap.get(lst.neighbourhood) ?? 0) + 1);
-      }
+      // Managed listing first, then an MLS listing (showing requests and
+      // unlocks on MLS pages carry the MLS id).
+      const hood = storage.getListingById(l.listingId)?.neighbourhood ?? storage.getMlsListingById(l.listingId)?.neighbourhood;
+      if (hood) nbMap.set(hood, (nbMap.get(hood) ?? 0) + 1);
     }
     const neighbourhoods = Array.from(nbMap.entries())
       .sort((a, b) => b[1] - a[1])

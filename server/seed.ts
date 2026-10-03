@@ -1,9 +1,17 @@
-// Seed the database with Spencer's user + the six luxury Calgary listings
-// + nine sample leads. Idempotent — only runs when tables are empty.
+// Seed the database with Spencer's user and the site's real content
+// (neighbourhoods, condos, migrated blog posts, booking defaults).
+// Idempotent — only runs when tables are empty.
+//
+// The original demo data (six invented listings, nine invented leads, their
+// fallback MLS rows and six sample blog posts) is no longer inserted, and
+// removeSampleData() deletes any copies left in the database — they were
+// showing on the public site and inflating the admin analytics.
+// Testimonials are kept as they are (Spencer's call); new ones are added in
+// the admin.
 
 import bcrypt from "bcryptjs";
 import { eq } from "drizzle-orm";
-import { db, storage } from "./storage";
+import { db, storage, sqlite } from "./storage";
 import {
   users,
   listings,
@@ -20,7 +28,9 @@ import { applyNeighbourhoodImages } from "./neighbourhood-images";
 import { MIGRATED_BLOG_POSTS } from "./seed-migrated-blog-posts";
 import { CONDO_CONTENT_PATCHES } from "./seed-migrated-condos";
 
-const SEED_LISTINGS = [
+// Demo data from the first version of the site. Not inserted any more; kept
+// only so removeSampleData() can recognise and delete leftover copies.
+const SAMPLE_LISTINGS = [
   {
     id: "l-001",
     slug: "82-aspen-summit-circle-sw",
@@ -236,7 +246,7 @@ const SEED_LISTINGS = [
   },
 ];
 
-const SEED_LEADS = [
+const SAMPLE_LEADS = [
   {
     listingId: "l-001",
     name: "Marcus Chen",
@@ -336,35 +346,8 @@ export function seedDatabase() {
     console.log("[seed] Created Spencer Rivers user (id=" + spencer.id + ")");
   }
 
-  // 2. Listings
-  const existingListings = db.select().from(listings).all();
-  if (existingListings.length === 0) {
-    for (const l of SEED_LISTINGS) {
-      storage.createListing(l, spencer.id);
-    }
-    // Set views explicitly (createListing won't honor views)
-    for (const l of SEED_LISTINGS) {
-      db.update(listings).set({ views: l.views }).where(eq(listings.id, l.id)).run();
-    }
-    console.log("[seed] Inserted " + SEED_LISTINGS.length + " listings");
-  }
-
-  // 3. Leads
-  const existingLeads = db.select().from(leads).all();
-  if (existingLeads.length === 0) {
-    for (const ld of SEED_LEADS) {
-      storage.createLead({
-        listingId: ld.listingId,
-        name: ld.name,
-        email: ld.email,
-        phone: ld.phone,
-        message: ld.message,
-        source: ld.source,
-        status: ld.status,
-      } as any);
-    }
-    console.log("[seed] Inserted " + SEED_LEADS.length + " leads");
-  }
+  // 2–3. Listings and leads: no demo rows; remove any left from earlier boots.
+  removeSampleData();
 
   // ---- One-time neighbourhood corrections (idempotent on each boot) ----
   // Spencer asked for several content cleanups after the initial roll-out:
@@ -700,7 +683,7 @@ export function seedDatabase() {
   const existingSlugs = new Set(
     db.select({ slug: blogPosts.slug }).from(blogPosts).all().map((r) => r.slug),
   );
-  const ALL_BLOG_POSTS = [...SEED_BLOG_POSTS, ...MIGRATED_BLOG_POSTS];
+  const ALL_BLOG_POSTS = [...MIGRATED_BLOG_POSTS];
   let blogInserted = 0;
   for (const p of ALL_BLOG_POSTS) {
     if (existingSlugs.has(p.slug!)) continue;
@@ -727,62 +710,9 @@ export function seedDatabase() {
   }
   console.log(`[seed] Filled ${blogImagesFilled} missing blog featured images`);
 
-  // 6. Testimonials
-  const existingTestimonials = db.select().from(testimonials).all();
-  if (existingTestimonials.length === 0) {
-    for (const t of SEED_TESTIMONIALS) {
-      db.insert(testimonials).values(t).run();
-    }
-    console.log("[seed] Inserted " + SEED_TESTIMONIALS.length + " testimonials");
-  }
+  // 6. Testimonials: managed in the admin; nothing is inserted here.
 
-  // 7. Fallback MLS listings — populated from the editorial six so the public
-  //    site always has content even if the RETS sync hasn't run yet.
-  const existingMls = db.select().from(mlsListings).all();
-  if (existingMls.length === 0) {
-    const POSTAL_BY_HOOD: Record<string, string> = {
-      "Aspen Woods": "T3H 0V8",
-      "Upper Mount Royal": "T2T 1J3",
-      "Elbow Park": "T2S 0K6",
-      "Britannia": "T2S 1J6",
-      "Bel-Aire": "T2V 2C1",
-      "Springbank Hill": "T3H 5K8",
-    };
-    for (const l of SEED_LISTINGS) {
-      const id = `MLS-${l.id.toUpperCase()}`;
-      db.insert(mlsListings)
-        .values({
-          id,
-          mlsNumber: id,
-          status: l.status === "sold" ? "Sold" : "Active",
-          listPrice: l.price,
-          soldPrice: l.status === "sold" ? l.price : null,
-          fullAddress: `${l.address}, Calgary, AB`,
-          neighbourhood: l.neighbourhood,
-          city: "Calgary",
-          province: "AB",
-          postalCode: POSTAL_BY_HOOD[l.neighbourhood] ?? null,
-          lat: l.lat,
-          lng: l.lng,
-          propertyType: l.type === "Single Family" ? "Detached" : l.type,
-          beds: l.beds,
-          baths: l.baths,
-          sqft: l.sqft,
-          lotSize: l.lotSize,
-          yearBuilt: l.yearBuilt,
-          description: l.description,
-          features: JSON.stringify(l.features),
-          heroImage: l.heroImage,
-          gallery: JSON.stringify(l.gallery ?? []),
-          photoCount: (l.gallery?.length ?? 0) + 1,
-          source: "seed",
-          listDate: new Date(Date.now() - Math.floor(Math.random() * 30) * 86400000).toISOString(),
-        })
-        .run();
-    }
-    console.log("[seed] Inserted " + SEED_LISTINGS.length + " fallback MLS listings");
-    storage.refreshNeighbourhoodActiveCounts();
-  }
+  // 7. No fallback MLS rows: the RETS sync is the only source of MLS data.
 
   // Curated CC photo heroes + attribution (fill/repair only — never clobbers
   // a CMS-set hero; see server/neighbourhood-images.ts).
@@ -812,6 +742,49 @@ export function seedDatabase() {
     }
   } catch (err) {
     console.error("[seed] booking defaults failed:", err);
+  }
+}
+
+/**
+ * Delete the demo rows earlier versions seeded. Each is matched on its exact
+ * invented details, so anything real (or a demo row Spencer has since edited
+ * into a real one) is left alone. Idempotent: a no-op once they're gone.
+ */
+export function removeSampleData(): void {
+  try {
+    const tx = sqlite.transaction(() => {
+      let leadsRemoved = 0;
+      for (const ld of SAMPLE_LEADS) {
+        leadsRemoved += sqlite
+          .prepare("DELETE FROM leads WHERE name = ? AND email = ? AND message = ?")
+          .run(ld.name, ld.email, ld.message).changes;
+      }
+      let listingsRemoved = 0;
+      for (const l of SAMPLE_LISTINGS) {
+        const row = sqlite.prepare("SELECT id FROM listings WHERE id = ? AND address = ? AND price = ?").get(l.id, l.address, l.price);
+        if (!row) continue;
+        // Real enquiries made on a demo listing stay, unlinked from it.
+        sqlite.prepare("UPDATE leads SET listing_id = NULL WHERE listing_id = ?").run(l.id);
+        sqlite.prepare("DELETE FROM tours WHERE listing_id = ?").run(l.id);
+        listingsRemoved += sqlite.prepare("DELETE FROM listings WHERE id = ?").run(l.id).changes;
+      }
+      const mlsRemoved = sqlite.prepare("DELETE FROM mls_listings WHERE source = 'seed'").run().changes;
+      let postsRemoved = 0;
+      for (const p of SAMPLE_BLOG_POSTS) {
+        postsRemoved += sqlite.prepare("DELETE FROM blog_posts WHERE slug = ? AND title = ?").run(p.slug, p.title).changes;
+      }
+      return { leadsRemoved, listingsRemoved, mlsRemoved, postsRemoved };
+    });
+    const r = tx();
+    if (r.leadsRemoved || r.listingsRemoved || r.mlsRemoved || r.postsRemoved) {
+      console.log(
+        `[seed] Removed sample data: ${r.listingsRemoved} listings, ${r.leadsRemoved} leads, ` +
+          `${r.mlsRemoved} fallback MLS rows, ${r.postsRemoved} blog posts`,
+      );
+      if (r.mlsRemoved) storage.refreshNeighbourhoodActiveCounts();
+    }
+  } catch (err) {
+    console.error("[seed] removeSampleData failed:", err);
   }
 }
 
@@ -1029,7 +1002,9 @@ const SEED_NEIGHBOURHOODS = [
   },
 ];
 
-const SEED_BLOG_POSTS = [
+// Sample posts from the first version of the site (one with invented market
+// figures). Not inserted any more; kept so removeSampleData() can delete them.
+const SAMPLE_BLOG_POSTS = [
   {
     slug: "calgary-luxury-q1-2026-recap",
     title: "Q1 2026: Calgary Luxury Recap",
@@ -1128,61 +1103,3 @@ const SEED_BLOG_POSTS = [
   },
 ];
 
-const SEED_TESTIMONIALS = [
-  {
-    authorName: "Jane & Marcus W.",
-    authorRole: "Upper Mount Royal Sellers",
-    rating: 5,
-    body: "Spencer sold our Upper Mount Royal home off-market in 14 days, $200K above what two other agents had quoted. He was direct, prepared, and never wasted our time. Highest recommendation.",
-    sortOrder: 1,
-  },
-  {
-    authorName: "David L.",
-    authorRole: "Aspen Woods Buyer",
-    rating: 5,
-    body: "We were relocating from Toronto and needed an agent who actually knew the difference between Calgary's communities. Spencer walked us through Aspen, Springbank, and Mount Royal in two days and helped us land a home that hadn't hit MLS yet.",
-    sortOrder: 2,
-  },
-  {
-    authorName: "Priya & Anand R.",
-    authorRole: "Elbow Park Buyers",
-    rating: 5,
-    body: "What stood out was the data. Spencer ran the comps live during our showing and explained exactly why one house was priced right and the other wasn't. We ended up writing on the right one.",
-    sortOrder: 3,
-  },
-  {
-    authorName: "Robert T.",
-    authorRole: "Britannia Seller",
-    rating: 5,
-    body: "Six other agents told us we should list at $2.8M. Spencer told us $3.1M was supportable if we addressed three specific items. We sold at $3.05M in eleven days.",
-    sortOrder: 4,
-  },
-  {
-    authorName: "Hannah B.",
-    authorRole: "Bel-Aire Buyer",
-    rating: 5,
-    body: "Spencer is the rare agent who will tell you not to write on a house. He talked us out of two offers and into the right one. We've been in our Bel-Aire home for two years and still feel he saved us a million dollars in regret.",
-    sortOrder: 5,
-  },
-  {
-    authorName: "James W.",
-    authorRole: "Springbank Hill Seller",
-    rating: 5,
-    body: "Sold our home in eight days. The marketing package — photos, video, the listing copy itself — was at a different level than what other agents had shown us.",
-    sortOrder: 6,
-  },
-  {
-    authorName: "Sofia M.",
-    authorRole: "Aspen Woods Seller & Buyer",
-    rating: 5,
-    body: "Spencer represented us on both sides of a move within Aspen. The execution on both transactions was clean — he negotiated firm on our sale and patient on our purchase, exactly as the situation needed.",
-    sortOrder: 7,
-  },
-  {
-    authorName: "Ken & Lila P.",
-    authorRole: "Mount Royal Sellers",
-    rating: 5,
-    body: "We had a heritage home with restrictions on what could be advertised. Spencer ran a quiet, controlled process — three private showings, two offers, sale closed in 23 days at full ask.",
-    sortOrder: 8,
-  },
-];

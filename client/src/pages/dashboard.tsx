@@ -28,7 +28,7 @@ import {
   YAxis,
 } from "recharts";
 import { useAuth } from "@/lib/auth";
-import { formatPriceCompact, timeAgo, getViewsSeries, getLeadsByDay } from "@/lib/mock-data";
+import { formatPriceCompact, timeAgo } from "@/lib/mock-data";
 import type { PublicListing } from "@/lib/types";
 import type { Lead } from "@shared/schema";
 
@@ -43,24 +43,72 @@ export default function DashboardPage() {
   const listingsQuery = useQuery<PublicListing[]>({ queryKey: ["/api/listings"] });
   const leadsQuery = useQuery<Lead[]>({ queryKey: ["/api/leads"] });
 
+  // Site traffic from Google Analytics (last 30 days, with a daily series).
+  const traffic = useQuery<{ ga4: { ok: boolean; message?: string; summary?: { users: number; sessions: number }; daily?: { date: string; sessions: number }[] } }>({
+    queryKey: ["/api/analytics/seo-stats", { days: 30 }],
+    queryFn: async () => {
+      const r = await fetch(`/api/analytics/seo-stats?days=30`, { credentials: "include" });
+      if (!r.ok) throw new Error(`seo-stats ${r.status}`);
+      return r.json();
+    },
+  });
+
   const listings = listingsQuery.data ?? [];
   const leads = leadsQuery.data ?? [];
   const activeListings = listings.filter((l) => l.status === "active");
   const newLeadCount = leads.filter((l) => l.status === "new").length;
-  const totalViews = listings.reduce((sum, l) => sum + (l.views ?? 0), 0);
-  const conversionRate = totalViews > 0 ? ((leads.length / totalViews) * 100).toFixed(1) : "0";
 
-  const viewsSeries = getViewsSeries();
-  const leadsSeries = getLeadsByDay();
+  // Leads in the last 30 days vs the 30 before, from the real lead records.
+  const DAY = 86_400_000;
+  const now = Date.now();
+  const leadsIn = (fromDaysAgo: number, toDaysAgo: number) =>
+    leads.filter((l) => {
+      const t = Date.parse(l.createdAt);
+      return t > now - fromDaysAgo * DAY && t <= now - toDaysAgo * DAY;
+    }).length;
+  const leads30 = leadsIn(30, 0);
+  const leadsPrev30 = leadsIn(60, 30);
+  const leadsDelta = leadsPrev30 > 0 ? Math.round(((leads30 - leadsPrev30) / leadsPrev30) * 1000) / 10 : null;
+
+  const ga4 = traffic.data?.ga4;
+  const visitors30 = ga4?.ok ? ga4.summary?.users ?? 0 : null;
+  const conversionRate = visitors30 ? ((leads30 / visitors30) * 100).toFixed(1) : null;
+
+  // Last 14 days: site visits (GA4) and new enquiries (lead records).
+  const dayKey = (t: number) => new Date(t).toISOString().slice(0, 10);
+  const last14 = Array.from({ length: 14 }, (_, i) => dayKey(now - (13 - i) * DAY));
+  const dayLabel = (k: string) => new Date(`${k}T12:00:00`).toLocaleDateString("en-CA", { month: "short", day: "numeric" });
+  const sessionsByDay = new Map((ga4?.daily ?? []).map((d) => [d.date, d.sessions]));
+  const viewsSeries = last14.map((k) => ({ day: dayLabel(k), visits: sessionsByDay.get(k) ?? 0 }));
+  const leadsByDay = new Map<string, number>();
+  for (const l of leads) {
+    const k = dayKey(Date.parse(l.createdAt));
+    leadsByDay.set(k, (leadsByDay.get(k) ?? 0) + 1);
+  }
+  const leadsSeries = last14.map((k) => ({ day: dayLabel(k), leads: leadsByDay.get(k) ?? 0 }));
 
   const recentLeads = [...leads].slice(0, 4);
   const topListings = [...activeListings].sort((a, b) => b.views - a.views).slice(0, 3);
 
-  const kpis = [
-    { label: "Active Listings", value: activeListings.length.toString(), delta: 33, hint: "vs last month", icon: Home },
-    { label: "Total Views", value: totalViews.toLocaleString(), delta: 18.2, hint: "vs last 30d", icon: Eye },
-    { label: "New Leads", value: newLeadCount.toString(), delta: 27.8, hint: "vs last 30d", icon: Users },
-    { label: "Conversion", value: `${conversionRate}%`, delta: -0.6, hint: "vs last 30d", icon: TrendingUp },
+  // Every figure here comes from real records; a change is shown only
+  // where there's a real previous period to compare against.
+  const kpis: { label: string; value: string; delta: number | null; hint: string; icon: typeof Home }[] = [
+    { label: "Active Listings", value: activeListings.length.toString(), delta: null, hint: "your managed listings", icon: Home },
+    {
+      label: "Site Visitors",
+      value: visitors30 === null ? "—" : visitors30.toLocaleString(),
+      delta: null,
+      hint: visitors30 === null ? "Google Analytics not connected" : "last 30 days · Google Analytics",
+      icon: Eye,
+    },
+    { label: "New Leads", value: leads30.toString(), delta: leadsDelta, hint: leadsDelta === null ? "last 30 days" : "vs previous 30 days", icon: Users },
+    {
+      label: "Conversion",
+      value: conversionRate === null ? "—" : `${conversionRate}%`,
+      delta: null,
+      hint: "leads ÷ site visitors, last 30 days",
+      icon: TrendingUp,
+    },
   ];
 
   const greetingTime = (() => {
@@ -101,7 +149,7 @@ export default function DashboardPage() {
         {/* KPIs */}
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
           {kpis.map((kpi) => {
-            const positive = kpi.delta >= 0;
+            const positive = (kpi.delta ?? 0) >= 0;
             const Icon = kpi.icon;
             return (
               <Card key={kpi.label} data-testid={`kpi-${kpi.label.toLowerCase().replace(/\s/g, "-")}`}>
@@ -116,14 +164,16 @@ export default function DashboardPage() {
                     </span>
                   </div>
                   <div className="mt-2 flex items-center gap-1.5 text-xs">
-                    <span
-                      className={`inline-flex items-center gap-0.5 font-medium ${
-                        positive ? "text-emerald-700 dark:text-emerald-400" : "text-rose-700 dark:text-rose-400"
-                      }`}
-                    >
-                      {positive ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
-                      {Math.abs(kpi.delta)}%
-                    </span>
+                    {kpi.delta !== null && (
+                      <span
+                        className={`inline-flex items-center gap-0.5 font-medium ${
+                          positive ? "text-emerald-700 dark:text-emerald-400" : "text-rose-700 dark:text-rose-400"
+                        }`}
+                      >
+                        {positive ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+                        {Math.abs(kpi.delta)}%
+                      </span>
+                    )}
                     <span className="text-muted-foreground">{kpi.hint}</span>
                   </div>
                 </CardContent>
@@ -138,10 +188,11 @@ export default function DashboardPage() {
             <CardContent className="p-5">
               <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h3 className="font-serif text-lg" style={{ letterSpacing: "-0.01em" }}>Views, last 7 days</h3>
-                  <p className="eyebrow text-muted-foreground mt-1">Across active listings</p>
+                  <h3 className="font-serif text-lg" style={{ letterSpacing: "-0.01em" }}>Site visits, last 14 days</h3>
+                  <p className="eyebrow text-muted-foreground mt-1">
+                    {ga4 && !ga4.ok ? "Google Analytics isn't connected" : "Sessions · Google Analytics"}
+                  </p>
                 </div>
-                <Badge variant="outline" className="text-xs rounded-sm">+18.2%</Badge>
               </div>
               <div className="h-[240px]">
                 <ResponsiveContainer width="100%" height="100%">
@@ -163,7 +214,7 @@ export default function DashboardPage() {
                         fontSize: "12px",
                       }}
                     />
-                    <Area type="monotone" dataKey="views" stroke="hsl(var(--foreground))" strokeWidth={1.5} fill="url(#viewsGrad)" />
+                    <Area type="monotone" dataKey="visits" stroke="hsl(var(--foreground))" strokeWidth={1.5} fill="url(#viewsGrad)" />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
@@ -175,7 +226,7 @@ export default function DashboardPage() {
               <div className="flex items-center justify-between mb-4">
                 <div>
                   <h3 className="font-serif text-lg" style={{ letterSpacing: "-0.01em" }}>New enquiries</h3>
-                  <p className="eyebrow text-muted-foreground mt-1">Captured per day</p>
+                  <p className="eyebrow text-muted-foreground mt-1">Per day, last 14 days</p>
                 </div>
               </div>
               <div className="h-[240px]">
@@ -211,7 +262,13 @@ export default function DashboardPage() {
               <div className="space-y-1">
                 {listingsQuery.isLoading
                   ? [0, 1, 2].map((i) => <Skeleton key={i} className="h-16 w-full" />)
-                  : topListings.map((listing) => (
+                  : topListings.length === 0
+                    ? (
+                        <div className="text-sm text-muted-foreground py-6">
+                          No managed listings yet. <Link href="/admin/listings/new" className="underline">Add your first listing</Link>.
+                        </div>
+                      )
+                    : topListings.map((listing) => (
                       <Link
                         key={listing.id}
                         href={`/admin/listings/${listing.id}`}
