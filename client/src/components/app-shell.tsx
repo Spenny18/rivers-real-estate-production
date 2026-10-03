@@ -333,27 +333,6 @@ export function AppShell({
           {secondaryNav.map((item) => renderLeaf(item))}
         </nav>
 
-        {/* Plan card */}
-        <div className="p-3">
-          <div className="rounded-sm p-4 border border-sidebar-border bg-sidebar-accent/30">
-            <div className="flex items-center gap-2">
-              <span className="w-1.5 h-1.5 rounded-full gold-gradient" style={{ background: "linear-gradient(135deg, #B8893D, #D4AF37, #B8893D)" }} />
-              <span className="font-display text-[10px] tracking-[0.22em] text-sidebar-foreground/75">
-                TRIFECTA PLAN
-              </span>
-            </div>
-            <div className="mt-2 text-[12px] text-sidebar-foreground/65 leading-snug">
-              2 of 3 listings active · 64 days left
-            </div>
-            <div className="mt-3 h-px bg-sidebar-border relative overflow-hidden">
-              <div
-                className="absolute inset-y-0 left-0 bg-white"
-                style={{ width: "67%" }}
-              />
-            </div>
-          </div>
-        </div>
-
         {/* User */}
         <div className="p-3 border-t border-sidebar-border">
           <div className="flex items-center gap-3 px-2 py-2">

@@ -4038,10 +4038,10 @@ export async function registerRoutes(
     const nbMap = new Map<string, number>();
     for (const l of allLeads) {
       if (!l.listingId) continue;
-      const lst = storage.getListingById(l.listingId);
-      if (lst?.neighbourhood) {
-        nbMap.set(lst.neighbourhood, (nbMap.get(lst.neighbourhood) ?? 0) + 1);
-      }
+      // Managed listing first, then an MLS listing (showing requests and
+      // unlocks on MLS pages carry the MLS id).
+      const hood = storage.getListingById(l.listingId)?.neighbourhood ?? storage.getMlsListingById(l.listingId)?.neighbourhood;
+      if (hood) nbMap.set(hood, (nbMap.get(hood) ?? 0) + 1);
     }
     const neighbourhoods = Array.from(nbMap.entries())
       .sort((a, b) => b[1] - a[1])

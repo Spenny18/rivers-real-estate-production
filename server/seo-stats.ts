@@ -159,6 +159,8 @@ export interface SeoStatsPayload {
     };
     topPages?: { path: string; pageviews: number; users: number }[];
     sources?: { source: string; sessions: number; users: number }[];
+    /** One row per day in the range, oldest first (YYYY-MM-DD). */
+    daily?: { date: string; sessions: number; users: number }[];
   };
 }
 
@@ -258,7 +260,7 @@ async function fetchGa4Block(
   days: number,
 ): Promise<SeoStatsPayload["ga4"]> {
   const dateRanges = [{ startDate: `${days}daysAgo`, endDate: "today" }];
-  const [summary, topPages, sources] = await Promise.all([
+  const [summary, topPages, sources, daily] = await Promise.all([
     ga4Report(token, propertyId, {
       dateRanges,
       metrics: [
@@ -281,6 +283,13 @@ async function fetchGa4Block(
       metrics: [{ name: "sessions" }, { name: "totalUsers" }],
       orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
       limit: 10,
+    }),
+    ga4Report(token, propertyId, {
+      dateRanges,
+      dimensions: [{ name: "date" }],
+      metrics: [{ name: "sessions" }, { name: "totalUsers" }],
+      orderBys: [{ dimension: { dimensionName: "date" } }],
+      limit: 400,
     }),
   ]);
   const sum = summary.rows?.[0]?.metricValues ?? [];
@@ -307,6 +316,14 @@ async function fetchGa4Block(
       sessions: Number(r.metricValues?.[0]?.value ?? 0),
       users: Number(r.metricValues?.[1]?.value ?? 0),
     })),
+    daily: (daily.rows ?? []).map((r: any) => {
+      const d = String(r.dimensionValues?.[0]?.value ?? ""); // YYYYMMDD
+      return {
+        date: `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`,
+        sessions: Number(r.metricValues?.[0]?.value ?? 0),
+        users: Number(r.metricValues?.[1]?.value ?? 0),
+      };
+    }),
   };
 }
 
