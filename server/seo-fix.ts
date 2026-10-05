@@ -55,6 +55,7 @@ import {
 import type { Opportunity } from "./seo-opportunities";
 import type { ClusterAudit, ClusterCandidate } from "./seo-architecture";
 import { questionContext, hostOf, ENGINE_LABELS, type QuestionContext } from "./ai-visibility";
+import { markPagesChanged } from "./recrawl";
 
 /** Claude Opus 5 unless overridden. */
 const MODEL = process.env.SEO_FIX_MODEL?.trim() || "claude-opus-5";
@@ -1530,7 +1531,10 @@ export async function applyFix(id: number, indexes: number[]): Promise<FixPropos
     snapshot,
     ...(ok ? { appliedAt: new Date().toISOString() } : {}),
   });
-  if (ok) afterWrite();
+  if (ok) {
+    afterWrite();
+    markPagesChanged(livePathsChanged(snapshot));
+  }
   return getFixProposal(id)!;
 }
 
@@ -1637,6 +1641,7 @@ export function undoFix(id: number, force = false): { proposal: FixProposalRow; 
 
   updateFixProposal(id, { status: "undone" });
   afterWrite();
+  markPagesChanged(livePathsChanged(snapshot));
   return { proposal: getFixProposal(id)!, skipped };
 }
 
@@ -1663,6 +1668,28 @@ export function dismissFix(id: number): FixProposalRow {
   }
   updateFixProposal(id, { status: "dismissed" });
   return getFixProposal(id)!;
+}
+
+/** Public pages whose served content a set of changes altered — what search
+ *  engines should be asked to recrawl. Focus keywords and clusters are
+ *  internal, drafts aren't public, and an issue changes nothing until its
+ *  pull request deploys (boot resubmits the sitemap, at most once a day). */
+function livePathsChanged(snaps: SnapshotEntry[]): string[] {
+  const out = new Set<string>();
+  for (const s of snaps) {
+    switch (s.kind) {
+      case "meta": out.add(s.path); break;
+      case "home_meta": out.add("/"); break;
+      case "blog":
+        // Published before or after: a post going live, changing, or being
+        // unpublished are all news to a crawler. Draft-to-draft edits aren't.
+        if (s.before.status !== "draft" || s.after.status !== "draft") out.add(`/blog/${s.slug}`);
+        break;
+      case "entity": out.add(`/${s.entity === "condo" ? "condos" : "neighbourhoods"}/${s.slug}`); break;
+      case "redirect": out.add(s.from); break;
+    }
+  }
+  return Array.from(out);
 }
 
 /** Content changed: drop cached HTML everywhere (redirects and links touch
