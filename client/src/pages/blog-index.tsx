@@ -44,6 +44,14 @@ export default function BlogIndexPage() {
           Calgary luxury real estate, from someone who actually works it.
         </h1>
         <p className="mt-5 max-w-2xl text-muted-foreground text-[15px] leading-relaxed">
+          Start here:{" "}
+          <Link href="/blog/how-to-choose-a-luxury-real-estate-agent-in-calgary">
+            how to choose a luxury real estate agent in Calgary
+          </Link>{" "}
+          — the seven criteria, ten interview questions and red flags Spencer
+          Rivers, REALTOR®, CLHMS uses himself.
+        </p>
+        <p className="mt-5 max-w-2xl text-muted-foreground text-[15px] leading-relaxed">
           Pricing strategy, neighbourhood intelligence, market data, and the
           occasional opinion — written by Spencer for buyers and sellers in
           Calgary's most established communities.
