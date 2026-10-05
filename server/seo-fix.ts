@@ -309,7 +309,7 @@ function resolveSubject(subject: FixSubject, report: SeoReport): ResolvedSubject
   return { kind: "page", paths: [page.path], opportunity: null, label: `Improve ${page.path}` };
 }
 
-function describePage(page: PageAnalysis): string {
+function describePage(page: PageAnalysis, locked: string | null = null): string {
   const ctx = lastReportContext();
   const rows = (ctx?.gscByPath.get(page.path) ?? [])
     .slice()
@@ -332,6 +332,9 @@ function describePage(page: PageAnalysis): string {
   lines.push(`Meta description (${page.description.length} chars): ${page.description}`);
   lines.push(`H1: ${page.h1}`);
   lines.push(`Focus keyword: ${page.focusKeyword || "(none)"}${page.focusSource === "override" ? " (set by hand)" : " (derived from title)"}`);
+  if (locked) {
+    lines.push(`LOCKED: this is ${locked}. Its title, description and focus keyword serve every query below and must not change in this fix (set_meta, set_focus_keyword and title/excerpt edits on it will be rejected). Improve it through body copy, FAQ answers and internal links only.`);
+  }
   lines.push(`Score ${page.score}/100. Missing: ${page.components.filter((c) => c.earned < c.max).map((c) => `${c.label} — ${c.detail}`).join("; ") || "nothing"}`);
   if (page.issues.length) lines.push(`Issues: ${page.issues.join("; ")}`);
   lines.push(`Editorial links in (${page.inboundLinks.length}): ${page.inboundLinks.join(", ") || "none"}`);
@@ -506,7 +509,7 @@ Goal: make Spencer Rivers a name ChatGPT, Perplexity and Google's AI answers giv
 2. Add a question-and-answer block. On blog posts, use edit_blog to add or extend a "## Frequently Asked Questions" section with "### <the question>" followed by a 2–4 sentence answer. The site turns that section into FAQPage schema automatically, which is the structured data AI engines read. On pages whose copy lives in code (e.g. /work-with/*, which already has FAQ arrays that emit FAQPage schema), use code_change to add the Q&A to that page's FAQ list.
 3. Add internal links to the page that answers it from related posts (edit_blog), with anchor text close to the question.
 4. If no existing page genuinely answers this question, create one draft (create_blog_draft) that answers it in the first paragraph, has a FAQ section as above, and links to the relevant neighbourhood/condo pages.
-5. Adjust titles/descriptions only if they obscure that the page answers this question.
+5. Leave titles and descriptions alone unless they actively obscure that a narrow page (a neighbourhood, condo or post about this exact subject) answers this question. Never retarget a broad page's title or description at one question: it serves every other query that page ranks for, and assistants quote body copy and FAQ answers, not meta tags.
 Off-site work can't be done from here but matters most when the assistants cite third-party sites (directories, review sites, brokerage profiles, news). Name those specific sources from the lists above in the rationale as next steps for the owner (e.g. get a profile or review there). Put further pages worth writing in plannedTopics.`);
   return lines.join("\n");
 }
@@ -555,9 +558,10 @@ Prefer differentiating when both pages earn meaningful impressions for different
   const detailed = resolved.kind === "candidate"
     ? resolved.paths.slice(0, 6)
     : resolved.paths;
+  const pillars = new Set(report.clusters.map((c) => c.pillar));
   for (const path of detailed) {
     const page = report.pages.find((p) => p.path === path);
-    if (page) parts.push(describePage(page));
+    if (page) parts.push(describePage(page, metaLockedFor(path, resolved, pillars)));
   }
   if (resolved.kind === "cluster" && resolved.cluster) {
     // Blog children that need an up-link get their full body so edits can
@@ -565,7 +569,7 @@ Prefer differentiating when both pages earn meaningful impressions for different
     const needUp = resolved.cluster.missingUpLinks.filter((p) => p.startsWith("/blog/")).slice(0, 5);
     for (const path of needUp) {
       const page = report.pages.find((p) => p.path === path);
-      if (page) parts.push(describePage(page));
+      if (page) parts.push(describePage(page, metaLockedFor(path, resolved, pillars)));
     }
   }
 
@@ -600,6 +604,7 @@ Titles and meta descriptions are ads in the search results. Their only job is to
 - Description: 140–155 characters. Open with what the searcher gets, include one concrete detail or number, and end with a soft call to action ("See today's listings.", "Book a private showing.", "Get the building's sales history.").
 - Banned: comma-lists of amenities ("schools, parks and lifestyle"), and the words nestled, boasts, wonderland, luxurious living, look no further, dream home.
 - Proof points you may use (all stated on the site already): Spencer Rivers is a CLHMS and Certified Condo Specialist; 12 years in Calgary's luxury market, top 1% in Canada, $100M+ in career sales; listings on this site can appear up to 48 hours before Realtor.ca.
+- A title or description serves every query the page already earns impressions for, not just the one in this task. Before changing one, check the page's Search Console queries: every alternative must keep the words behind the queries that bring its clicks (place names, "luxury", "realtor", etc.) unless the reason says why giving them up is worth it. Each reason names the top queries it keeps. Pages marked LOCKED must not get title, description or focus-keyword changes at all.
 - Whenever you change a title or description, give THREE alternatives with genuinely different angles (for example market data, insider access, lifestyle). They share one variantGroup (e.g. "meta"), and each reason starts with its angle name in capitals, e.g. "MARKET DATA — …". The owner picks one. Use variantGroup "" for every other change.
 
 Content policy — the site must not sprawl into dozens of thin, overlapping posts:
@@ -890,6 +895,26 @@ export function draftCompetesWith(title: string, slug: string, report: SeoReport
   return null;
 }
 
+/** Opportunities about how a page presents itself as a whole, rather than
+ *  about one query — the only ones allowed to touch a protected page's meta. */
+const PAGE_LEVEL_OPPORTUNITIES = new Set(["ctr_gap", "keyword_mismatch", "on_page"]);
+
+/**
+ * The homepage and cluster pillars rank for many queries at once, so their
+ * title, description and focus keyword change only in a fix aimed at that
+ * page — never as a side effect of chasing one AI question, query or topic.
+ * Returns what the page is when its meta is locked for this subject, else null.
+ */
+export function metaLockedFor(path: string, subject: ResolvedSubject, pillars: Set<string>): string | null {
+  if (path !== "/" && !pillars.has(path)) return null;
+  const onlyThisPage = subject.paths.length === 1 && subject.paths[0] === path;
+  if (subject.kind === "page" && onlyThisPage) return null;
+  if (subject.kind === "opportunity" && onlyThisPage && PAGE_LEVEL_OPPORTUNITIES.has(subject.opportunity?.type ?? "")) return null;
+  // A cluster plan may realign its own pillar to the head term.
+  if (subject.kind === "cluster" && path !== "/" && subject.cluster?.pillar === path) return null;
+  return path === "/" ? "the homepage" : "a cluster pillar";
+}
+
 export function validateChanges(
   raw: Array<Record<string, any>>,
   report: SeoReport,
@@ -917,6 +942,8 @@ export function validateChanges(
           const path = normPath(str(c.path) ?? "");
           const page = live.get(path);
           if (!page) throw new Error(`${path || "(no path)"} is not a live page`);
+          const locked = metaLockedFor(path, subject, pillars);
+          if (locked) throw new Error(`${path} is ${locked}; its title and description serve every query it ranks for, so they only change in a fix aimed at that page`);
           const title = str(c.title);
           const description = str(c.description);
           if (!title && !description) throw new Error("no title or description given");
@@ -938,6 +965,8 @@ export function validateChanges(
           const path = normPath(str(c.path) ?? "");
           const page = live.get(path);
           if (!page) throw new Error(`${path || "(no path)"} is not a live page`);
+          const locked = metaLockedFor(path, subject, pillars);
+          if (locked) throw new Error(`${path} is ${locked}; its focus keyword only changes in a fix aimed at that page`);
           const keyword = str(c.keyword);
           if (!keyword || keyword.length > 80) throw new Error("keyword missing or too long");
           changes.push({
@@ -954,8 +983,14 @@ export function validateChanges(
           if (!post) throw new Error(`no blog post "${slug}"`);
           let body = workingBodies.get(slug) ?? post.body;
           const rows: PreviewRow[] = [];
-          const title = str(c.title);
-          const excerpt = str(c.excerpt);
+          let title = str(c.title);
+          let excerpt = str(c.excerpt);
+          const locked = metaLockedFor(`/blog/${slug}`, subject, pillars);
+          if (locked && (title || excerpt)) {
+            drop("edit_blog", `The title/excerpt change on /blog/${slug} was skipped: it is ${locked}, so its title and description only change in a fix aimed at that page`);
+            title = null;
+            excerpt = null;
+          }
           const heroImageAlt = str(c.heroImageAlt);
           if (title) {
             if (title.length < 15 || title.length > 110) throw new Error(`title is ${title.length} characters`);
@@ -1179,7 +1214,9 @@ export function validateChanges(
     }
     kept.push({ ...ch, index: kept.length });
   }
-  return { changes: kept, dropped };
+  // Rejected alternatives for one page repeat the same reason; show it once.
+  const seen = new Set<string>();
+  return { changes: kept, dropped: dropped.filter((d) => !seen.has(d.reason) && !!seen.add(d.reason)) };
 }
 
 // ---------------------------------------------------------------------------
