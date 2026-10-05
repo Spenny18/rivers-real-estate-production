@@ -68,6 +68,8 @@ interface ScStatus {
   siteUrl?: string;
   sitemaps?: SitemapEntry[];
   lastSubmittedAt?: string;
+  /** Last recrawl request sent after an SEO fix (server/recrawl.ts). */
+  lastRecrawl?: { at: string; urls: string[]; google: string; indexNow: string } | null;
   reason?: string;
   error?: string;
 }
@@ -143,7 +145,8 @@ function SitemapCard() {
             <>
               <p className="text-sm text-foreground">
                 Connected to <span className="font-mono text-[13px]">{data?.siteUrl}</span>. Submitted
-                automatically after each deploy.
+                automatically after each deploy, and two minutes after an SEO fix is applied or
+                undone so Google re-reads the changed pages.
               </p>
               {sm ? (
                 <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground tabular-nums">
@@ -163,6 +166,15 @@ function SitemapCard() {
                 </p>
               )}
             </>
+          )}
+          {data?.lastRecrawl && (
+            <p className="mt-2 text-xs text-muted-foreground leading-relaxed max-w-xl" data-testid="text-last-recrawl">
+              Last recrawl request {fmtDate(data.lastRecrawl.at)} for{" "}
+              <span className="text-foreground">
+                {data.lastRecrawl.urls.length} page{data.lastRecrawl.urls.length === 1 ? "" : "s"}
+              </span>
+              {" "}— Google: {data.lastRecrawl.google}; Bing (IndexNow): {data.lastRecrawl.indexNow}.
+            </p>
           )}
         </div>
         <Button

@@ -33,6 +33,7 @@ import { invalidateSsrCache } from "./ssr";
 import * as seoReports from "./seo-report-cache";
 
 import { publicOrigin } from "./origin";
+import { freshestLastmod, indexNowKey, INDEXNOW_KEY_PATH, lastRecrawl } from "./recrawl";
 const execFileAsync = promisify(execFile);
 
 // Where admin-uploaded images live. In production on Fly this is the
@@ -767,6 +768,12 @@ export async function registerRoutes(
   // crawl priority.
   const INCLUDE_MLS_SITEMAP = process.env.SITEMAP_INCLUDE_MLS === "1";
 
+  // IndexNow ownership proof: the file must contain the key we submit with.
+  app.get(INDEXNOW_KEY_PATH, (_req, res) => {
+    res.set("Content-Type", "text/plain; charset=utf-8");
+    res.send(indexNowKey());
+  });
+
   // Sitemap index — entry point Google should pick up from robots.txt.
   app.get("/sitemap.xml", (_req, res) => {
     const origin = publicOrigin();
@@ -843,6 +850,9 @@ export async function registerRoutes(
         changefreq: "monthly" as const,
       })),
     ];
+    // A change made from the SEO console is a real, timestamped edit — the
+    // one lastmod these pages can honestly carry (see server/recrawl.ts).
+    for (const u of urls) u.lastmod = freshestLastmod(u.loc.slice(origin.length) || "/", u.lastmod);
     res.set("Content-Type", "application/xml; charset=utf-8");
     res.send(renderUrlset(urls));
   });
@@ -856,7 +866,7 @@ export async function registerRoutes(
         if ((p as any).status === "draft") continue;
         urls.push({
           loc: `${origin}/blog/${p.slug}`,
-          lastmod: w3cLastmod((p as any).publishedAt),
+          lastmod: freshestLastmod(`/blog/${p.slug}`, w3cLastmod((p as any).publishedAt)),
           priority: "0.8",
           changefreq: "monthly",
         });
@@ -868,7 +878,8 @@ export async function registerRoutes(
     res.send(renderUrlset(urls));
   });
 
-  // Neighbourhoods — no per-entity timestamp in schema, so we omit lastmod.
+  // Neighbourhoods — no per-entity timestamp in schema, so lastmod is only
+  // present once the SEO console has edited the page.
   app.get("/sitemap-neighbourhoods.xml", (_req, res) => {
     const origin = publicOrigin();
     const urls: SitemapUrl[] = [];
@@ -876,6 +887,7 @@ export async function registerRoutes(
       for (const n of storage.listNeighbourhoods()) {
         urls.push({
           loc: `${origin}/neighbourhoods/${n.slug}`,
+          lastmod: freshestLastmod(`/neighbourhoods/${n.slug}`),
           priority: "0.8",
           changefreq: "weekly",
         });
@@ -895,6 +907,7 @@ export async function registerRoutes(
       for (const c of storage.listCondoBuildings()) {
         urls.push({
           loc: `${origin}/condos/${c.slug}`,
+          lastmod: freshestLastmod(`/condos/${c.slug}`),
           priority: "0.7",
           changefreq: "weekly",
         });
@@ -3603,11 +3616,11 @@ export async function registerRoutes(
     const { canUseSearchConsole, lastSubmission, listSitemaps } = await import("./search-console");
     const guard = canUseSearchConsole(userId);
     if (!guard.ok) {
-      return res.json({ ok: false, connected: false, reason: guard.reason, ...lastSubmission(userId) });
+      return res.json({ ok: false, connected: false, reason: guard.reason, ...lastSubmission(userId), lastRecrawl: lastRecrawl() });
     }
     try {
       const status = await listSitemaps(userId);
-      res.json({ connected: true, ...lastSubmission(userId), ...status });
+      res.json({ connected: true, ...lastSubmission(userId), ...status, lastRecrawl: lastRecrawl() });
     } catch (e: any) {
       res.status(502).json({ ok: false, connected: true, error: e?.message ?? "Search Console unavailable" });
     }
