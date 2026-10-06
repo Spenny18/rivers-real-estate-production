@@ -708,7 +708,7 @@ export const BLOCK_TYPES: BlockTypeDef[] = [
       heading:
         "Calgary luxury real estate experience, local market knowledge, and direct advice.",
       items: [
-        { value: "$100M+", label: "In personal sales", sub: "Top Luxury Realtor in Calgary" },
+        { value: "$200M+", label: "In personal sales", sub: "Top Luxury Realtor in Calgary" },
         { value: "Ranked #3", label: "Top Realtor in Calgary", sub: "Best in Calgary" },
         {
           value: "98.4%",
@@ -1029,7 +1029,7 @@ export const BLOCK_TYPES: BlockTypeDef[] = [
       items: [
         "Ranked #3 Top Realtor in Calgary — Best in Calgary",
         "Top Agent in Canada — Dream Homes of Canada",
-        "$100M+ in Career Sales",
+        "$200M+ in Career Sales",
         "Certified Luxury Home Specialist",
         "Synterra Realty",
         "Calgary Real Estate Board",

@@ -348,6 +348,7 @@ export function seedDatabase() {
 
   // 2–3. Listings and leads: no demo rows; remove any left from earlier boots.
   removeSampleData();
+  correctCareerSales();
 
   // ---- One-time neighbourhood corrections (idempotent on each boot) ----
   // Spencer asked for several content cleanups after the initial roll-out:
@@ -750,6 +751,44 @@ export function seedDatabase() {
  * invented details, so anything real (or a demo row Spencer has since edited
  * into a real one) is left alone. Idempotent: a no-op once they're gone.
  */
+/**
+ * Career sales are $200M+, not the $100M+ the site first shipped with. The
+ * code defaults are fixed; this corrects copies already saved in the
+ * database — a CMS page saved from the editor keeps its own blocks and SEO
+ * strings, and blog posts are plain rows. Runs once, recorded in
+ * migration_flags, so a later deliberate "$100M" is never rewritten.
+ */
+export function correctCareerSales(): void {
+  try {
+    sqlite.exec("CREATE TABLE IF NOT EXISTS migration_flags (key TEXT PRIMARY KEY, done_at TEXT NOT NULL)");
+    const key = "career_sales_200m";
+    if (sqlite.prepare("SELECT 1 FROM migration_flags WHERE key = ?").get(key)) return;
+    const swap = (col: string) =>
+      `${col} = REPLACE(REPLACE(${col}, '$100M', '$200M'), '$100 million', '$200 million')`;
+    const hit = (col: string) => `${col} LIKE '%$100M%' OR ${col} LIKE '%$100 million%'`;
+    const tx = sqlite.transaction(() => {
+      const pages = sqlite
+        .prepare(
+          `UPDATE pages SET ${swap("blocks")}, ${swap("seo_title")}, ${swap("seo_description")}
+           WHERE ${hit("blocks")} OR ${hit("seo_title")} OR ${hit("seo_description")}`,
+        )
+        .run().changes;
+      const posts = sqlite
+        .prepare(
+          `UPDATE blog_posts SET ${swap("title")}, ${swap("excerpt")}, ${swap("body")}
+           WHERE ${hit("title")} OR ${hit("excerpt")} OR ${hit("body")}`,
+        )
+        .run().changes;
+      sqlite.prepare("INSERT INTO migration_flags (key, done_at) VALUES (?, ?)").run(key, new Date().toISOString());
+      return { pages, posts };
+    });
+    const r = tx();
+    console.log(`[seed] Career sales corrected to $200M+: ${r.pages} CMS page(s), ${r.posts} blog post(s)`);
+  } catch (err) {
+    console.error("[seed] correctCareerSales failed:", err);
+  }
+}
+
 export function removeSampleData(): void {
   try {
     const tx = sqlite.transaction(() => {

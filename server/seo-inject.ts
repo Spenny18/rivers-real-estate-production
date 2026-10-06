@@ -406,7 +406,7 @@ function baseMetaForPath(path: string): SeoMeta | null {
     return {
       title: `About Spencer Rivers — ${SITE_NAME}`,
       description:
-        "12 years in Calgary's luxury market. Top 1% in Canada, $100M+ in career sales. Discretion, data, and direct conversation.",
+        "12 years in Calgary's luxury market. Top 1% in Canada, $200M+ in career sales. Discretion, data, and direct conversation.",
       canonical: `${ORIGIN}/about`,
       ogType: "profile",
       jsonLd: [

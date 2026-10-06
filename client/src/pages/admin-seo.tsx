@@ -782,7 +782,7 @@ export default function AdminSeoPage() {
                               <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 border ${GRADE_STYLES.fair}`}>orphan</span>
                             )}
                             {p.sisterDomainLinks.length > 0 && (
-                              <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 border ${GRADE_STYLES.fair}`}>leaks</span>
+                              <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 border border-border text-muted-foreground">sister links</span>
                             )}
                             {p.issues.length > 0 && p.conflicts.length === 0 && p.inboundLinks.length > 0 && (
                               <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 border border-border text-muted-foreground">
@@ -963,8 +963,8 @@ export default function AdminSeoPage() {
                       {p.externalDomains.length ? p.externalDomains.join(", ") : "None — no outbound citations."}
                     </div>
                     {p.sisterDomainLinks.length > 0 && (
-                      <div className="text-xs text-amber-600 dark:text-amber-400 mt-1">
-                        {p.sisterDomainLinks.length} link{p.sisterDomainLinks.length === 1 ? "" : "s"} to luxuryhomescalgary.ca — passes authority to the competing domain.
+                      <div className="text-xs text-muted-foreground mt-1">
+                        {p.sisterDomainLinks.length} link{p.sisterDomainLinks.length === 1 ? "" : "s"} to luxuryhomescalgary.ca, your sister site. Optional: point them at this site's equivalent page to keep readers here.
                       </div>
                     )}
                   </div>

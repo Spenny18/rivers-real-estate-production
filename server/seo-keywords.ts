@@ -27,8 +27,9 @@ import { buildArchitecture, type ArchitectureReport } from "./seo-architecture";
 import { getStoredClusters } from "./seo-store";
 const ORIGIN = publicOrigin();
 
-/** The other domain Spencer still runs. Links to it leak authority while both
- *  sites target the same market, so the crawler counts them separately. */
+/** Spencer's other, older site — same person and business (it's in the
+ *  schema's sameAs). Links to it are counted so they can be repointed to this
+ *  site's equivalent page where one exists, as housekeeping. */
 const SISTER_DOMAIN = "luxuryhomescalgary.ca";
 
 // ---------------------------------------------------------------------------
@@ -891,7 +892,7 @@ export async function buildSeoReport(opts: {
     if (!page.h1) issues.push("Missing H1");
     if (inCount === 0 && !isChrome(page.path)) issues.push("Orphan — no editorial links point here");
     if (page.sisterDomainLinks.length) {
-      issues.push(`Links to ${SISTER_DOMAIN} ×${page.sisterDomainLinks.length} — passes authority to the competing domain`);
+      issues.push(`Links to ${SISTER_DOMAIN} ×${page.sisterDomainLinks.length} — Spencer's sister site; repoint to this site's equivalent page where one exists`);
     }
     // "Luxury Homes Calgary" in neighbourhood/condo/listing titles is not
     // flagged: that WordPress-era format carries the rankings (see the
