@@ -317,10 +317,11 @@ export function buildOpportunities(opts: {
     }
 
     // 5. On-page problems, weighted by how much traffic the page carries.
-    // Orphans and links to the sister domain are common enough to swamp the
-    // list, so they only count once the page is earning search impressions.
+    // Orphans are common enough to swamp the list, so they only count once
+    // the page is earning search impressions. Links to the sister site are
+    // housekeeping, never a reason on their own to flag a page.
     const serious = page.issues.filter((i) =>
-      /Missing|Thin/.test(i) || (rows.length > 0 && /Links to|Orphan/.test(i)),
+      /Missing|Thin/.test(i) || (rows.length > 0 && /Orphan/.test(i)),
     );
     if (serious.length || page.score < 50) {
       const t = totals(rows);

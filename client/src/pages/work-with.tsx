@@ -275,7 +275,7 @@ export const AUDIENCE_SEGMENTS: AudienceSegment[] = [
       {
         icon: Users,
         title: "The Calgary buyers who never saw it",
-        body: "Pillar 9 MLS® is the floor, not the marketing plan. Spencer Rivers relaunches expired listings through paid distribution, the Calgary luxury agent network, and a private buyer list built across $100M+ in career sales — because the buyer who passed on the listing often never saw the home at all.",
+        body: "Pillar 9 MLS® is the floor, not the marketing plan. Spencer Rivers relaunches expired listings through paid distribution, the Calgary luxury agent network, and a private buyer list built across $200M+ in career sales — because the buyer who passed on the listing often never saw the home at all.",
       },
     ],
     stepsHeading: "From expired listing to sold, in three steps.",
