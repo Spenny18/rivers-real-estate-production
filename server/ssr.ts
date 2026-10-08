@@ -84,6 +84,7 @@ export function queriesForPath(path: string): unknown[][] | null {
     p === "/contact" ||
     p === "/home-evaluation" ||
     p === "/assignments" ||
+    p === "/privacy-policy" ||
     p === "/work-with" ||
     p.startsWith("/work-with/")
   )

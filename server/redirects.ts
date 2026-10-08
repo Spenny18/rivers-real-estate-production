@@ -125,6 +125,9 @@ const EXACT: Record<string, string> = {
   "/home-team": "/about",
   "/success-stories": "/about",
 
+  "/privacy": "/privacy-policy",
+  "/privacy-statement": "/privacy-policy",
+
   "/newsletter": "/contact",
   "/buyer-enrolment": "/contact",
   "/affiliates": "/contact",

@@ -508,6 +508,17 @@ function baseMetaForPath(path: string): SeoMeta | null {
       jsonLd: [crumbs(HOME_CRUMB, ["Recently Sold", `${ORIGIN}/sold`])],
     };
   }
+  if (p === "/privacy-policy") {
+    // Must stay in sync with PRIVACY_TITLE / PRIVACY_DESCRIPTION in
+    // client/src/pages/privacy-policy.tsx.
+    return {
+      title: "Privacy Policy | Rivers Real Estate",
+      description:
+        "How Spencer Rivers and Rivers Real Estate collect, use and protect your personal information — cookies, website activity, email tracking, and your choices.",
+      canonical: `${ORIGIN}/privacy-policy`,
+      jsonLd: [crumbs(HOME_CRUMB, ["Privacy Policy", `${ORIGIN}/privacy-policy`])],
+    };
+  }
   if (p === "/assignments") {
     // Must stay in sync with client/src/pages/assignments.tsx (SEO_TITLE /
     // SEO_DESCRIPTION), which owns the full page content and FAQ schema.
