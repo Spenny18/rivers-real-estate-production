@@ -821,6 +821,7 @@ export async function registerRoutes(
       { loc: `${origin}/blog`, priority: "0.8", changefreq: "weekly" },
       { loc: `${origin}/about`, priority: "0.6", changefreq: "monthly" },
       { loc: `${origin}/contact`, priority: "0.4", changefreq: "monthly" },
+      { loc: `${origin}/privacy-policy`, priority: "0.2", changefreq: "yearly" },
       { loc: `${origin}/home-evaluation`, priority: "0.7", changefreq: "monthly" },
       { loc: `${origin}/work-with`, priority: "0.6", changefreq: "monthly" },
       { loc: `${origin}/assignments`, priority: "0.8", changefreq: "weekly" },

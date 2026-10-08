@@ -390,6 +390,10 @@ export function PublicFooter() {
           <div>© {new Date().getFullYear()} RIVERS REAL ESTATE · ALL RIGHTS RESERVED</div>
           <div className="flex gap-6">
             <span>LUXURYHOMESCALGARY.CA</span>
+            <Link href="/privacy-policy" className="hover:text-white/80 transition-colors"
+                data-testid="footer-link-privacy">
+                PRIVACY
+            </Link>
             <Link href="/admin" className="hover:text-white/80 transition-colors"
                 data-testid="footer-link-admin">
                 AGENT LOGIN

@@ -384,7 +384,11 @@ export default function ContactPage() {
 
                   <p className="text-[11px] text-muted-foreground leading-relaxed">
                     By sending, you agree Spencer can reach out by phone or
-                    email about your inquiry. No spam, no list-sharing — ever.
+                    email about your inquiry. No spam, no list-sharing — ever.{" "}
+                    <a href="/privacy-policy" className="underline underline-offset-2">
+                      Privacy policy
+                    </a>
+                    .
                   </p>
                 </form>
               </Form>

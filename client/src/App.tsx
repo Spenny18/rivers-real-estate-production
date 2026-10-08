@@ -55,6 +55,7 @@ import ContactPage from "@/pages/contact";
 import HomeEvaluationPage from "@/pages/home-evaluation";
 import WorkWithDetailPage, { WorkWithIndexPage } from "@/pages/work-with";
 import AssignmentsPage from "@/pages/assignments";
+import PrivacyPolicyPage from "@/pages/privacy-policy";
 const BookIndexPage = lazy(() => import("@/pages/book-index"));
 const BookEventPage = lazy(() => import("@/pages/book-event"));
 const BookManagePage = lazy(() => import("@/pages/book-manage"));
@@ -156,6 +157,7 @@ function AppRouter() {
       <Route path="/work-with" component={WorkWithIndexPage} />
       <Route path="/work-with/:slug" component={WorkWithDetailPage} />
       <Route path="/assignments" component={AssignmentsPage} />
+      <Route path="/privacy-policy" component={PrivacyPolicyPage} />
 
       {/* BOOKING — the public scheduler. /book/manage/:uid must be matched
           before /book/:slug so a manage link isn't read as a meeting type. */}
