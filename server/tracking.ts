@@ -89,6 +89,20 @@ sqlite.exec(`
     last_clicked_at TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_tracked_emails_email ON tracked_emails(email, sent_at DESC);
+
+  -- "Back on the site" alerts to Spencer, queued when a known person returns
+  -- and sent a few minutes later by server/return-alerts.ts. In the database
+  -- rather than memory so a deploy mid-visit doesn't drop one.
+  CREATE TABLE IF NOT EXISTS return_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL,
+    visit_started_at TEXT NOT NULL,
+    prev_seen_at TEXT,                     -- null: first visit since being identified
+    status TEXT NOT NULL DEFAULT 'pending', -- pending | sent | failed | skipped
+    sent_at TEXT,
+    error TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_return_alerts_status ON return_alerts(status, visit_started_at);
 `);
 
 function nowIso(): string {
@@ -262,6 +276,9 @@ function cleanListing(l: unknown): ListingProps | null {
 export function recordWebEvent(vid: string, input: WebEventInput): void {
   const visitor = getVisitor(vid);
   const listing = input.kind === "listing_view" ? cleanListing(input.listing) : null;
+  // Checked before the insert: "back after a gap" is about the activity
+  // that came before this page, not including it.
+  if (visitor?.email) queueReturnAlertIfReturning(visitor.email);
   sqlite
     .prepare(
       `INSERT INTO web_events (vid, email, kind, path, title, referrer, mls_number, props, occurred_at)
@@ -278,6 +295,51 @@ export function recordWebEvent(vid: string, input: WebEventInput): void {
       JSON.stringify(listing ? { listing } : {}),
       nowIso(),
     );
+}
+
+// ---- Return-visit detection ---------------------------------------------------------
+
+/**
+ * How long a known person has to be away for their next page view to count as
+ * coming back. RETURN_ALERT_GAP_HOURS overrides; the default is long enough
+ * that one evening's browsing in two sittings is one alert, not two.
+ */
+export function returnGapMs(): number {
+  const h = Number(process.env.RETURN_ALERT_GAP_HOURS);
+  return (Number.isFinite(h) && h > 0 ? h : 12) * 3600_000;
+}
+
+export function returnAlertsEnabled(): boolean {
+  return !/^(off|false|0|no)$/i.test(process.env.RETURN_ALERTS ?? "");
+}
+
+/**
+ * Queue an alert if this page view starts a return visit: the person's last
+ * page view was longer ago than the gap, or they have never browsed since
+ * being identified (typically: they just clicked through from an email).
+ *
+ * Someone who identifies mid-visit through a form doesn't trigger one — their
+ * earlier anonymous page views were attributed to them on identify, so the
+ * visit already has recent activity. The form has its own notification.
+ */
+function queueReturnAlertIfReturning(email: string): void {
+  if (!returnAlertsEnabled()) return;
+  const now = Date.now();
+  const last = sqlite
+    .prepare(
+      `SELECT MAX(occurred_at) AS at FROM web_events
+       WHERE email = ? AND kind IN ('pageview', 'listing_view')`,
+    )
+    .get(email) as { at: string | null };
+  if (last.at && now - Date.parse(last.at) <= returnGapMs()) return;
+  // Belt and braces against a burst of beacons racing: one alert per gap.
+  const recent = sqlite
+    .prepare(`SELECT 1 FROM return_alerts WHERE email = ? AND visit_started_at > ?`)
+    .get(email, new Date(now - returnGapMs()).toISOString());
+  if (recent) return;
+  sqlite
+    .prepare(`INSERT INTO return_alerts (email, visit_started_at, prev_seen_at) VALUES (?, ?, ?)`)
+    .run(email, new Date(now).toISOString(), last.at);
 }
 
 // ---- Email instrumentation ----------------------------------------------------------

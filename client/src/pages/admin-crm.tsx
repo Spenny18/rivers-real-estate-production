@@ -259,7 +259,11 @@ export default function AdminCrmPage() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const [search, setSearch] = useState("");
-  const [openContact, setOpenContact] = useState<string | null>(null);
+  // ?contact=<fubId> opens that contact straight away — the link in a
+  // "back on the site" alert email lands here.
+  const [openContact, setOpenContact] = useState<string | null>(() =>
+    typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("contact"),
+  );
   const [activityKind, setActivityKind] = useState<string>("all");
 
   const { data: overview, isLoading } = useQuery<Overview>({
