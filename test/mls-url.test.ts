@@ -153,3 +153,20 @@ test("colliding addresses still get MLS-suffixed canonical slugs", () => {
   assert.equal(canonical.get("A1"), "262-township-road-property-rural-rocky-view-county");
   assert.equal(canonical.get("A2"), "262-township-road-property-rural-rocky-view-county-a2");
 });
+
+// The clean URL a collision group's preferred listing held under the previous
+// format is the one that was actually served and shared. The all-suffixed
+// alias map never reproduces it, so without its own aliases ~60 live listings
+// would have gone from a redirect loop straight to a 404.
+test("a previous-format clean URL from a collision group still redirects", () => {
+  const rows = [
+    listing({ id: "A1", mlsNumber: "A1", subdivision: "NONE", status: "Active", syncedAt: "2026-09-02T00:00:00Z" }),
+    listing({ id: "A2", mlsNumber: "A2", subdivision: "NONE", status: "Active", syncedAt: "2026-09-01T00:00:00Z" }),
+  ];
+  const aliases = assignMlsAliasSlugLookup(rows);
+  // Served before the fix: A1 clean, A2 suffixed.
+  assert.equal(aliases.get("262-township-road-none-rural-rocky-view-county"), "A1");
+  assert.equal(aliases.get("262-township-road-none-rural-rocky-view-county-a2"), "A2");
+  const canonical = new Set(assignMlsSeoSlugs(rows).values());
+  for (const slug of aliases.keys()) assert.ok(!canonical.has(slug), `${slug} is both alias and canonical`);
+});

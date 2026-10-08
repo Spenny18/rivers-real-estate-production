@@ -141,6 +141,14 @@ export function assignMlsPreviousSeoSlugs<T extends MlsSlugSource>(listings: T[]
   return assignSlugs(listings, mlsRawBaseSlug, "all-suffixed");
 }
 
+// The previous format exactly as it was served: within a group of listings
+// sharing a base slug, the preferred one held the clean, unsuffixed URL. Those
+// clean URLs are the ones that were emailed and shared, so they need aliases
+// too — the all-suffixed map above never produces them.
+export function assignMlsPreviousCanonicalSeoSlugs<T extends MlsSlugSource>(listings: T[]): Map<string, string> {
+  return assignSlugs(listings, mlsRawBaseSlug, "preferred-clean");
+}
+
 // Slug -> listing id for every retired format, with anything that is also a
 // live canonical slug removed. Those overlap constantly: a listing whose
 // address yields one unambiguous base slug gets the same string out of every
@@ -151,7 +159,11 @@ export function assignMlsAliasSlugLookup<T extends MlsSlugSource>(
 ): Map<string, string> {
   const canonicalSlugs = new Set(assignMlsSeoSlugs(listings).values());
   const lookup = new Map<string, string>();
-  for (const aliases of [assignMlsLegacySeoSlugs(listings), assignMlsPreviousSeoSlugs(listings)]) {
+  for (const aliases of [
+    assignMlsLegacySeoSlugs(listings),
+    assignMlsPreviousSeoSlugs(listings),
+    assignMlsPreviousCanonicalSeoSlugs(listings),
+  ]) {
     aliases.forEach((slug, id) => {
       if (canonicalSlugs.has(slug) || lookup.has(slug)) return;
       lookup.set(slug, id);
