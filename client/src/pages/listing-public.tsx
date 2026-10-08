@@ -27,6 +27,8 @@ import { useToast } from "@/hooks/use-toast";
 import { formatPrice, getAmenitiesAround } from "@/lib/mock-data";
 import type { PublicListing } from "@/lib/types";
 import NotFound from "./not-found";
+import { PrivacyNote } from "@/components/privacy-link";
+
 
 export default function ListingPublicPage() {
   const [, params] = useRoute("/p/:slug");
@@ -427,6 +429,7 @@ export default function ListingPublicPage() {
                       "Send inquiry"
                     )}
                   </Button>
+                  <PrivacyNote className="text-center" />
                 </div>
               </form>
             )}

@@ -54,6 +54,8 @@ import {
   SPENCER_EMAIL,
 } from "@/lib/format";
 import type { PublicMlsListing, PublicMlsListingDetail } from "@/lib/mls-types";
+import { PrivacyLink, PrivacyNote } from "@/components/privacy-link";
+
 
 const FALLBACK_HERO =
   "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?w=2400&h=1600&fit=crop";
@@ -314,7 +316,7 @@ function ListingSoftGate({ listingId }: { listingId: string }) {
         </Button>
         <p className="text-[10px] text-muted-foreground text-center pt-2 leading-relaxed">
           By continuing, you agree to receive occasional listing updates from
-          Spencer Rivers. Unsubscribe anytime.
+          Spencer Rivers. Unsubscribe anytime. <PrivacyLink />.
         </p>
       </form>
     </div>
@@ -460,7 +462,8 @@ function TourRequestPanel({ mlsId }: { mlsId: string }) {
         </Button>
         <p className="text-[10px] text-muted-foreground leading-relaxed">
           Spencer reviews every request personally and replies within one
-          business day to confirm a time that works for both of you.
+          business day to confirm a time that works for both of you.{" "}
+          <PrivacyLink />.
         </p>
       </form>
     </div>
@@ -1017,6 +1020,7 @@ function ShowingForm({ listing }: { listing: PublicMlsListing }) {
             <Send className="w-4 h-4" strokeWidth={1.8} />
             {mutation.isPending ? "Sending…" : "Request showing"}
           </Button>
+          <PrivacyNote className="text-center" />
         </form>
       </Form>
     </div>

@@ -30,6 +30,8 @@ import {
   zoneLabel,
 } from "@/components/booking-picker";
 import { SPENCER_PHONE, SPENCER_PHONE_HREF } from "@/lib/format";
+import { PrivacyNote } from "@/components/privacy-link";
+
 
 interface PublicEventType {
   id: number;
@@ -420,6 +422,7 @@ export default function BookEventPage() {
                     </a>
                   </span>
                 </div>
+                <PrivacyNote />
               </form>
             )}
           </div>

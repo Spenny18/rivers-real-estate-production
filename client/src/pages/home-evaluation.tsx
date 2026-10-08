@@ -43,6 +43,8 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { SPENCER_PHONE, SPENCER_PHONE_HREF } from "@/lib/format";
+import { PrivacyLink } from "@/components/privacy-link";
+
 
 const HERO_IMAGE =
   "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?w=2400&h=1400&fit=crop";
@@ -398,7 +400,8 @@ export default function HomeEvaluationPage() {
 
                         <p className="text-[11px] text-muted-foreground text-center leading-relaxed">
                           Spencer reviews every request personally. No bots, no
-                          auto-sequence, no spam. Reply to opt-out anytime.
+                          auto-sequence, no spam. Reply to opt-out anytime.{" "}
+                          <PrivacyLink />.
                         </p>
                       </form>
                     </Form>

@@ -39,6 +39,8 @@ import {
   SPENCER_EMAIL,
   SPENCER_EMAIL_HREF,
 } from "@/lib/format";
+import { PrivacyLink } from "@/components/privacy-link";
+
 
 const inquirySchema = z.object({
   name: z.string().min(2, "Please share your name"),
@@ -385,10 +387,7 @@ export default function ContactPage() {
                   <p className="text-[11px] text-muted-foreground leading-relaxed">
                     By sending, you agree Spencer can reach out by phone or
                     email about your inquiry. No spam, no list-sharing — ever.{" "}
-                    <a href="/privacy-policy" className="underline underline-offset-2">
-                      Privacy policy
-                    </a>
-                    .
+                    <PrivacyLink />.
                   </p>
                 </form>
               </Form>

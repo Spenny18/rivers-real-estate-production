@@ -55,6 +55,8 @@ import {
   SPENCER_EMAIL,
   SPENCER_EMAIL_HREF,
 } from "@/lib/format";
+import { PrivacyNote } from "@/components/privacy-link";
+
 
 const SITE_ORIGIN = "https://riversrealestate.ca";
 
@@ -384,6 +386,7 @@ function AssignmentInquiryForm() {
           <Send className="w-3.5 h-3.5" strokeWidth={1.8} />
           {mutation.isPending ? "SENDING…" : "REQUEST DETAILS & PRICING"}
         </Button>
+        <PrivacyNote />
       </form>
     </Form>
   );
