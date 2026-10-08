@@ -9,26 +9,78 @@ export type MlsSlugSource = {
   syncedAt?: string | null;
 };
 
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: "&", quot: '"', apos: "'", nbsp: " ", lt: "<", gt: ">",
+  lsquo: "'", rsquo: "'", ldquo: '"', rdquo: '"', ndash: "-", mdash: "-",
+};
+
+// Pillar 9 delivers some fields HTML-escaped ("Wilson&#x2019;s Beach Estates").
+// The escape has to come out before slugifying, or the entity itself lands in
+// the URL as text: "wilson-x2019-s-beach-estates".
+export function decodeMlsEntities(value: string): string {
+  return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, body: string) => {
+    const token = body.toLowerCase();
+    if (token.startsWith("#")) {
+      const hex = token.startsWith("#x");
+      const code = Number.parseInt(hex ? token.slice(2) : token.slice(1), hex ? 16 : 10);
+      return Number.isInteger(code) && code >= 0 && code <= 0x10ffff
+        ? String.fromCodePoint(code)
+        : match;
+    }
+    return NAMED_ENTITIES[token] ?? match;
+  });
+}
+
 export function slugifyMlsPart(value: string | null | undefined): string {
   return (value ?? "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
     .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").replace(/-{2,}/g, "-");
 }
 
-export function mlsBaseSlug(listing: MlsSlugSource): string {
+function slugifyMlsText(value: string | null | undefined): string {
+  // Drop apostrophes instead of letting them fall through to the generic
+  // separator rule, so "Wilson's Beach Estates" reads as wilsons-beach-estates
+  // rather than wilson-s-beach-estates.
+  return slugifyMlsPart(decodeMlsEntities(value ?? "").replace(/['‘’]/g, ""));
+}
+
+// The feed spells "no subdivision" as a literal placeholder string rather than
+// as null, so a truthy check alone lets "NONE" through into the URL.
+const AREA_PLACEHOLDERS = new Set(["none", "n/a", "na", "null", "unknown", "not applicable"]);
+
+function mlsAreaPart(listing: MlsSlugSource): string {
+  for (const candidate of [listing.subdivision, listing.neighbourhood]) {
+    const cleaned = decodeMlsEntities(candidate ?? "").trim();
+    if (cleaned && !AREA_PLACEHOLDERS.has(cleaned.toLowerCase())) return cleaned;
+  }
+  return "property";
+}
+
+// Pillar 9 formats apartments as "1405, 1010 6 Street SW, Calgary...".
+// Put the civic street address first and the unit second so condo URLs read
+// naturally and consistently: 1010-6-street-sw-1405-beltline-calgary.
+function mlsAddressPart(listing: MlsSlugSource): string {
   const parts = listing.fullAddress.split(",").map((part) => part.trim()).filter(Boolean);
   const first = parts[0] || listing.fullAddress;
   const second = parts[1] || "";
-  // Pillar 9 formats apartments as "1405, 1010 6 Street SW, Calgary...".
-  // Put the civic street address first and the unit second so condo URLs read
-  // naturally and consistently: 1010-6-street-sw-1405-beltline-calgary.
   const commaUnit = first.match(/^(?:#|unit\s*)?(\d+[a-z]?)$/i);
   const inlineUnit = first.match(/^#(\d+[a-z]?)\s+(\d+\s+.+)$/i);
-  const address = commaUnit && /^\d+\s+/.test(second)
+  return commaUnit && /^\d+\s+/.test(second)
     ? `${second} ${commaUnit[1]}`
     : inlineUnit
       ? `${inlineUnit[2]} ${inlineUnit[1]}`
       : first;
-  return [address, listing.subdivision || listing.neighbourhood || "property", listing.city]
+}
+
+export function mlsBaseSlug(listing: MlsSlugSource): string {
+  return [mlsAddressPart(listing), mlsAreaPart(listing), listing.city]
+    .map(slugifyMlsText).filter(Boolean).join("-");
+}
+
+// Slug format shipped before placeholder subdivisions and HTML entities were
+// cleaned out of the area segment. Kept solely so URLs emitted under that
+// format ("...-none-...", "...-x2019-...") can 301 to the current canonical.
+export function mlsRawBaseSlug(listing: MlsSlugSource): string {
+  return [mlsAddressPart(listing), listing.subdivision || listing.neighbourhood || "property", listing.city]
     .map(slugifyMlsPart).filter(Boolean).join("-");
 }
 
@@ -86,7 +138,38 @@ export function assignMlsLegacySeoSlugs<T extends MlsSlugSource>(listings: T[]):
 // Transitional format deployed briefly with street-first apartment addresses
 // but an MLS suffix on every colliding record.
 export function assignMlsPreviousSeoSlugs<T extends MlsSlugSource>(listings: T[]): Map<string, string> {
-  return assignSlugs(listings, mlsBaseSlug, "all-suffixed");
+  return assignSlugs(listings, mlsRawBaseSlug, "all-suffixed");
+}
+
+// The previous format exactly as it was served: within a group of listings
+// sharing a base slug, the preferred one held the clean, unsuffixed URL. Those
+// clean URLs are the ones that were emailed and shared, so they need aliases
+// too — the all-suffixed map above never produces them.
+export function assignMlsPreviousCanonicalSeoSlugs<T extends MlsSlugSource>(listings: T[]): Map<string, string> {
+  return assignSlugs(listings, mlsRawBaseSlug, "preferred-clean");
+}
+
+// Slug -> listing id for every retired format, with anything that is also a
+// live canonical slug removed. Those overlap constantly: a listing whose
+// address yields one unambiguous base slug gets the same string out of every
+// generator, and serving that as a "legacy" hit 301s the canonical URL to
+// itself. An alias may only ever point at a URL that should redirect.
+export function assignMlsAliasSlugLookup<T extends MlsSlugSource>(
+  listings: T[],
+): Map<string, string> {
+  const canonicalSlugs = new Set(assignMlsSeoSlugs(listings).values());
+  const lookup = new Map<string, string>();
+  for (const aliases of [
+    assignMlsLegacySeoSlugs(listings),
+    assignMlsPreviousSeoSlugs(listings),
+    assignMlsPreviousCanonicalSeoSlugs(listings),
+  ]) {
+    aliases.forEach((slug, id) => {
+      if (canonicalSlugs.has(slug) || lookup.has(slug)) return;
+      lookup.set(slug, id);
+    });
+  }
+  return lookup;
 }
 
 export function mlsPropertyPath(listing: MlsSlugSource & { seoSlug?: string }): string {

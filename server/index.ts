@@ -128,14 +128,20 @@ app.use((req, res, next) => {
     // A previous condo-card response omitted the canonical slug fields and
     // briefly emitted this public URL. Preserve it as a permanent migration
     // redirect rather than leaving shared/bookmarked copies as a 404.
-    if (req.params.segment === "1405-property") {
-      const affected = storage.getMlsListingById("A2332075");
-      if (affected) return res.redirect(301, `/mls/${storage.getMlsSeoSlug(affected)}`);
-    }
-    const legacy = storage.getMlsListingById(req.params.segment);
-    const oldSlug = legacy ?? storage.getMlsListingByLegacySeoSlug(req.params.segment);
-    if (!oldSlug) return next();
-    return res.redirect(301, `/mls/${storage.getMlsSeoSlug(oldSlug)}`);
+    const migrated = req.params.segment === "1405-property"
+      ? storage.getMlsListingById("A2332075")
+      : undefined;
+    const listing = migrated
+      ?? storage.getMlsListingById(req.params.segment)
+      ?? storage.getMlsListingByLegacySeoSlug(req.params.segment);
+    if (!listing) return next();
+    // An alias generator can resolve a slug that is already canonical (a
+    // listing whose address produces one unambiguous base slug gets the same
+    // string from every format). Redirecting that to itself is an infinite
+    // 301 loop, so hand canonical URLs to the SSR renderer instead.
+    const canonical = storage.getMlsSeoSlug(listing);
+    if (canonical === req.params.segment) return next();
+    return res.redirect(301, `/mls/${canonical}`);
   });
 
   try {
