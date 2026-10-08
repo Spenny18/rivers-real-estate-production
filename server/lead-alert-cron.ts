@@ -128,6 +128,7 @@ export async function processAlert(
     subject,
     html,
     replyTo: process.env.RESEND_FROM_EMAIL,
+    track: { kind: "lead_alert" },
   });
 
   if (result.ok) {

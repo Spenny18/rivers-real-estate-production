@@ -7,6 +7,8 @@
 //                           if domain is verified, else onboarding@resend.dev)
 //   SPENCER_NOTIFY_EMAIL  — optional CC for every outbound (default = from address)
 
+import { createTrackedEmail, instrumentHtml } from "./tracking";
+
 export interface SendEmailInput {
   to: string;
   subject: string;
@@ -16,6 +18,11 @@ export interface SendEmailInput {
   replyTo?: string;
   /** Resend attachments: base64 content. Keep the total under a few MB. */
   attachments?: Array<{ filename: string; content: string }>;
+  /**
+   * Track opens and clicks for this send (see server/tracking.ts). Only for
+   * mail to a lead or client — never for auth links or mail to Spencer.
+   */
+  track?: { kind: string; contactFubId?: string | null };
 }
 
 export interface SendEmailResult {
@@ -34,6 +41,27 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
     return { ok: false, error: "RESEND_FROM_EMAIL not set" };
   }
   const cc = input.cc ?? process.env.SPENCER_NOTIFY_EMAIL;
+
+  // A tracked email can't be CC'd: Spencer opening his copy would load the
+  // same pixel and register as the lead opening it. So the recipient gets the
+  // instrumented copy alone, and the CC goes out as its own untracked send.
+  if (input.track) {
+    let html = input.html;
+    try {
+      const id = createTrackedEmail(input.to, input.subject, { ...input.track, channel: "resend" });
+      html = instrumentHtml(input.html, id);
+    } catch (e: any) {
+      // Tracking is never worth failing a send over.
+      console.error("[email] tracking setup failed:", e?.message ?? e);
+    }
+    const { track: _track, ...rest } = input;
+    const result = await sendEmail({ ...rest, html, cc: "" });
+    if (result.ok && cc && cc !== input.to) {
+      await sendEmail({ ...rest, to: cc, cc: "" });
+    }
+    return result;
+  }
+
   const body: any = {
     from,
     to: [input.to],

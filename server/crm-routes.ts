@@ -7,6 +7,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { storage } from "./storage";
 import { fubConfigured, probe, testConnection } from "./fub-client";
 import { canSendEmail, sendGmail } from "./gmail";
+import { createTrackedEmail, plainTextToTrackedHtml } from "./tracking";
 import {
   RESOURCE_SPECS,
   SYNCED_RESOURCES,
@@ -305,10 +306,25 @@ export function registerCrmRoutes(app: Express, deps: { requireAuth: Middleware 
     const userId = (req as any).authUserId;
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
+    // Opens and clicks come back to this contact's timeline. Never fatal: if
+    // tracking can't be set up the message still goes, as plain text.
+    let html: string | undefined;
+    try {
+      const trackingId = createTrackedEmail(contact.email, subject, {
+        kind: "crm",
+        channel: "gmail",
+        contactFubId: fubId,
+      });
+      html = plainTextToTrackedHtml(text, trackingId);
+    } catch (e: any) {
+      console.error("[crm] email tracking setup failed:", e?.message ?? e);
+    }
+
     const sent = await sendGmail(userId, {
       to: contact.email,
       subject,
       text,
+      html,
       threadId: typeof req.body?.threadId === "string" ? req.body.threadId : undefined,
       inReplyTo: typeof req.body?.inReplyTo === "string" ? req.body.inReplyTo : undefined,
     });

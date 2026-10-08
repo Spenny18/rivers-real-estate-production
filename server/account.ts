@@ -170,6 +170,11 @@ function clearSessionCookie(res: Response) {
   );
 }
 
+/** The signed-in portal user's email, if any — used to identify site visitors. */
+export function accountEmailFromRequest(req: Request): string | null {
+  return resolveSession(parseCookie(req))?.email ?? null;
+}
+
 // ---- Auth middleware ------------------------------------------------------
 
 export interface AccountReq extends Request {

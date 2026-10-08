@@ -523,6 +523,17 @@ export async function registerRoutes(
     console.error("[seed] failed:", e);
   }
 
+  // Activity tracking — the site beacon, email open/click endpoints, and the
+  // admin timeline. Registered first: it installs the middleware that ties a
+  // browser to the email submitted through any public form, which has to sit
+  // in front of those form routes. See server/tracking.ts.
+  try {
+    const { registerTrackingRoutes } = await import("./tracking-routes");
+    registerTrackingRoutes(app, { requireAuth, rateLimit });
+  } catch (e) {
+    console.error("[tracking] failed to register routes:", e);
+  }
+
   // Consumer portal (/account/*) endpoints — magic-link auth + favorites.
   // Mounted before the SPA catch-all so /api/account/* routes are served.
   try {
@@ -1852,6 +1863,7 @@ export async function registerRoutes(
       subject: `Your instant home valuation — ${address}`,
       html: visitorHtml,
       replyTo: "spencer@riversrealestate.ca",
+      track: { kind: "valuation" },
     });
 
     // 2. Capture the visitor as a lead so it lands in /admin/leads + the

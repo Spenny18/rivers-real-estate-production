@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { trackListingView } from "@/lib/activity-tracker";
 import { Link, useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
@@ -73,6 +74,22 @@ export default function MlsDetailPage() {
     queryKey: ["/api/public/mls", id],
     enabled: !!id,
   });
+
+  // One listing_view per listing per page visit, on top of the pageview —
+  // it carries the price, beds and neighbourhood a lead's timeline shows.
+  const trackedListing = useRef<string | null>(null);
+  useEffect(() => {
+    if (!data || trackedListing.current === data.mlsNumber) return;
+    trackedListing.current = data.mlsNumber;
+    trackListingView({
+      mlsNumber: data.mlsNumber,
+      address: data.fullAddress,
+      price: data.listPrice,
+      beds: data.beds,
+      baths: data.baths,
+      neighbourhood: data.neighbourhood,
+    });
+  }, [data]);
 
   if (isLoading) {
     return (
