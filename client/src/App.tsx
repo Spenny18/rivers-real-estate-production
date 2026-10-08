@@ -6,12 +6,15 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/theme-provider";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { lazy, Suspense, useEffect, useRef } from "react";
+import { trackPageview } from "@/lib/activity-tracker";
 
-// ---- Follow Up Boss pixel: SPA pageview tracker ----------------------------
-// The initial pageview fires from the snippet in index.html. This hook fires
-// a fresh pageview every time wouter's location changes, so deep navigations
-// (e.g. /condos/the-river, /mls/A2305467) each register as their own event
-// in FUB rather than the homepage being the only thing FUB ever sees.
+// ---- SPA pageview tracking --------------------------------------------------
+// Two trackers run side by side while the move off Follow Up Boss finishes:
+// FUB's widget (its first pageview fires from the snippet in index.html) and
+// the site's own beacon (client/src/lib/activity-tracker.ts), which records
+// every view including the first. Each wouter location change fires both, so
+// deep navigations (e.g. /condos/the-river, /mls/A2305467) register as their
+// own events rather than the landing page being the only thing ever seen.
 declare global {
   interface Window {
     widgetTracker?: (...args: any[]) => void;
@@ -22,12 +25,18 @@ function usePageviewTracker() {
   const firstRender = useRef(true);
   useEffect(() => {
     if (firstRender.current) {
-      // Skip — index.html's snippet already fired the first pageview.
+      // The server-rendered <title> is already right, so record it now — a
+      // delay here would lose every visitor who bounces straight away.
+      // FUB: index.html's snippet already fired the first pageview.
       firstRender.current = false;
+      trackPageview();
       return;
     }
-    if (typeof window === "undefined" || !window.widgetTracker) return;
-    window.widgetTracker("send", "pageview");
+    window.widgetTracker?.("send", "pageview");
+    // After a client-side navigation, give the new page a moment to set its
+    // <title> before it is recorded.
+    const t = window.setTimeout(trackPageview, 300);
+    return () => window.clearTimeout(t);
   }, [location]);
 }
 

@@ -447,6 +447,7 @@ export function registerHomeValueRoutes(app: Express) {
         html: leadHtml,
         text: leadText,
         replyTo: process.env.SPENCER_NOTIFY_EMAIL || "spencer@riversrealestate.ca",
+        track: { kind: "valuation" },
       });
     } catch (e) {
       console.error("[home-value] lead email failed:", e);

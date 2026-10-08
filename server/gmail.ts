@@ -23,6 +23,7 @@
 // days the way they do in Testing mode. riversrealestate.ca is Workspace, so
 // that is the setup: consent screen -> Internal.
 
+import { randomBytes } from "node:crypto";
 import { getValidAccessToken } from "./google-calendar";
 import { storage } from "./storage";
 
@@ -66,8 +67,14 @@ export interface SendResult {
 export interface OutgoingEmail {
   to: string;
   subject: string;
-  /** Plain text body. Sent as text/plain; no HTML compose surface yet. */
+  /** Plain text body, as typed. */
   text: string;
+  /**
+   * Optional HTML alternative. When present the message goes out as
+   * multipart/alternative; the CRM uses it to carry an open pixel and tracked
+   * links (see server/tracking.ts) while the text part stays exactly as typed.
+   */
+  html?: string;
   /** Set to continue an existing conversation rather than start a new one. */
   threadId?: string;
   /** The Message-ID being replied to, so mail clients thread it correctly. */
@@ -96,8 +103,6 @@ function buildMime(from: string, email: OutgoingEmail): string {
     `To: ${email.to}`,
     `Subject: ${encodeHeader(email.subject)}`,
     "MIME-Version: 1.0",
-    'Content-Type: text/plain; charset="UTF-8"',
-    "Content-Transfer-Encoding: 8bit",
   ];
   if (email.inReplyTo) {
     // Both headers: In-Reply-To is what most clients thread on, References is
@@ -106,7 +111,32 @@ function buildMime(from: string, email: OutgoingEmail): string {
   }
   // A bare LF between headers and body is tolerated by Gmail but not by every
   // relay downstream; CRLF is what the spec asks for.
-  return `${headers.join("\r\n")}\r\n\r\n${email.text.replace(/\r?\n/g, "\r\n")}`;
+  const crlf = (t: string) => t.replace(/\r?\n/g, "\r\n");
+  if (!email.html) {
+    headers.push('Content-Type: text/plain; charset="UTF-8"', "Content-Transfer-Encoding: 8bit");
+    return `${headers.join("\r\n")}\r\n\r\n${crlf(email.text)}`;
+  }
+  // Base64 parts: no line-length or 8-bit concerns for either body, whatever
+  // was typed. Text first — the last part is the one clients prefer to show.
+  const boundary = `=_lhc_${randomBytes(12).toString("hex")}`;
+  const b64 = (t: string) => Buffer.from(t, "utf8").toString("base64").replace(/.{76}/g, "$&\r\n");
+  headers.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
+  return [
+    headers.join("\r\n"),
+    "",
+    `--${boundary}`,
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: base64",
+    "",
+    b64(crlf(email.text)),
+    `--${boundary}`,
+    'Content-Type: text/html; charset="UTF-8"',
+    "Content-Transfer-Encoding: base64",
+    "",
+    b64(email.html),
+    `--${boundary}--`,
+    "",
+  ].join("\r\n");
 }
 
 /** Send one message as the connected Google account. */

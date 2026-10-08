@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
+import { RecentlyActiveList, WebActivityPanel } from "@/components/web-activity";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -667,6 +668,7 @@ export default function AdminCrmPage() {
               <TabsTrigger value="pipeline" data-testid="tab-crm-pipeline">Pipeline</TabsTrigger>
               <TabsTrigger value="contacts" data-testid="tab-crm-contacts">Contacts</TabsTrigger>
               <TabsTrigger value="activity" data-testid="tab-crm-activity">Activity</TabsTrigger>
+              <TabsTrigger value="website" data-testid="tab-crm-website">Website</TabsTrigger>
               <TabsTrigger value="tasks" data-testid="tab-crm-tasks">Tasks</TabsTrigger>
               <TabsTrigger value="sync" data-testid="tab-crm-sync">Sync</TabsTrigger>
             </TabsList>
@@ -723,7 +725,12 @@ export default function AdminCrmPage() {
               )}
             </TabsContent>
 
-            {/* ================= CONTACTS ================= */}
+            {/* ================= WEBSITE ================= */}
+            <TabsContent value="website">
+              <RecentlyActiveList onOpen={setOpenContact} />
+            </TabsContent>
+
+                        {/* ================= CONTACTS ================= */}
             <TabsContent value="contacts">
               <div className="relative mb-4 max-w-md">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -1307,6 +1314,8 @@ export default function AdminCrmPage() {
                   </div>
                 </div>
               )}
+
+              {detail.contact.email && <WebActivityPanel email={detail.contact.email} />}
 
               <div>
                 <div className="font-display text-[10px] tracking-[0.18em] text-muted-foreground mb-2">

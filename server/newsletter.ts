@@ -15,6 +15,7 @@ import { storage, type NewsletterIssueRow, type NewsletterSubscriber } from "./s
 import { publicOrigin } from "./origin";
 import { AGENT } from "./brand";
 import { sendEmail } from "./email";
+import { createTrackedEmail, instrumentHtml } from "./tracking";
 import { buildReport, isValidPeriod, periodLabel } from "./market-report";
 import { defaultReportPeriod } from "./market-report-render";
 import { toStored } from "./market-report-store";
@@ -28,6 +29,20 @@ import {
   type RenderContext,
   type RenderedIssue,
 } from "./newsletter-template";
+
+/**
+ * Give one recipient's copy its own open pixel and tracked links. Per
+ * recipient, after personalisation, because the tracking id is what says who
+ * opened it. Unsubscribe links are left untouched (see tracking.ts).
+ */
+function trackNewsletterHtml(to: string, subject: string, html: string): string {
+  try {
+    return instrumentHtml(html, createTrackedEmail(to, subject, { kind: "newsletter", channel: "newsletter" }));
+  } catch (e: any) {
+    console.error("[newsletter] tracking setup failed:", e?.message ?? e);
+    return html;
+  }
+}
 
 // ---- Assembling an issue -----------------------------------------------------------
 
@@ -247,7 +262,7 @@ export async function sendIssue(
       const emails: OutgoingEmail[] = batch.map((s) => {
         const unsub = unsubscribeUrl(s.token);
         const p = { firstName: s.firstName, unsubUrl: unsub };
-        return { to: s.email, subject: row.subject, html: personalize(rendered.html, p), text: personalize(rendered.text, p), unsubscribeUrl: unsub };
+        return { to: s.email, subject: row.subject, html: trackNewsletterHtml(s.email, row.subject, personalize(rendered.html, p)), text: personalize(rendered.text, p), unsubscribeUrl: unsub };
       });
       let results: Array<{ id?: string; error?: string }>;
       try {
