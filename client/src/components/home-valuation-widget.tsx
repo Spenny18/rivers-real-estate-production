@@ -57,6 +57,8 @@ import {
   type PlaceSelection,
 } from "@/components/places-autocomplete";
 import { StaticMapPreview } from "@/components/static-map-preview";
+import { PrivacyLink } from "@/components/privacy-link";
+
 
 interface ValuationResponse {
   ok: boolean;
@@ -624,7 +626,7 @@ export function HomeValuationWidget({ onSeedManualForm }: Props) {
 
                   <p className="text-[11px] text-muted-foreground leading-relaxed text-center">
                     Spencer reviews every request personally. No spam, reply
-                    to opt out anytime.
+                    to opt out anytime. <PrivacyLink />.
                   </p>
                 </form>
               ) : (

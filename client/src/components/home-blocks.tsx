@@ -86,6 +86,8 @@ import type {
   PublicTestimonial,
   PublicStats,
 } from "@/lib/mls-types";
+import { PrivacyNote } from "@/components/privacy-link";
+
 
 // ---------------------------------------------------------------------------
 // Shared bits
@@ -1642,6 +1644,7 @@ function ContactCtaBlock({ data }: { data: Data }) {
                     </>
                   )}
                 </Button>
+                <PrivacyNote />
               </form>
             </Form>
           </div>

@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useRequestMagicLink, useAccount } from "@/lib/account";
 import { useEffect } from "react";
+import { PrivacyLink } from "@/components/privacy-link";
+
 
 const ERROR_LABELS: Record<string, string> = {
   missing_token: "That sign-in link was incomplete. Try requesting a new one.",
@@ -123,7 +125,8 @@ export default function AccountLoginPage() {
             </a>
             <p className="text-xs text-muted-foreground leading-relaxed">
               By signing in you agree that Spencer may follow up by phone or
-              email about your inquiries. No spam — unsubscribe anytime.
+              email about your inquiries. No spam — unsubscribe anytime.{" "}
+              <PrivacyLink />.
             </p>
           </form>
         )}
