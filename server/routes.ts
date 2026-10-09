@@ -41,7 +41,7 @@ const execFileAsync = promisify(execFile);
 // we fall back to a local folder under client/public/ so the dev server
 // can serve them too.
 import { UPLOADS_ROOT, ensureUploadsDir } from "./uploads";
-import { heroImageGenerationEnabled, queueHeroImage, keepGeneratedHero } from "./hero-image";
+import { heroImageGenerationEnabled, queueHeroImage, keepGeneratedHero, regenerateHeroImage } from "./hero-image";
 
 function parseJsonArr(s: string | null | undefined): any[] {
   if (!s) return [];
@@ -2785,6 +2785,26 @@ export async function registerRoutes(
 
   // POST — create a new post. Defaults to status="draft" unless explicitly
   // overridden. Used by the BOFU auto-blog pipeline.
+  // POST /api/admin/blog/:slug/generate-hero — regenerate a post's hero now
+  // (20–60s) and save it. Optional body { focus } steers the subject. Takes the
+  // bearer token too, so a scheduled task can backfill older posts.
+  app.post("/api/admin/blog/:slug/generate-hero", requireAdminOrToken, async (req, res) => {
+    const slug = String(req.params.slug ?? "");
+    if (!storage.getBlogBySlug(slug)) return res.status(404).json({ message: "Post not found" });
+    if (!heroImageGenerationEnabled()) {
+      return res.status(503).json({ message: "Hero generation is off (OPENAI_API_KEY unset or BLOG_HERO_AI=off)" });
+    }
+    try {
+      const focus = typeof req.body?.focus === "string" ? req.body.focus.slice(0, 300) : null;
+      const heroImage = await regenerateHeroImage(slug, focus);
+      res.json({ heroImage });
+    } catch (err: any) {
+      const message = String(err?.message ?? err);
+      console.error(`[hero-image] "${slug}": regenerate failed:`, message);
+      res.status(/already being generated/.test(message) ? 409 : 502).json({ message });
+    }
+  });
+
   app.post("/api/admin/blog", requireAdminOrToken, async (req, res) => {
     const body = req.body || {};
     if (!body.slug || typeof body.slug !== "string" || !/^[a-z0-9-]+$/i.test(body.slug)) {
