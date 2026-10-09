@@ -9,6 +9,7 @@ import { ChevronLeft, ChevronRight, Clock, Plus } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
+  BusinessLineCard,
   FubAppointmentRow,
   NewShowingDialog,
   SHOWING_STATUS_STYLES,
@@ -126,6 +127,7 @@ export default function AdminCalendarPage() {
     <AppShell pageTitle="Calendar">
       <div className="p-6 max-w-[1400px] mx-auto">
         <GoogleCalendarConnect />
+        <BusinessLineCard />
         <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
           <div>
             <h1 className="font-serif text-3xl text-foreground" style={{ letterSpacing: "-0.01em" }}>

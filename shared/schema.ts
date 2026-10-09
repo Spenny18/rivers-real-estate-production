@@ -156,6 +156,9 @@ export const tours = sqliteTable("tours", {
   inviteSequence: integer("invite_sequence").notNull().default(0),
   invitedAt: text("invited_at"),
   inviteError: text("invite_error"),
+  // Morning-of text reminder (server/showing-reminders.ts).
+  reminderSentAt: text("reminder_sent_at"),
+  reminderError: text("reminder_error"),
   createdAt: text("created_at")
     .notNull()
     .$defaultFn(() => new Date().toISOString()),

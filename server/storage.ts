@@ -1287,6 +1287,8 @@ try {
       ["invite_sequence", "INTEGER NOT NULL DEFAULT 0"],
       ["invited_at", "TEXT"],
       ["invite_error", "TEXT"],
+      ["reminder_sent_at", "TEXT"],
+      ["reminder_error", "TEXT"],
     ];
     for (const [name, type] of add) {
       if (!existing.has(name)) sqlite.exec(`ALTER TABLE tours ADD COLUMN ${name} ${type}`);
