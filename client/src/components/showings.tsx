@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { CrmContactLite } from "@/lib/esign-types";
+import { showingStreetLine } from "@shared/showing-address";
 
 export interface ShowingListing {
   source: "mls" | "managed" | "unknown";
@@ -536,10 +537,10 @@ export function ShowingRow({ showing }: { showing: ShowingView }) {
             <div className="font-serif text-base truncate" style={{ letterSpacing: "-0.01em" }}>
               {showing.listing.url ? (
                 <a href={showing.listing.url} target="_blank" rel="noreferrer" className="hover:underline underline-offset-2">
-                  {showing.listing.address.split(",")[0]}
+                  {showingStreetLine(showing.listing.address)}
                 </a>
               ) : (
-                showing.listing.address.split(",")[0]
+                showingStreetLine(showing.listing.address)
               )}
             </div>
             <div className="text-xs text-muted-foreground flex items-center gap-1 truncate mt-0.5">
