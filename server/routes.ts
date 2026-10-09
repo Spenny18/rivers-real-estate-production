@@ -568,6 +568,11 @@ export async function registerRoutes(
     const { registerTwilioRoutes } = await import("./twilio-routes");
     registerTwilioRoutes(app, { requireAuth });
 
+    // The Inbox — emails (from Gmail), texts, calls and notes per contact,
+    // with their activity alongside. See server/inbox.ts.
+    const { registerInboxRoutes } = await import("./inbox-routes");
+    registerInboxRoutes(app, { requireAuth });
+
     const { registerMarketRoutes } = await import("./market-routes");
     registerMarketRoutes(app, { requireAuth });
   } catch (e) {

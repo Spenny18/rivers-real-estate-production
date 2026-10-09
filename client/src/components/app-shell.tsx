@@ -32,7 +32,9 @@ import {
   Mail,
   Briefcase,
   ChevronDown,
+  Inbox,
 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -61,6 +63,7 @@ interface NavGroup {
 
 const primaryNav: NavGroup[] = [
   { label: "Dashboard", icon: LayoutDashboard, href: "/admin/dashboard" },
+  { label: "Inbox", icon: Inbox, href: "/admin/inbox" },
   {
     label: "Calendar",
     icon: Calendar,
@@ -187,6 +190,12 @@ export function AppShell({
   const [location, setLocation] = useLocation();
   const { theme, toggle } = useTheme();
   const { user, signOut } = useAuth();
+  // Unread conversations, for the Inbox badge. Polled; cheap.
+  const { data: inboxUnread } = useQuery<{ count: number }>({
+    queryKey: ["/api/admin/inbox/unread"],
+    refetchInterval: 60_000,
+    enabled: !!user,
+  });
 
   // Groups the user has expanded. The group containing the current route is
   // opened automatically so the active child is never hidden.
@@ -215,7 +224,11 @@ export function AppShell({
     setOpenGroups((prev) => (prev.has(label) ? prev : new Set(prev).add(label)));
 
   const badgeFor = (href: string) =>
-    href === "/admin/leads" && newLeadCount > 0 ? newLeadCount : undefined;
+    href === "/admin/leads" && newLeadCount > 0
+      ? newLeadCount
+      : href === "/admin/inbox" && (inboxUnread?.count ?? 0) > 0
+        ? inboxUnread!.count
+        : undefined;
 
   const renderLeaf = (item: NavItem, nested = false) => {
     const active = isRouteActive(location, item.href);
