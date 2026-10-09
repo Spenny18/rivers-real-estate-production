@@ -81,6 +81,7 @@ const AdminSeoPage = lazy(() => import("@/pages/admin-seo"));
 const AdminAiVisibilityPage = lazy(() => import("@/pages/admin-ai-visibility"));
 const AdminSchedulingPage = lazy(() => import("@/pages/admin-scheduling"));
 const AdminCrmPage = lazy(() => import("@/pages/admin-crm"));
+const AdminInboxPage = lazy(() => import("@/pages/admin-inbox"));
 const AdminMarketPage = lazy(() => import("@/pages/admin-market"));
 const AdminMarketReportsPage = lazy(() => import("@/pages/admin-market-reports"));
 const AdminNewsletterPage = lazy(() => import("@/pages/admin-newsletter"));
@@ -215,6 +216,10 @@ function AppRouter() {
       <Route
         path="/admin/crm"
         component={() => <ProtectedRoute component={AdminCrmPage} />}
+      />
+      <Route
+        path="/admin/inbox"
+        component={() => <ProtectedRoute component={AdminInboxPage} />}
       />
       <Route
         path="/admin/market"

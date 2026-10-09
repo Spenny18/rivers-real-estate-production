@@ -185,6 +185,12 @@ app.use((req, res, next) => {
     console.error("[reminders] failed to start cron:", err);
   }
   try {
+    const { startInboxEmailCron } = await import("./gmail-inbox");
+    startInboxEmailCron();
+  } catch (err) {
+    console.error("[inbox] failed to start gmail sync:", err);
+  }
+  try {
     startCrmSyncCron();
   } catch (err) {
     console.error("[crm-sync] failed to start cron:", err);
