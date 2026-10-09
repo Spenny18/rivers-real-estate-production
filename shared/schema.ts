@@ -128,6 +128,11 @@ export type InsertMessage = z.infer<typeof insertMessageSchema>;
 export type Message = typeof messages.$inferSelect;
 
 // ---- Tours ----------------------------------------------------------------
+// A showing. listingId is an MLS number for anything created from the admin
+// showing form or the client portal, or a managed-listing id for older rows.
+// Client details are snapshotted onto the row so an invite still reaches the
+// right person after a CRM contact is edited or a lead is deleted; leadId and
+// contactFubId only link back.
 export const tours = sqliteTable("tours", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   listingId: text("listing_id").notNull(),
@@ -135,6 +140,22 @@ export const tours = sqliteTable("tours", {
   scheduledFor: text("scheduled_for").notNull(),
   status: text("status").notNull().default("requested"),
   notes: text("notes"),
+  durationMinutes: integer("duration_minutes").notNull().default(60),
+  clientName: text("client_name"),
+  clientEmail: text("client_email"),
+  clientPhone: text("client_phone"),
+  contactFubId: text("contact_fub_id"),
+  // Whether the client gets calendar invites (and updates) for this showing.
+  notifyClient: integer("notify_client", { mode: "boolean" }).notNull().default(true),
+  // Spencer's own Google Calendar copy. Also the client's invite when
+  // inviteChannel is "google" (they're an attendee on it).
+  googleEventId: text("google_event_id"),
+  // How the client was invited — sticky, so updates and cancellations reach
+  // them the same way: "google" (attendee, Google emails) | "email" (.ics).
+  inviteChannel: text("invite_channel"),
+  inviteSequence: integer("invite_sequence").notNull().default(0),
+  invitedAt: text("invited_at"),
+  inviteError: text("invite_error"),
   createdAt: text("created_at")
     .notNull()
     .$defaultFn(() => new Date().toISOString()),

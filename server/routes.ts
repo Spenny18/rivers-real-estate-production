@@ -558,6 +558,11 @@ export async function registerRoutes(
     const { registerCrmRoutes } = await import("./crm-routes");
     registerCrmRoutes(app, { requireAuth });
 
+    // Showings — /api/admin/showings/* and the read-only FUB appointment
+    // layer on /admin/calendar. See server/showings.ts.
+    const { registerShowingRoutes } = await import("./showing-routes");
+    registerShowingRoutes(app, { requireAuth });
+
     const { registerMarketRoutes } = await import("./market-routes");
     registerMarketRoutes(app, { requireAuth });
   } catch (e) {
@@ -1629,60 +1634,43 @@ export async function registerRoutes(
   });
 
   // ---------- TOURS ----------
+  // Kept for the calendar's status select and older callers; showings proper
+  // (create with client invite, reschedule, resend) live in
+  // server/showing-routes.ts. Both go through server/showings.ts.
   app.get("/api/tours", requireAuth, (_req, res) => {
     res.json(storage.listTours());
   });
 
   app.post("/api/tours", requireAuth, async (req, res) => {
     try {
-      const tour = storage.createTour(req.body) as any;
-      const userId = (req as any).authUserId as number;
-      // Mirror to Google Calendar if user has connected.
-      try {
-        const { syncTourToGoogle } = await import("./google-calendar");
-        const listing = tour.listingId ? storage.getListingById(tour.listingId) : undefined;
-        const lead = tour.leadId ? storage.getLead(tour.leadId) : undefined;
-        const r = await syncTourToGoogle(userId, tour, listing as any, lead as any);
-        if (r.ok && r.eventId) {
-          storage.updateTourGoogleEventId(tour.id, r.eventId);
-          tour.googleEventId = r.eventId;
-        }
-      } catch (e: any) {
-        console.warn("[google-cal] tour sync (create) failed:", e?.message);
-      }
-      res.json(tour);
+      const tour = storage.createTour(req.body);
+      const { syncShowing } = await import("./showings");
+      const delivery = await syncShowing((req as any).authUserId, tour.id).catch((e: any) => {
+        console.warn("[showings] sync (create) failed:", e?.message);
+        return null;
+      });
+      res.json({ ...storage.getTour(tour.id), delivery });
     } catch (e: any) {
       res.status(400).json({ message: e.message ?? "Invalid tour data" });
     }
   });
 
   app.patch("/api/tours/:id", requireAuth, async (req, res) => {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(String(req.params.id), 10);
     if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid id" });
     const status = (req.body ?? {}).status;
     if (!status || typeof status !== "string") {
       return res.status(400).json({ message: "Status required" });
     }
-    const updated = storage.updateTourStatus(id, status) as any;
+    const updated = storage.updateTourStatus(id, status);
     if (!updated) return res.status(404).json({ message: "Tour not found" });
-    const userId = (req as any).authUserId as number;
-    try {
-      const { syncTourToGoogle, deleteTourFromGoogle } = await import("./google-calendar");
-      if (status === "cancelled") {
-        await deleteTourFromGoogle(userId, updated);
-        storage.updateTourGoogleEventId(updated.id, null);
-      } else {
-        const listing = updated.listingId ? storage.getListingById(updated.listingId) : undefined;
-        const lead = updated.leadId ? storage.getLead(updated.leadId) : undefined;
-        const r = await syncTourToGoogle(userId, updated, listing as any, lead as any);
-        if (r.ok && r.eventId && r.eventId !== updated.googleEventId) {
-          storage.updateTourGoogleEventId(updated.id, r.eventId);
-        }
-      }
-    } catch (e: any) {
-      console.warn("[google-cal] tour sync (patch) failed:", e?.message);
-    }
-    res.json(updated);
+    // Confirming a client's portal request is what sends them their invite.
+    const { syncShowing } = await import("./showings");
+    const delivery = await syncShowing((req as any).authUserId, id).catch((e: any) => {
+      console.warn("[showings] sync (status) failed:", e?.message);
+      return null;
+    });
+    res.json({ ...storage.getTour(id), delivery });
   });
 
   // ---------- PUBLIC INQUIRY ----------

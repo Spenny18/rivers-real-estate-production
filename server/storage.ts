@@ -1275,6 +1275,22 @@ try {
       sqlite.exec("ALTER TABLE tours ADD COLUMN google_event_id TEXT");
       console.log("[migration] added google_event_id to tours");
     }
+    // Showings: client snapshot + invite tracking (see tours in shared/schema.ts).
+    const add: Array<[string, string]> = [
+      ["duration_minutes", "INTEGER NOT NULL DEFAULT 60"],
+      ["client_name", "TEXT"],
+      ["client_email", "TEXT"],
+      ["client_phone", "TEXT"],
+      ["contact_fub_id", "TEXT"],
+      ["notify_client", "INTEGER NOT NULL DEFAULT 1"],
+      ["invite_channel", "TEXT"],
+      ["invite_sequence", "INTEGER NOT NULL DEFAULT 0"],
+      ["invited_at", "TEXT"],
+      ["invite_error", "TEXT"],
+    ];
+    for (const [name, type] of add) {
+      if (!existing.has(name)) sqlite.exec(`ALTER TABLE tours ADD COLUMN ${name} ${type}`);
+    }
   }
 } catch (err) {
   console.error("[migration] failed to add google_event_id column:", err);
@@ -1470,6 +1486,8 @@ export interface IStorage {
   // Tours
   listTours(): Tour[];
   createTour(data: InsertTour): Tour;
+  getTour(id: number): Tour | undefined;
+  updateTour(id: number, patch: Partial<Omit<Tour, "id" | "createdAt">>): Tour | undefined;
   updateTourStatus(id: number, status: string): Tour | undefined;
 }
 
@@ -3527,6 +3545,9 @@ export class DatabaseStorage implements IStorage {
   listTours() {
     return db.select().from(tours).orderBy(desc(tours.scheduledFor)).all();
   }
+  getTour(id: number): Tour | undefined {
+    return db.select().from(tours).where(eq(tours.id, id)).get();
+  }
   createTour(data: InsertTour) {
     return db
       .insert(tours)
@@ -3536,9 +3557,18 @@ export class DatabaseStorage implements IStorage {
         scheduledFor: data.scheduledFor,
         status: data.status ?? "requested",
         notes: data.notes ?? null,
+        durationMinutes: data.durationMinutes ?? 60,
+        clientName: data.clientName ?? null,
+        clientEmail: data.clientEmail ?? null,
+        clientPhone: data.clientPhone ?? null,
+        contactFubId: data.contactFubId ?? null,
+        notifyClient: data.notifyClient ?? true,
       })
       .returning()
       .get();
+  }
+  updateTour(id: number, patch: Partial<Omit<Tour, "id" | "createdAt">>): Tour | undefined {
+    return db.update(tours).set(patch).where(eq(tours.id, id)).returning().get();
   }
   updateTourStatus(id: number, status: string) {
     return db

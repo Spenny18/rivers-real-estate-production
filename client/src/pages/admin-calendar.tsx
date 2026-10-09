@@ -5,25 +5,20 @@ import { AppShell } from "@/components/app-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { ChevronLeft, ChevronRight, Clock, MapPin, User } from "lucide-react";
+import { ChevronLeft, ChevronRight, Clock, Plus } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Tour, Lead } from "@shared/schema";
-import type { PublicListing } from "@/lib/types";
+import {
+  FubAppointmentRow,
+  NewShowingDialog,
+  SHOWING_STATUS_STYLES,
+  ShowingRow,
+  type FubAppointment,
+  type ShowingView,
+} from "@/components/showings";
 
-const STATUS_STYLES: Record<string, string> = {
-  requested: "bg-amber-100 text-amber-900 border-amber-200 dark:bg-amber-950 dark:text-amber-100 dark:border-amber-900",
-  confirmed: "bg-emerald-100 text-emerald-900 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-100 dark:border-emerald-900",
-  completed: "bg-secondary text-secondary-foreground border-border",
-  cancelled: "bg-secondary/40 text-muted-foreground border-border line-through",
-};
+// /admin/calendar — showings (server/showings.ts) plus, while scheduling moves
+// off Follow Up Boss, FUB's own appointments as a read-only layer.
 
 function startOfMonth(d: Date) {
   const x = new Date(d);
@@ -73,71 +68,87 @@ function formatLongDate(d: Date) {
   return d.toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
 }
 
-export default function AdminCalendarPage() {
-  const qc = useQueryClient();
-  const { toast } = useToast();
+/** One entry on the calendar, whichever source it came from. */
+type Entry =
+  | { kind: "showing"; at: string; showing: ShowingView }
+  | { kind: "fub"; at: string; appt: FubAppointment };
 
+function groupByDay(entries: Entry[]): Map<string, Entry[]> {
+  const map = new Map<string, Entry[]>();
+  for (const e of entries) {
+    const key = new Date(e.at).toDateString();
+    const arr = map.get(key) ?? [];
+    arr.push(e);
+    map.set(key, arr);
+  }
+  map.forEach((arr) => arr.sort((a, b) => Date.parse(a.at) - Date.parse(b.at)));
+  return map;
+}
+
+export default function AdminCalendarPage() {
   const [monthAnchor, setMonthAnchor] = useState(() => startOfMonth(new Date()));
   const [selectedDay, setSelectedDay] = useState<Date>(() => new Date());
+  const [creating, setCreating] = useState(false);
+  const [showFub, setShowFub] = useState(true);
 
-  const { data: tours = [], isLoading } = useQuery<Tour[]>({ queryKey: ["/api/tours"] });
-  const { data: leads = [] } = useQuery<Lead[]>({ queryKey: ["/api/leads"] });
-  const { data: listings = [] } = useQuery<PublicListing[]>({ queryKey: ["/api/listings"] });
-
+  const { data: showings = [], isLoading } = useQuery<ShowingView[]>({ queryKey: ["/api/admin/showings"] });
+  // The visible six weeks, padded, so a month change refetches only its window.
   const grid = useMemo(() => buildCalendarGrid(monthAnchor), [monthAnchor]);
+  const from = grid[0].toISOString();
+  const to = new Date(grid[grid.length - 1].getTime() + 86_400_000).toISOString();
+  const { data: fubAppts = [] } = useQuery<FubAppointment[]>({
+    queryKey: [`/api/admin/calendar/fub-appointments?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`],
+  });
   const today = new Date();
 
-  const toursByDay = useMemo(() => {
-    const map = new Map<string, Tour[]>();
-    for (const t of tours) {
-      const key = new Date(t.scheduledFor).toDateString();
-      const arr = map.get(key) ?? [];
-      arr.push(t);
-      map.set(key, arr);
-    }
-    Array.from(map.values()).forEach((arr: Tour[]) => {
-      arr.sort(
-        (a: Tour, b: Tour) =>
-          new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime(),
-      );
-    });
-    return map;
-  }, [tours]);
-
-  const selectedDayTours = toursByDay.get(selectedDay.toDateString()) ?? [];
-
-  const updateStatus = useMutation({
-    mutationFn: async ({ id, status }: { id: number; status: string }) => {
-      const res = await apiRequest("PATCH", `/api/tours/${id}`, { status });
-      return res.json();
-    },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/tours"] }),
-    onError: (e: any) =>
-      toast({ title: "Couldn't update tour", description: e?.message ?? "Try again.", variant: "destructive" }),
-  });
+  const entries = useMemo<Entry[]>(
+    () => [
+      ...showings.map((s) => ({ kind: "showing" as const, at: s.scheduledFor, showing: s })),
+      ...(showFub ? fubAppts.map((a) => ({ kind: "fub" as const, at: a.startsAt, appt: a })) : []),
+    ],
+    [showings, fubAppts, showFub],
+  );
+  const byDay = useMemo(() => groupByDay(entries), [entries]);
+  const selectedEntries = byDay.get(selectedDay.toDateString()) ?? [];
 
   const upcoming = useMemo(() => {
     const now = Date.now();
-    return tours
-      .filter((t) => new Date(t.scheduledFor).getTime() >= now)
-      .sort((a, b) => new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime())
+    return showings
+      .filter((s) => Date.parse(s.scheduledFor) >= now && s.status !== "cancelled")
+      .sort((a, b) => Date.parse(a.scheduledFor) - Date.parse(b.scheduledFor))
       .slice(0, 8);
-  }, [tours]);
+  }, [showings]);
+
+  const pendingRequests = showings.filter((s) => s.status === "requested" && Date.parse(s.scheduledFor) >= Date.now()).length;
 
   return (
     <AppShell pageTitle="Calendar">
       <div className="p-6 max-w-[1400px] mx-auto">
         <GoogleCalendarConnect />
-        <div className="flex items-end justify-between mb-6">
+        <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
           <div>
             <h1 className="font-serif text-3xl text-foreground" style={{ letterSpacing: "-0.01em" }}>
               Calendar
             </h1>
             <p className="text-sm text-muted-foreground mt-1.5">
-              Showings, tours, and confirmed appointments. Tied to your listings and leads.
+              Showings, with calendar invites to your clients.
+              {pendingRequests > 0 && (
+                <span className="text-amber-700 dark:text-amber-400">
+                  {" "}
+                  {pendingRequests} tour request{pendingRequests === 1 ? "" : "s"} waiting for you to confirm.
+                </span>
+              )}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              className="rounded-sm h-9 font-display tracking-[0.14em] text-[11px] mr-2"
+              onClick={() => setCreating(true)}
+              data-testid="button-new-showing"
+            >
+              <Plus className="w-3.5 h-3.5 mr-1.5" /> NEW SHOWING
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -174,23 +185,25 @@ export default function AdminCalendarPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
+        <label className="inline-flex items-center gap-2 text-[12px] text-muted-foreground mb-3 cursor-pointer">
+          <input type="checkbox" checked={showFub} onChange={(e) => setShowFub(e.target.checked)} />
+          Show Follow Up Boss appointments ({fubAppts.length} this view, read-only)
+        </label>
+
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-6">
           {/* Month grid */}
           <Card>
             <CardContent className="p-0">
               <div className="grid grid-cols-7 border-b border-border">
                 {["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"].map((d) => (
-                  <div
-                    key={d}
-                    className="px-3 py-2 font-display text-[10px] tracking-[0.2em] text-muted-foreground"
-                  >
+                  <div key={d} className="px-3 py-2 font-display text-[10px] tracking-[0.2em] text-muted-foreground">
                     {d}
                   </div>
                 ))}
               </div>
               <div className="grid grid-cols-7 grid-rows-6 min-h-[640px]">
                 {grid.map((day, i) => {
-                  const dayTours = toursByDay.get(day.toDateString()) ?? [];
+                  const dayEntries = byDay.get(day.toDateString()) ?? [];
                   const isCurrentMonth = day.getMonth() === monthAnchor.getMonth();
                   const isToday = isSameDay(day, today);
                   const isSelected = isSameDay(day, selectedDay);
@@ -198,37 +211,44 @@ export default function AdminCalendarPage() {
                     <button
                       key={i}
                       onClick={() => setSelectedDay(day)}
+                      onDoubleClick={() => {
+                        setSelectedDay(day);
+                        setCreating(true);
+                      }}
                       className={`text-left border-b border-r border-border last-of-row:border-r-0 px-2 py-1.5 flex flex-col gap-1 transition-colors ${
                         isCurrentMonth ? "bg-background" : "bg-secondary/30"
                       } ${isSelected ? "ring-2 ring-foreground ring-inset" : "hover:bg-secondary/50"}`}
                     >
                       <div
                         className={`font-display text-[11px] tracking-[0.1em] inline-flex items-center justify-center w-6 h-6 rounded-full ${
-                          isToday
-                            ? "bg-foreground text-background"
-                            : isCurrentMonth
-                              ? "text-foreground"
-                              : "text-muted-foreground"
+                          isToday ? "bg-foreground text-background" : isCurrentMonth ? "text-foreground" : "text-muted-foreground"
                         }`}
                       >
                         {day.getDate()}
                       </div>
                       <div className="flex flex-col gap-1">
-                        {dayTours.slice(0, 3).map((t) => (
-                          <div
-                            key={t.id}
-                            className={`text-[10px] truncate px-1.5 py-0.5 rounded-sm border ${
-                              STATUS_STYLES[t.status] ?? STATUS_STYLES.requested
-                            }`}
-                          >
-                            {formatTime(t.scheduledFor)} ·{" "}
-                            {listings.find((l) => l.id === t.listingId)?.address?.split(",")[0] ?? t.listingId}
-                          </div>
-                        ))}
-                        {dayTours.length > 3 && (
-                          <div className="text-[10px] text-muted-foreground px-1.5">
-                            +{dayTours.length - 3} more
-                          </div>
+                        {dayEntries.slice(0, 3).map((e) =>
+                          e.kind === "showing" ? (
+                            <div
+                              key={`s${e.showing.id}`}
+                              className={`text-[10px] truncate px-1.5 py-0.5 rounded-sm border ${
+                                SHOWING_STATUS_STYLES[e.showing.status] ?? SHOWING_STATUS_STYLES.requested
+                              }`}
+                            >
+                              {formatTime(e.at)} · {e.showing.listing.address.split(",")[0]}
+                            </div>
+                          ) : (
+                            <div
+                              key={`f${e.appt.uid}`}
+                              className="text-[10px] truncate px-1.5 py-0.5 rounded-sm border border-dashed border-border text-muted-foreground"
+                              title="Follow Up Boss appointment"
+                            >
+                              {formatTime(e.at)} · {e.appt.title ?? "FUB appointment"}
+                            </div>
+                          ),
+                        )}
+                        {dayEntries.length > 3 && (
+                          <div className="text-[10px] text-muted-foreground px-1.5">+{dayEntries.length - 3} more</div>
                         )}
                       </div>
                     </button>
@@ -241,149 +261,77 @@ export default function AdminCalendarPage() {
           {/* Right rail: selected day + upcoming */}
           <div className="space-y-6">
             <div>
-              <div className="eyebrow text-muted-foreground mb-2">Selected day</div>
+              <div className="flex items-baseline justify-between gap-2 mb-2">
+                <div className="eyebrow text-muted-foreground">Selected day</div>
+                <button
+                  onClick={() => setCreating(true)}
+                  className="text-[12px] underline underline-offset-2 text-muted-foreground hover:text-foreground"
+                >
+                  Add a showing
+                </button>
+              </div>
               <div className="font-serif text-xl mb-3" style={{ letterSpacing: "-0.01em" }}>
                 {formatLongDate(selectedDay)}
               </div>
-              {selectedDayTours.length === 0 ? (
+              {selectedEntries.length === 0 ? (
                 <Card>
-                  <CardContent className="p-5 text-sm text-muted-foreground">
-                    No tours scheduled for this day.
-                  </CardContent>
+                  <CardContent className="p-5 text-sm text-muted-foreground">Nothing scheduled for this day.</CardContent>
                 </Card>
               ) : (
                 <div className="space-y-2">
-                  {selectedDayTours.map((t) => (
-                    <TourRow
-                      key={t.id}
-                      tour={t}
-                      listing={listings.find((l) => l.id === t.listingId)}
-                      lead={leads.find((l) => l.id === t.leadId)}
-                      onStatusChange={(status) => updateStatus.mutate({ id: t.id, status })}
-                    />
-                  ))}
+                  {selectedEntries.map((e) =>
+                    e.kind === "showing" ? (
+                      <ShowingRow key={`s${e.showing.id}`} showing={e.showing} />
+                    ) : (
+                      <FubAppointmentRow key={`f${e.appt.uid}`} appt={e.appt} />
+                    ),
+                  )}
                 </div>
               )}
             </div>
 
             <div>
-              <div className="eyebrow text-muted-foreground mb-2">Upcoming · next 8</div>
+              <div className="eyebrow text-muted-foreground mb-2">Upcoming showings · next 8</div>
               {isLoading ? (
                 <div className="text-sm text-muted-foreground">Loading…</div>
               ) : upcoming.length === 0 ? (
                 <Card>
-                  <CardContent className="p-5 text-sm text-muted-foreground">
-                    Calendar is clear.
-                  </CardContent>
+                  <CardContent className="p-5 text-sm text-muted-foreground">Calendar is clear.</CardContent>
                 </Card>
               ) : (
                 <div className="space-y-1.5">
-                  {upcoming.map((t) => {
-                    const listing = listings.find((l) => l.id === t.listingId);
-                    const lead = leads.find((l) => l.id === t.leadId);
-                    return (
-                      <button
-                        key={t.id}
-                        onClick={() => {
-                          const d = new Date(t.scheduledFor);
-                          setMonthAnchor(startOfMonth(d));
-                          setSelectedDay(d);
-                        }}
-                        className="w-full text-left p-3 border border-border rounded-sm hover:bg-secondary/50 transition-colors"
-                      >
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <Clock className="w-3 h-3" strokeWidth={1.6} />
-                          {new Date(t.scheduledFor).toLocaleDateString("en-CA", {
-                            weekday: "short",
-                            month: "short",
-                            day: "numeric",
-                          })}{" "}
-                          · {formatTime(t.scheduledFor)}
-                        </div>
-                        <div className="text-sm font-medium truncate mt-1">
-                          {listing?.title ?? t.listingId}
-                        </div>
-                        {lead && (
-                          <div className="text-xs text-muted-foreground truncate mt-0.5">
-                            with {lead.name}
-                          </div>
+                  {upcoming.map((s) => (
+                    <button
+                      key={s.id}
+                      onClick={() => {
+                        const d = new Date(s.scheduledFor);
+                        setMonthAnchor(startOfMonth(d));
+                        setSelectedDay(d);
+                      }}
+                      className="w-full text-left p-3 border border-border rounded-sm hover:bg-secondary/50 transition-colors"
+                    >
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <Clock className="w-3 h-3" strokeWidth={1.6} />
+                        {new Date(s.scheduledFor).toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" })} ·{" "}
+                        {formatTime(s.scheduledFor)}
+                        {s.status === "requested" && (
+                          <Badge variant="outline" className={`rounded-sm text-[9px] uppercase border ${SHOWING_STATUS_STYLES.requested}`}>
+                            requested
+                          </Badge>
                         )}
-                      </button>
-                    );
-                  })}
+                      </div>
+                      <div className="text-sm font-medium truncate mt-1">{s.listing.address.split(",")[0]}</div>
+                      {s.client && <div className="text-xs text-muted-foreground truncate mt-0.5">with {s.client.name}</div>}
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
           </div>
         </div>
       </div>
+      <NewShowingDialog open={creating} onOpenChange={setCreating} day={selectedDay} />
     </AppShell>
-  );
-}
-
-function TourRow({
-  tour,
-  listing,
-  lead,
-  onStatusChange,
-}: {
-  tour: Tour;
-  listing?: PublicListing;
-  lead?: Lead;
-  onStatusChange: (status: string) => void;
-}) {
-  return (
-    <Card>
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
-              <Clock className="w-3 h-3" strokeWidth={1.6} />
-              {formatTime(tour.scheduledFor)}
-              <Badge
-                variant="outline"
-                className={`rounded-sm font-display tracking-[0.1em] text-[9px] uppercase border ${
-                  STATUS_STYLES[tour.status] ?? STATUS_STYLES.requested
-                }`}
-              >
-                {tour.status}
-              </Badge>
-            </div>
-            <div className="font-serif text-base truncate" style={{ letterSpacing: "-0.01em" }}>
-              {listing?.title ?? tour.listingId}
-            </div>
-            {listing?.address && (
-              <div className="text-xs text-muted-foreground flex items-center gap-1 truncate mt-0.5">
-                <MapPin className="w-3 h-3" strokeWidth={1.6} />
-                {listing.address}
-              </div>
-            )}
-            {lead && (
-              <div className="text-xs text-muted-foreground flex items-center gap-1 truncate mt-0.5">
-                <User className="w-3 h-3" strokeWidth={1.6} />
-                {lead.name}
-              </div>
-            )}
-            {tour.notes && (
-              <div className="text-xs text-foreground/80 mt-2 bg-secondary/40 rounded-sm px-2 py-1.5 italic">
-                "{tour.notes}"
-              </div>
-            )}
-          </div>
-          <Select value={tour.status} onValueChange={onStatusChange}>
-            <SelectTrigger className="h-8 w-[120px] rounded-sm text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="requested">Requested</SelectItem>
-              <SelectItem value="confirmed">Confirmed</SelectItem>
-              <SelectItem value="completed">Completed</SelectItem>
-              <SelectItem value="cancelled">Cancelled</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      </CardContent>
-    </Card>
   );
 }
 
