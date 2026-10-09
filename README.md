@@ -49,7 +49,10 @@ fly deploy
 |--------------------------|--------------------------------|
 | `RESEND_API_KEY`         | Transactional email and the monthly newsletter (`RESEND_FROM_EMAIL` is the sender) |
 | `RESEND_WEBHOOK_SECRET`  | Optional. Signing secret of a Resend webhook pointed at `/api/newsletter/webhooks/resend` (events: `email.bounced`, `email.complained`), so bounces and spam reports take people off the newsletter list |
-| `OPENAI_API_KEY`         | Condo hero image generation    |
+| `OPENAI_API_KEY`         | Condo + blog hero image generation |
+| `HERO_IMAGE_MODEL`       | Optional: blog hero model (default `gpt-image-1`) |
+| `HERO_IMAGE_QUALITY`     | Optional: `low` / `medium` (default) / `high` |
+| `BLOG_HERO_AI`           | Optional: `off` disables blog hero generation |
 | `PILLAR9_USER` / `_PASS` | RETS feed credentials          |
 | `MAKE_WEBHOOK_URL`       | Social composer outbound hook  |
 | `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` | Calendar OAuth (bookings + free/busy) |
