@@ -703,6 +703,12 @@ export async function syncResource(
           : storage.upsertCrmPipelines(mapped);
     inserted = r.inserted;
     updated = r.updated;
+    // Contacts the app created for new leads come back from FUB once FUB has
+    // them; fold the app's copy into FUB's so there's one (server/contacts.ts).
+    if (spec.resource === "people") {
+      const { reconcileNativeContacts } = await import("./contacts");
+      reconcileNativeContacts();
+    }
   }
 
   // Deal stages ride along inside the pipelines payload, and are replaced

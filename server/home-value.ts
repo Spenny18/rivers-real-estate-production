@@ -13,7 +13,7 @@
  *                     API docs. Override if Gnowise reissues the URL.
  */
 import type { Express, Request, Response } from "express";
-import { db } from "./storage";
+import { db, storage } from "./storage";
 import { leads } from "@shared/schema";
 import { sendEmail } from "./email";
 
@@ -341,7 +341,8 @@ export function registerHomeValueRoutes(app: Express) {
       estimateLine,
     ].join("\n");
     try {
-      db.insert(leads)
+      const row = db
+        .insert(leads)
         .values({
           name,
           email,
@@ -350,7 +351,9 @@ export function registerHomeValueRoutes(app: Express) {
           status: "new",
           message,
         } as any)
-        .run();
+        .returning()
+        .get();
+      storage.onLeadCreated?.(row);
     } catch (e) {
       console.error("[home-value] save lead failed:", e);
     }

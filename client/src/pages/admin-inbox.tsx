@@ -49,7 +49,7 @@ interface Conversation {
 
 interface ThreadItem {
   id: string;
-  kind: "email" | "text" | "call" | "note" | "appointment";
+  kind: "email" | "text" | "call" | "note" | "appointment" | "inquiry";
   direction: "inbound" | "outbound" | null;
   at: string;
   subject: string | null;
@@ -145,7 +145,7 @@ function money(n: number | null | undefined): string {
   return n >= 1_000_000 ? `$${(n / 1_000_000).toFixed(2)}M` : `$${Math.round(n / 1000)}K`;
 }
 
-const KIND_ICON: Record<string, typeof Mail> = { email: Mail, text: MessageSquare, call: Phone, note: StickyNote, appointment: Calendar };
+const KIND_ICON: Record<string, typeof Mail> = { email: Mail, text: MessageSquare, call: Phone, note: StickyNote, appointment: Calendar, inquiry: FileText };
 
 // ---- Page ------------------------------------------------------------------------------
 
@@ -374,6 +374,19 @@ function Message({ item }: { item: ThreadItem }) {
             ? `${item.direction === "inbound" ? "Incoming" : item.direction === "outbound" ? "Outgoing" : ""} call${mins ? ` · ${mins} min` : ""}${item.meta.outcome ? ` · ${item.meta.outcome}` : ""}`
             : item.subject ?? "Appointment"}
           <span>· {stamp(item.at)}</span>
+        </div>
+      </div>
+    );
+  }
+  if (item.kind === "inquiry") {
+    return (
+      <div className="flex justify-start">
+        <div className="max-w-[80%] rounded-lg px-3.5 py-2.5 bg-background border border-dashed border-border">
+          <div className="text-[11px] flex items-center gap-1.5 mb-1 text-muted-foreground">
+            <FileText className="h-3 w-3" strokeWidth={1.6} />
+            {item.subject} · {stamp(item.at)}
+          </div>
+          <div className="text-[13.5px] whitespace-pre-wrap break-words leading-relaxed">{item.body}</div>
         </div>
       </div>
     );

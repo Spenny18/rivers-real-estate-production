@@ -555,6 +555,11 @@ export async function registerRoutes(
   // CRM mirror — /api/admin/crm/*, backing the /admin/crm page. Admin-only:
   // this is the whole Follow Up Boss contact database.
   try {
+    // Contacts the app owns (created for every new lead, or by hand), and the
+    // hook that creates them. See server/contacts.ts.
+    const { registerContactRoutes } = await import("./contact-routes");
+    registerContactRoutes(app, { requireAuth });
+
     const { registerCrmRoutes } = await import("./crm-routes");
     registerCrmRoutes(app, { requireAuth });
 
