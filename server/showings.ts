@@ -20,7 +20,7 @@
 //   Whichever channel invited the client is recorded and stays put, so a
 //   reschedule or cancellation reaches them the same way the invite did.
 
-import { storage } from "./storage";
+import { storage, sqlite } from "./storage";
 import { calendarRequest, googleCalendarReady } from "./google-calendar";
 import { sendEmail, buildShowingEmailHtml } from "./email";
 import { formatInZone } from "./booking";
@@ -103,6 +103,81 @@ export function resolveShowingListing(listingId: string): ShowingListing {
     };
   }
   return { source: "unknown", mlsNumber: null, address: listingId, summary: null, price: null, url: null, photoUrl: null };
+}
+
+/**
+ * Spencer's own addresses. Google never emails an invitation to the calendar's
+ * owner (the event is already on their calendar), so a showing with Spencer
+ * as the client, which is how a test naturally gets done, goes by email
+ * instead or nothing arrives.
+ */
+function isOwnAddress(email: string | null | undefined, userId: number): boolean {
+  if (!email) return false;
+  const e = email.trim().toLowerCase();
+  const own = new Set<string>();
+  const add = (v: string | null | undefined) => {
+    const m = v?.match(/[^\s<>]+@[^\s<>]+/);
+    if (m) own.add(m[0].toLowerCase());
+  };
+  add(AGENT.email);
+  add(process.env.SPENCER_NOTIFY_EMAIL);
+  add(process.env.RESEND_FROM_EMAIL);
+  add(storage.getUserById(userId)?.email);
+  add(storage.getUserIntegration(userId, "google")?.accountEmail);
+  return own.has(e);
+}
+
+// Street-type abbreviations people type that aren't a substring of what the
+// feed spells out. ("st", "dr", "ave", "cres", "pl", "cl" already are.)
+const STREET_ABBREVIATIONS: Record<string, string> = {
+  rd: "road", blvd: "boulevard", ct: "court", hts: "heights", gdns: "gardens",
+  pkwy: "parkway", mnr: "manor", ln: "lane", tr: "trail", trl: "trail",
+  sq: "square", pt: "point", cir: "circle", cv: "cove", gt: "gate", hl: "hill",
+  mt: "mount", mtn: "mountain", pk: "park", vw: "view", rdg: "ridge",
+  mdw: "meadow", mdws: "meadows", lndg: "landing", tce: "terrace", ter: "terrace", hwy: "highway",
+};
+
+export interface ListingMatch extends ShowingListing {
+  status: string | null;
+}
+
+/**
+ * Find listings by address as typed: "48 glamis green", "38 lissington dr sw",
+ * "#134 48 Glamis". Every word has to appear (unit, street number, street name,
+ * quadrant, town, in any order); whole-word hits rank above partial ones, so
+ * "48" prefers 48 Glamis Green over 148 or 4800. An MLS number works too.
+ */
+export function searchShowingListings(query: string, limit = 8): ListingMatch[] {
+  const tokens = query
+    .toLowerCase()
+    .replace(/[#,.]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 8);
+  if (tokens.length === 0) return [];
+  const haystack = "lower(full_address || ' ' || coalesce(city, '') || ' ' || mls_number)";
+  const clauses: string[] = [];
+  const params: string[] = [];
+  for (const t of tokens) {
+    const alt = STREET_ABBREVIATIONS[t];
+    clauses.push(alt ? `(${haystack} LIKE ? OR ${haystack} LIKE ?)` : `${haystack} LIKE ?`);
+    params.push(`%${t}%`, ...(alt ? [`%${alt}%`] : []));
+  }
+  const rows = sqlite
+    .prepare(`SELECT id, full_address AS fullAddress, city, status FROM mls_listings WHERE ${clauses.join(" AND ")} LIMIT 200`)
+    .all(...params) as Array<{ id: string; fullAddress: string; city: string | null; status: string | null }>;
+
+  const wordsOf = (r: (typeof rows)[number]) =>
+    new Set(`${r.fullAddress} ${r.city ?? ""} ${r.id}`.toLowerCase().replace(/[#,.]/g, " ").split(/\s+/));
+  const score = (r: (typeof rows)[number]) => {
+    const words = wordsOf(r);
+    return tokens.reduce((n, t) => n + (words.has(t) || words.has(STREET_ABBREVIATIONS[t] ?? "") ? 1 : 0), 0);
+  };
+  return rows
+    .map((r) => ({ r, score: score(r), active: (r.status ?? "").toLowerCase() === "active" }))
+    .sort((a, b) => b.score - a.score || Number(b.active) - Number(a.active) || a.r.fullAddress.localeCompare(b.r.fullAddress))
+    .slice(0, limit)
+    .map(({ r }) => ({ ...resolveShowingListing(r.id), status: r.status }));
 }
 
 export function mapUrl(address: string): string {
@@ -308,7 +383,7 @@ export async function syncShowing(userId: number, tourId: number, opts: { change
   const channel: "google" | "email" | null = invited
     ? (tour.inviteChannel as "google" | "email")
     : newInvite
-      ? google
+      ? google && !isOwnAddress(client?.email, userId)
         ? "google"
         : "email"
       : null;
@@ -409,7 +484,13 @@ export async function syncShowing(userId: number, tourId: number, opts: { change
 export async function resendInvite(userId: number, tourId: number): Promise<DeliveryResult> {
   const tour = storage.getTour(tourId);
   if (!tour) throw new Error("Showing not found");
-  if (tour.inviteChannel === "google" && tour.googleEventId && googleCalendarReady(userId)) {
+  const client0 = showingClient(tour);
+  if (
+    tour.inviteChannel === "google" &&
+    tour.googleEventId &&
+    googleCalendarReady(userId) &&
+    !isOwnAddress(client0?.email, userId)
+  ) {
     const listing = resolveShowingListing(tour.listingId);
     const client = showingClient(tour);
     const path = `/events/${encodeURIComponent(tour.googleEventId)}?sendUpdates=all`;
