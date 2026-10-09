@@ -198,62 +198,9 @@ export async function persistTokens(
 }
 
 // ---- Calendar event sync --------------------------------------------------
-
-interface TourLike {
-  id: number;
-  listingId: string;
-  leadId: number | null;
-  scheduledFor: string; // ISO
-  status: string;
-  notes: string | null;
-  googleEventId?: string | null;
-}
-
-interface ListingLike {
-  id: string;
-  title?: string;
-  fullAddress?: string;
-  address?: string;
-}
-
-interface LeadLike {
-  id: number;
-  name: string;
-  email: string;
-  phone: string | null;
-}
-
-function buildEvent(tour: TourLike, listing?: ListingLike, lead?: LeadLike) {
-  const start = new Date(tour.scheduledFor);
-  const end = new Date(start.getTime() + 60 * 60 * 1000); // 1h default
-  const title = listing
-    ? `Showing — ${listing.title ?? listing.fullAddress ?? listing.id}`
-    : `Showing — ${tour.listingId}`;
-  const descLines: string[] = [];
-  if (listing) {
-    descLines.push(listing.fullAddress ?? listing.address ?? "");
-    descLines.push("");
-  }
-  if (lead) {
-    descLines.push(`Buyer: ${lead.name}`);
-    if (lead.email) descLines.push(`Email: ${lead.email}`);
-    if (lead.phone) descLines.push(`Phone: ${lead.phone}`);
-    descLines.push("");
-  }
-  if (tour.notes) descLines.push(tour.notes);
-  descLines.push("");
-  descLines.push(`Status: ${tour.status}`);
-  descLines.push(`Tour ID: ${tour.id}`);
-  return {
-    summary: title,
-    description: descLines.join("\n"),
-    start: { dateTime: start.toISOString() },
-    end: { dateTime: end.toISOString() },
-    location: listing?.fullAddress ?? listing?.address ?? undefined,
-    attendees: lead?.email ? [{ email: lead.email, displayName: lead.name }] : undefined,
-    reminders: { useDefault: true },
-  };
-}
+//
+// Showings build their own events (server/showings.ts); this is the plumbing
+// they share with bookings.
 
 async function calApiCall(
   userId: number,
@@ -279,69 +226,26 @@ async function calApiCall(
   return { ok: true, status: r.status, data };
 }
 
-export async function syncTourToGoogle(
-  userId: number,
-  tour: TourLike,
-  listing?: ListingLike,
-  lead?: LeadLike,
-): Promise<{ ok: boolean; eventId?: string; error?: string }> {
-  if (!googleConfigured()) return { ok: false, error: "Google OAuth not configured" };
+/** Whether `userId` has a live Google connection that can write events. */
+export function googleCalendarReady(userId: number): boolean {
+  if (!googleConfigured()) return false;
   const integ = storage.getUserIntegration(userId, "google");
-  if (!integ || !integ.active) return { ok: false, error: "Google not connected" };
-  const calendarId = (() => {
-    try {
-      return JSON.parse(integ.metadata as any).calendarId || "primary";
-    } catch {
-      return "primary";
-    }
-  })();
-
-  const event = buildEvent(tour, listing, lead);
-  if (tour.googleEventId) {
-    // Update existing event
-    const r = await calApiCall(
-      userId,
-      "PATCH",
-      `/calendars/${encodeURIComponent(calendarId)}/events/${tour.googleEventId}`,
-      event,
-    );
-    if (!r.ok) return { ok: false, error: r.error };
-    return { ok: true, eventId: tour.googleEventId };
-  } else {
-    // Create new event
-    const r = await calApiCall(
-      userId,
-      "POST",
-      `/calendars/${encodeURIComponent(calendarId)}/events`,
-      event,
-    );
-    if (!r.ok || !r.data?.id) return { ok: false, error: r.error };
-    return { ok: true, eventId: r.data.id };
-  }
+  return !!integ?.active && (integ.scope ?? "").includes("calendar.events");
 }
 
-export async function deleteTourFromGoogle(
+/**
+ * Call the Calendar API against the user's configured calendar. `path` is
+ * relative to it, e.g. "/events" or "/events/<id>?sendUpdates=all".
+ */
+export async function calendarRequest(
   userId: number,
-  tour: TourLike,
-): Promise<{ ok: boolean; error?: string }> {
-  if (!tour.googleEventId) return { ok: true };
-  if (!googleConfigured()) return { ok: false, error: "Google OAuth not configured" };
+  method: "GET" | "POST" | "PATCH" | "DELETE",
+  path: string,
+  body?: any,
+): Promise<{ ok: boolean; status: number; data?: any; error?: string }> {
   const integ = storage.getUserIntegration(userId, "google");
-  if (!integ || !integ.active) return { ok: false, error: "Google not connected" };
-  const calendarId = (() => {
-    try {
-      return JSON.parse(integ.metadata as any).calendarId || "primary";
-    } catch {
-      return "primary";
-    }
-  })();
-  const r = await calApiCall(
-    userId,
-    "DELETE",
-    `/calendars/${encodeURIComponent(calendarId)}/events/${tour.googleEventId}`,
-  );
-  if (!r.ok && r.status !== 404 && r.status !== 410) return { ok: false, error: r.error };
-  return { ok: true };
+  if (!integ || !integ.active) return { ok: false, status: 401, error: "Google not connected" };
+  return calApiCall(userId, method, `/calendars/${encodeURIComponent(calendarIdFor(integ))}${path}`, body);
 }
 
 // ---- Free/busy ------------------------------------------------------------

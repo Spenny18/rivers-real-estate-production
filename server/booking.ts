@@ -263,15 +263,14 @@ export async function collectBusy(
     });
   }
 
-  // Showings booked through the older tours flow occupy the calendar too.
-  // They carry no duration, so assume the same hour the Google sync assumes.
+  // Showings (server/showings.ts) occupy the calendar too, for their length.
   const fromMs = Date.parse(fromIso);
   const toMs = Date.parse(toIso);
   for (const t of storage.listTours()) {
     if (t.status === "cancelled") continue;
     const start = Date.parse(t.scheduledFor);
     if (!Number.isFinite(start)) continue;
-    const end = start + 60 * 60_000;
+    const end = start + (t.durationMinutes || 60) * 60_000;
     if (end <= fromMs || start >= toMs) continue;
     busy.push({ start, end });
   }
