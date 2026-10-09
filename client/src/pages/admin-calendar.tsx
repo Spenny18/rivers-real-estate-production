@@ -16,6 +16,7 @@ import {
   type FubAppointment,
   type ShowingView,
 } from "@/components/showings";
+import { showingStreetLine } from "@shared/showing-address";
 
 // /admin/calendar — showings (server/showings.ts) plus, while scheduling moves
 // off Follow Up Boss, FUB's own appointments as a read-only layer.
@@ -235,7 +236,7 @@ export default function AdminCalendarPage() {
                                 SHOWING_STATUS_STYLES[e.showing.status] ?? SHOWING_STATUS_STYLES.requested
                               }`}
                             >
-                              {formatTime(e.at)} · {e.showing.listing.address.split(",")[0]}
+                              {formatTime(e.at)} · {showingStreetLine(e.showing.listing.address)}
                             </div>
                           ) : (
                             <div
@@ -320,7 +321,7 @@ export default function AdminCalendarPage() {
                           </Badge>
                         )}
                       </div>
-                      <div className="text-sm font-medium truncate mt-1">{s.listing.address.split(",")[0]}</div>
+                      <div className="text-sm font-medium truncate mt-1">{showingStreetLine(s.listing.address)}</div>
                       {s.client && <div className="text-xs text-muted-foreground truncate mt-0.5">with {s.client.name}</div>}
                     </button>
                   ))}

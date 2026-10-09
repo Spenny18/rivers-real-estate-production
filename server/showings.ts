@@ -28,6 +28,7 @@ import { publicOrigin } from "./origin";
 import { AGENT } from "./brand";
 import { mlsPropertyPath } from "@shared/mls-url";
 import type { Tour } from "@shared/schema";
+import { showingStreetLine } from "@shared/showing-address";
 
 export const SHOWING_TIME_ZONE = "America/Edmonton";
 
@@ -225,7 +226,7 @@ function eventDescription(tour: Tour, listing: ShowingListing, forClient: boolea
 }
 
 function googleEvent(tour: Tour, listing: ShowingListing, client: ShowingClient | null, inviteClient: boolean) {
-  const street = listing.address.split(",")[0];
+  const street = showingStreetLine(listing.address);
   return {
     summary: inviteClient ? `Showing: ${street} with ${AGENT.name}` : `Showing: ${street}${client ? ` — ${client.name}` : ""}`,
     description: eventDescription(tour, listing, inviteClient, client),
@@ -280,7 +281,7 @@ export function buildShowingIcs(tour: Tour, listing: ShowingListing, client: Sho
     `DTSTAMP:${icsStamp(new Date().toISOString())}`,
     `DTSTART:${icsStamp(tour.scheduledFor)}`,
     `DTEND:${icsStamp(endOf(tour))}`,
-    `SUMMARY:${icsEscape(`Showing: ${listing.address.split(",")[0]} with ${AGENT.name}`)}`,
+    `SUMMARY:${icsEscape(`Showing: ${showingStreetLine(listing.address)} with ${AGENT.name}`)}`,
     `DESCRIPTION:${icsEscape(eventDescription(tour, listing, true, client))}`,
     `LOCATION:${icsEscape(listing.address)}`,
     ...(listing.url ? [`URL:${listing.url}`] : []),
@@ -289,7 +290,7 @@ export function buildShowingIcs(tour: Tour, listing: ShowingListing, client: Sho
     `STATUS:${cancel ? "CANCELLED" : "CONFIRMED"}`,
     ...(cancel
       ? []
-      : ["BEGIN:VALARM", "TRIGGER:-PT1H", "ACTION:DISPLAY", `DESCRIPTION:${icsEscape(`Showing: ${listing.address.split(",")[0]}`)}`, "END:VALARM"]),
+      : ["BEGIN:VALARM", "TRIGGER:-PT1H", "ACTION:DISPLAY", `DESCRIPTION:${icsEscape(`Showing: ${showingStreetLine(listing.address)}`)}`, "END:VALARM"]),
     "END:VEVENT",
     "END:VCALENDAR",
   ];
@@ -303,7 +304,7 @@ async function emailInvite(
   kind: "invite" | "update" | "cancel",
 ): Promise<{ ok: boolean; error?: string }> {
   const ics = buildShowingIcs(tour, listing, client, kind === "cancel");
-  const street = listing.address.split(",")[0];
+  const street = showingStreetLine(listing.address);
   const subject =
     kind === "cancel"
       ? `Cancelled: showing at ${street}`
