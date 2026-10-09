@@ -3,6 +3,7 @@
 //
 //   GET   /api/admin/showings                 every showing, resolved for display
 //   GET   /api/admin/showings/listing?mls=    preview a listing by MLS number
+//   GET   /api/admin/showings/listing-search?q=  find listings by address
 //   GET   /api/admin/showings/status          can invites go out, and how
 //   POST  /api/admin/showings                 create (+ invite the client)
 //   PATCH /api/admin/showings/:id             reschedule / edit / change status
@@ -17,6 +18,7 @@ import {
   normalizeMlsNumber,
   resendInvite,
   resolveShowingListing,
+  searchShowingListings,
   syncShowing,
   toShowingView,
 } from "./showings";
@@ -70,6 +72,13 @@ export function registerShowingRoutes(app: Express, deps: { requireAuth: Middlew
     if (listing.source !== "mls") return res.status(404).json({ message: `No listing found for MLS® ${mls}` });
     const row = storage.getMlsListingById(mls);
     res.json({ ...listing, status: row?.status ?? null });
+  });
+
+  // Search by address (or MLS number) for the New showing dialog.
+  app.get("/api/admin/showings/listing-search", requireAuth, (req, res) => {
+    const q = String(req.query.q ?? "").trim().slice(0, 120);
+    if (q.length < 3) return res.json([]);
+    res.json(searchShowingListings(q, 8));
   });
 
   app.post("/api/admin/showings", requireAuth, async (req, res) => {

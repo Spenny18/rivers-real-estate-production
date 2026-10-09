@@ -144,7 +144,8 @@ export function NewShowingDialog({
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const [mls, setMls] = useState("");
+  const [propertyQuery, setPropertyQuery] = useState("");
+  const [picked, setPicked] = useState<ShowingListing | null>(null);
   const [startsAt, setStartsAt] = useState(() => defaultStart(day));
   const [duration, setDuration] = useState(60);
   const [contactQuery, setContactQuery] = useState("");
@@ -161,7 +162,8 @@ export function NewShowingDialog({
   }, [open, day]);
 
   const reset = () => {
-    setMls("");
+    setPropertyQuery("");
+    setPicked(null);
     setDuration(60);
     setContactQuery("");
     setContact(null);
@@ -173,13 +175,22 @@ export function NewShowingDialog({
     setNotify(true);
   };
 
-  const mlsKey = useDebounced(mls.trim().toUpperCase(), 350);
-  const listingQuery = useQuery<ShowingListing>({
-    queryKey: [`/api/admin/showings/listing?mls=${encodeURIComponent(mlsKey)}`],
-    enabled: mlsKey.length >= 5,
+  // One field for both: something shaped like an MLS number is looked up
+  // exactly; anything else searches addresses.
+  const typed = useDebounced(propertyQuery.trim(), 300);
+  const looksLikeMls = /^[a-z]\d{5,}$/i.test(typed);
+  const mlsLookup = useQuery<ShowingListing>({
+    queryKey: [`/api/admin/showings/listing?mls=${encodeURIComponent(typed.toUpperCase())}`],
+    enabled: !picked && looksLikeMls,
     retry: false,
   });
-  const listing = listingQuery.data;
+  const addressSearch = useQuery<ShowingListing[]>({
+    queryKey: [`/api/admin/showings/listing-search?q=${encodeURIComponent(typed)}`],
+    enabled: !picked && !looksLikeMls && typed.length >= 3,
+  });
+  const propertyMatches: ShowingListing[] = looksLikeMls ? (mlsLookup.data ? [mlsLookup.data] : []) : addressSearch.data ?? [];
+  const searchingProperty = looksLikeMls ? mlsLookup.isFetching : addressSearch.isFetching;
+  const listing = picked;
 
   const q = useDebounced(contactQuery.trim(), 250);
   const { data: matches = [], isFetching: searching } = useQuery<CrmContactLite[]>({
@@ -198,7 +209,7 @@ export function NewShowingDialog({
   const create = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/admin/showings", {
-        mlsNumber: mls.trim(),
+        mlsNumber: picked?.mlsNumber ?? "",
         startsAt: new Date(startsAt).toISOString(),
         durationMinutes: duration,
         contactFubId: manual ? null : contact?.fubId ?? null,
@@ -230,37 +241,77 @@ export function NewShowingDialog({
           <DialogTitle className="font-serif text-2xl">New showing</DialogTitle>
         </DialogHeader>
         <div className="space-y-5">
-          {/* Listing */}
+          {/* Property */}
           <div>
-            <label className="eyebrow text-muted-foreground block mb-1.5">MLS® number</label>
-            <Input
-              value={mls}
-              onChange={(e) => setMls(e.target.value)}
-              placeholder="A2349881"
-              autoFocus
-              className="rounded-sm uppercase"
-              data-testid="input-showing-mls"
-            />
-            {mlsKey.length >= 5 && listingQuery.isFetching && (
-              <div className="mt-2 text-[12px] text-muted-foreground flex items-center gap-1.5">
-                <Loader2 className="h-3 w-3 animate-spin" /> Looking it up…
-              </div>
-            )}
-            {mlsKey.length >= 5 && listingQuery.isError && !listingQuery.isFetching && (
-              <div className="mt-2 text-[12px] text-destructive">No listing found for MLS® {mlsKey}.</div>
-            )}
-            {listing && (
-              <div className="mt-2.5 flex gap-3 rounded-sm border border-border p-2.5" data-testid="showing-listing-preview">
+            <label className="eyebrow text-muted-foreground block mb-1.5">Property</label>
+            {listing ? (
+              <div className="flex gap-3 rounded-sm border border-border p-2.5" data-testid="showing-listing-preview">
                 {listing.photoUrl && (
                   <img src={listing.photoUrl} alt="" className="w-24 h-16 object-cover rounded-sm shrink-0 bg-secondary" />
                 )}
-                <div className="min-w-0 text-[13px]">
+                <div className="min-w-0 flex-1 text-[13px]">
                   <div className="font-medium truncate">{listing.address}</div>
-                  <div className="text-muted-foreground">{listing.summary}</div>
+                  <div className="text-muted-foreground">
+                    {[listing.summary, listing.mlsNumber && `MLS® ${listing.mlsNumber}`].filter(Boolean).join(" · ")}
+                  </div>
                   {listing.status && listing.status !== "Active" && (
                     <div className="text-amber-700 dark:text-amber-400 text-[12px]">Listing status: {listing.status}</div>
                   )}
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setPicked(null)}
+                  aria-label="Change property"
+                  className="self-start text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            ) : (
+              <div>
+                <Input
+                  value={propertyQuery}
+                  onChange={(e) => setPropertyQuery(e.target.value)}
+                  placeholder="Address or MLS® number, e.g. 38 Lissington Dr SW"
+                  autoFocus
+                  className="rounded-sm"
+                  data-testid="input-showing-property"
+                />
+                {typed.length >= 3 && (
+                  <div className="mt-1.5 rounded-sm border border-border divide-y divide-border max-h-72 overflow-y-auto">
+                    {searchingProperty && propertyMatches.length === 0 ? (
+                      <div className="px-3 py-2 text-[12px] text-muted-foreground flex items-center gap-1.5">
+                        <Loader2 className="h-3 w-3 animate-spin" /> Searching listings…
+                      </div>
+                    ) : propertyMatches.length === 0 ? (
+                      <div className="px-3 py-2 text-[12px] text-muted-foreground">
+                        {looksLikeMls ? `No listing found for MLS® ${typed.toUpperCase()}.` : "No listings match that address."}
+                      </div>
+                    ) : (
+                      propertyMatches.map((m) => (
+                        <button
+                          key={m.mlsNumber ?? m.address}
+                          type="button"
+                          onClick={() => setPicked(m)}
+                          className="w-full text-left px-3 py-2 hover:bg-secondary/50 flex items-center gap-3"
+                          data-testid={`showing-property-${m.mlsNumber}`}
+                        >
+                          {m.photoUrl ? (
+                            <img src={m.photoUrl} alt="" className="w-14 h-10 object-cover rounded-sm shrink-0 bg-secondary" loading="lazy" />
+                          ) : (
+                            <div className="w-14 h-10 rounded-sm bg-secondary shrink-0" />
+                          )}
+                          <div className="min-w-0">
+                            <div className="text-[13px] truncate">{m.address}</div>
+                            <div className="text-[12px] text-muted-foreground truncate">
+                              {[m.summary, m.mlsNumber && `MLS® ${m.mlsNumber}`].filter(Boolean).join(" · ")}
+                            </div>
+                          </div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
