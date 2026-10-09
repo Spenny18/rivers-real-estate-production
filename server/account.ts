@@ -95,6 +95,8 @@ function ensureLeadForEmail(email: string): number {
     } as any)
     .returning()
     .get();
+  // A portal sign-up is a lead like any other: give it a CRM contact.
+  storage.onLeadCreated?.(row);
   return row.id;
 }
 

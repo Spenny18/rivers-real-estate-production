@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
 import { RecentlyActiveList, WebActivityPanel } from "@/components/web-activity";
+import { EditContactForm, NewContactDialog } from "@/components/contact-forms";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,7 +39,9 @@ import {
   TrendingUp,
   TriangleAlert,
   Users,
+  Plus,
 } from "lucide-react";
+import { Link } from "wouter";
 import { apiErrorMessage, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -129,6 +132,8 @@ interface Overview {
 
 interface CrmContact {
   fubId: string;
+  origin?: "app" | "fub";
+  tags?: string | null;
   name: string | null;
   email: string | null;
   phone: string | null;
@@ -384,6 +389,8 @@ export default function AdminCrmPage() {
     queryKey: ["/api/admin/crm/email-status"],
   });
   const [composeOpen, setComposeOpen] = useState(false);
+  const [newContactOpen, setNewContactOpen] = useState(false);
+  const [editingContact, setEditingContact] = useState(false);
   const [subject, setSubject] = useState("");
   const [emailBody, setEmailBody] = useState("");
 
@@ -490,8 +497,9 @@ export default function AdminCrmPage() {
               CRM
             </h1>
             <p className="text-sm text-muted-foreground mt-1.5 max-w-2xl">
-              Your Follow Up Boss account, mirrored here hourly — people, deals, calls, texts and
-              tasks. Read-only: edits still happen in Follow Up Boss, and land here on the next sync.
+              Your contacts. New website leads, bookings and portal sign-ups are added here
+              automatically, and you can add people by hand. Follow Up Boss is still mirrored
+              hourly; its contacts stay read-only here, and a lead FUB also has is merged into one.
             </p>
           </div>
           <div className="flex gap-2">
@@ -736,7 +744,16 @@ export default function AdminCrmPage() {
 
                         {/* ================= CONTACTS ================= */}
             <TabsContent value="contacts">
-              <div className="relative mb-4 max-w-md">
+              <div className="flex flex-wrap items-center gap-3 mb-4">
+              <Button
+                size="sm"
+                onClick={() => setNewContactOpen(true)}
+                className="rounded-sm h-9 font-display text-[11px] tracking-[0.14em]"
+                data-testid="button-new-contact"
+              >
+                <Plus className="h-3.5 w-3.5 mr-1.5" /> NEW CONTACT
+              </Button>
+              <div className="relative max-w-md flex-1 min-w-[220px]">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
                   value={search}
@@ -748,6 +765,7 @@ export default function AdminCrmPage() {
                 {contactsFetching && (
                   <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-muted-foreground" />
                 )}
+              </div>
               </div>
               {filteredContacts.length === 0 ? (
                 <Card>
@@ -1189,7 +1207,16 @@ export default function AdminCrmPage() {
       </Dialog>
 
       {/* ---- Contact detail ---- */}
-      <Dialog open={!!openContact} onOpenChange={(o) => !o && setOpenContact(null)}>
+      <NewContactDialog open={newContactOpen} onOpenChange={setNewContactOpen} onCreated={(id) => setOpenContact(id)} />
+      <Dialog
+        open={!!openContact}
+        onOpenChange={(o) => {
+          if (!o) {
+            setOpenContact(null);
+            setEditingContact(false);
+          }
+        }}
+      >
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="font-serif text-2xl flex items-center gap-2.5">
@@ -1201,6 +1228,27 @@ export default function AdminCrmPage() {
           </DialogHeader>
           {detail && (
             <div className="space-y-5">
+              <div className="flex flex-wrap items-center gap-3 text-[12px] -mt-2">
+                {detail.contact.origin === "app" ? (
+                  <Badge variant="outline">Added in app</Badge>
+                ) : (
+                  <span className="text-muted-foreground">From Follow Up Boss</span>
+                )}
+                <Link
+                  href={`/admin/inbox?contact=${encodeURIComponent(detail.contact.fubId)}`}
+                  className="underline underline-offset-2 text-muted-foreground hover:text-foreground"
+                >
+                  Open in Inbox
+                </Link>
+                {detail.contact.origin === "app" && !editingContact && (
+                  <button onClick={() => setEditingContact(true)} className="underline underline-offset-2 text-muted-foreground hover:text-foreground">
+                    Edit contact
+                  </button>
+                )}
+              </div>
+              {editingContact && detail.contact.origin === "app" && (
+                <EditContactForm contact={detail.contact} onDone={() => setEditingContact(false)} />
+              )}
               {/* ---- Compose ----
                   Sends from Spencer's own mailbox, so a reply threads against
                   it and Follow Up Boss mirrors it straight back. */}

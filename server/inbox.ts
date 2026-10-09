@@ -24,6 +24,10 @@ sqlite.exec(`
     contact_fub_id TEXT PRIMARY KEY,
     read_at TEXT NOT NULL
   );
+  -- Matching leads to contacts by email, case-insensitively, on every list
+  -- load: the expressions must match the queries' exactly to be used.
+  CREATE INDEX IF NOT EXISTS idx_crm_contacts_email_norm ON crm_contacts(lower(trim(email)));
+  CREATE INDEX IF NOT EXISTS idx_leads_email_norm ON leads(lower(trim(email)));
 `);
 
 // ---- The conversation list ------------------------------------------------------------
@@ -44,10 +48,15 @@ export interface ConversationRow {
 
 // Every message, from either source, as (contact, time, kind, direction, preview).
 // CRM-mirrored emails that Gmail also delivered are left to the Gmail copy.
+// Website inquiries count as messages too: a new lead with no email or text
+// yet still gets a conversation, unread, with what they asked.
 const MESSAGES_SQL = `
   SELECT contact_fub_id AS c, occurred_at AS at, 'email' AS kind, direction AS dir,
          subject || ' — ' || substr(coalesce(body_text, ''), 1, 140) AS preview
   FROM inbox_emails
+  UNION ALL
+  SELECT cc.fub_id, l.created_at, 'inquiry', 'inbound', 'Website inquiry — ' || substr(coalesce(l.message, ''), 1, 140)
+  FROM leads l JOIN crm_contacts cc ON cc.email IS NOT NULL AND lower(trim(cc.email)) = lower(trim(l.email))
   UNION ALL
   SELECT a.contact_fub_id, a.occurred_at, a.kind, a.direction,
          CASE WHEN a.kind = 'email' THEN coalesce(a.title, '') || ' — ' || substr(coalesce(a.body, ''), 1, 140)
@@ -115,7 +124,7 @@ export function markRead(contactFubId: string) {
 
 export interface ThreadItem {
   id: string;
-  kind: "email" | "text" | "call" | "note" | "appointment";
+  kind: "email" | "text" | "call" | "note" | "appointment" | "inquiry";
   direction: "inbound" | "outbound" | null;
   at: string;
   subject: string | null;
@@ -131,6 +140,12 @@ export function threadFor(contactFubId: string, limit = 400): ThreadItem[] {
     )
     .all(contactFubId, limit) as any[];
   const gmailIds = new Set(emails.map((e) => e.gmail_id));
+  const contactEmail = (sqlite.prepare(`SELECT email FROM crm_contacts WHERE fub_id = ?`).get(contactFubId) as { email: string | null } | undefined)?.email;
+  const inquiries = contactEmail
+    ? (sqlite
+        .prepare(`SELECT id, source, message, listing_id, created_at FROM leads WHERE lower(trim(email)) = lower(trim(?)) ORDER BY created_at DESC LIMIT 50`)
+        .all(contactEmail) as any[])
+    : [];
   const acts = sqlite
     .prepare(
       `SELECT uid, kind, title, body, direction, outcome, duration_seconds, occurred_at, raw
@@ -141,6 +156,15 @@ export function threadFor(contactFubId: string, limit = 400): ThreadItem[] {
     .all(contactFubId, limit) as any[];
 
   const items: ThreadItem[] = [
+    ...inquiries.map((l) => ({
+      id: `lead:${l.id}`,
+      kind: "inquiry" as const,
+      direction: "inbound" as const,
+      at: l.created_at,
+      subject: `Website inquiry · ${l.source}`,
+      body: l.message,
+      meta: { listingId: l.listing_id },
+    })),
     ...emails.map((e) => ({
       id: `gmail:${e.gmail_id}`,
       kind: "email" as const,

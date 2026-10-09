@@ -1712,8 +1712,14 @@ export class DatabaseStorage implements IStorage {
   getLead(id: number) {
     return db.select().from(leads).where(eq(leads.id, id)).get();
   }
+  /**
+   * Set by server/contacts.ts: makes sure every new lead has a CRM contact.
+   * A hook rather than an import so the data layer doesn't depend on it.
+   */
+  onLeadCreated: ((lead: Lead) => void) | null = null;
+
   createLead(data: InsertLead) {
-    return db
+    const lead = db
       .insert(leads)
       .values({
         listingId: data.listingId ?? null,
@@ -1726,6 +1732,8 @@ export class DatabaseStorage implements IStorage {
       })
       .returning()
       .get();
+    this.onLeadCreated?.(lead);
+    return lead;
   }
   updateLeadStatus(id: number, status: string) {
     return db
