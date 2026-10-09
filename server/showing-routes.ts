@@ -14,6 +14,9 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import { storage, sqlite } from "./storage";
 import { googleCalendarReady } from "./google-calendar";
+import { smsConfigured } from "./sms";
+import { reminderDueAt } from "./showing-reminders";
+import type { Tour } from "@shared/schema";
 import {
   normalizeMlsNumber,
   resendInvite,
@@ -47,6 +50,20 @@ const patchSchema = z.object({
   notifyClient: z.boolean().optional(),
 });
 
+/** A showing as the calendar shows it, with when its text reminder goes out. */
+function view(tour: Tour) {
+  const v = toShowingView(tour);
+  const due = reminderDueAt(tour.scheduledFor);
+  const planned =
+    !tour.reminderSentAt &&
+    tour.status === "confirmed" &&
+    tour.notifyClient &&
+    !!v.client?.phone &&
+    Date.parse(tour.createdAt) < due.getTime() &&
+    Date.parse(tour.scheduledFor) > Date.now();
+  return { ...v, reminderDueAt: planned ? due.toISOString() : null };
+}
+
 function firstIssue(e: z.ZodError): string {
   return e.issues[0]?.message ?? "Please check the form.";
 }
@@ -56,13 +73,13 @@ export function registerShowingRoutes(app: Express, deps: { requireAuth: Middlew
   const userIdOf = (req: Request) => (req as any).authUserId as number;
 
   app.get("/api/admin/showings", requireAuth, (_req, res) => {
-    res.json(storage.listTours().map(toShowingView));
+    res.json(storage.listTours().map(view));
   });
 
   app.get("/api/admin/showings/status", requireAuth, (req, res) => {
     const google = googleCalendarReady(userIdOf(req));
     const email = !!process.env.RESEND_API_KEY && !!process.env.RESEND_FROM_EMAIL;
-    res.json({ google, email, canInvite: google || email });
+    res.json({ google, email, canInvite: google || email, sms: smsConfigured().ok });
   });
 
   app.get("/api/admin/showings/listing", requireAuth, (req, res) => {
@@ -116,12 +133,12 @@ export function registerShowingRoutes(app: Express, deps: { requireAuth: Middlew
     } as any);
     try {
       const delivery = await syncShowing(userIdOf(req), tour.id);
-      res.status(201).json({ showing: toShowingView(storage.getTour(tour.id)!), delivery });
+      res.status(201).json({ showing: view(storage.getTour(tour.id)!), delivery });
     } catch (e: any) {
       // The showing exists; say what didn't happen rather than pretend it failed.
       console.error("[showings] create sync failed:", e?.message ?? e);
       res.status(201).json({
-        showing: toShowingView(storage.getTour(tour.id)!),
+        showing: view(storage.getTour(tour.id)!),
         delivery: { calendar: "failed", client: "failed", channel: null, error: String(e?.message ?? e) },
       });
     }
@@ -148,11 +165,11 @@ export function registerShowingRoutes(app: Express, deps: { requireAuth: Middlew
       (patch.durationMinutes !== undefined && patch.durationMinutes !== existing.durationMinutes);
     try {
       const delivery = await syncShowing(userIdOf(req), id, { changedTime });
-      res.json({ showing: toShowingView(storage.getTour(id)!), delivery });
+      res.json({ showing: view(storage.getTour(id)!), delivery });
     } catch (e: any) {
       console.error("[showings] update sync failed:", e?.message ?? e);
       res.json({
-        showing: toShowingView(storage.getTour(id)!),
+        showing: view(storage.getTour(id)!),
         delivery: { calendar: "failed", client: "failed", channel: null, error: String(e?.message ?? e) },
       });
     }
@@ -165,7 +182,7 @@ export function registerShowingRoutes(app: Express, deps: { requireAuth: Middlew
     if (tour.status !== "confirmed") return res.status(400).json({ message: "Only a confirmed showing has an invite to send" });
     try {
       const delivery = await resendInvite(userIdOf(req), id);
-      res.json({ showing: toShowingView(storage.getTour(id)!), delivery });
+      res.json({ showing: view(storage.getTour(id)!), delivery });
     } catch (e: any) {
       res.status(502).json({ message: String(e?.message ?? e) });
     }

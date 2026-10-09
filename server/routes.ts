@@ -563,6 +563,11 @@ export async function registerRoutes(
     const { registerShowingRoutes } = await import("./showing-routes");
     registerShowingRoutes(app, { requireAuth });
 
+    // The business phone line (Twilio): text relay, call forwarding,
+    // voicemail, and the admin setup endpoints. See server/sms.ts.
+    const { registerTwilioRoutes } = await import("./twilio-routes");
+    registerTwilioRoutes(app, { requireAuth });
+
     const { registerMarketRoutes } = await import("./market-routes");
     registerMarketRoutes(app, { requireAuth });
   } catch (e) {

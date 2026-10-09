@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarCheck, Clock, Loader2, Mail, MapPin, RotateCw, Send, User, X } from "lucide-react";
+import { CalendarCheck, Clock, Loader2, Mail, MapPin, MessageSquare, Phone, RotateCw, Send, User, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -43,6 +43,10 @@ export interface ShowingView {
   inviteChannel: "google" | "email" | null;
   invitedAt: string | null;
   inviteError: string | null;
+  reminderSentAt: string | null;
+  reminderError: string | null;
+  /** When the morning-of text will go out, if one is planned. */
+  reminderDueAt: string | null;
   listing: ShowingListing;
   client: { name: string; email: string | null; phone: string | null } | null;
 }
@@ -199,7 +203,7 @@ export function NewShowingDialog({
     enabled: !contact && !manual && q.length >= 2,
   });
 
-  const { data: status } = useQuery<{ google: boolean; email: boolean; canInvite: boolean }>({
+  const { data: status } = useQuery<{ google: boolean; email: boolean; canInvite: boolean; sms: boolean }>({
     queryKey: ["/api/admin/showings/status"],
     enabled: open,
   });
@@ -441,6 +445,11 @@ export function NewShowingDialog({
                     ? "Google Calendar isn't connected, so it goes by email with a calendar file attached."
                     : "Neither Google Calendar nor email sending is set up, so no invite can be sent."}
                 {notify && !hasClient ? "" : notify && !clientEmail ? " This client has no email address." : ""}
+                {notify && status?.sms
+                  ? (manual ? phone.trim() : contact?.phone)
+                    ? " They'll also get a text reminder the morning of."
+                    : " Add a phone number and they'll also get a text reminder the morning of."
+                  : ""}
               </span>
             </span>
           </label>
@@ -476,6 +485,12 @@ export function NewShowingDialog({
 
 function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
+}
+
+function formatWhen(iso: string) {
+  const d = new Date(iso);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return sameDay ? `at ${formatTime(iso)}` : `${d.toLocaleDateString("en-CA", { weekday: "short" })} ${formatTime(iso)}`;
 }
 
 function inviteLabel(s: ShowingView): { text: string; tone: "ok" | "warn" | "mute" } | null {
@@ -564,6 +579,21 @@ export function ShowingRow({ showing }: { showing: ShowingView }) {
               >
                 <Mail className="w-3 h-3" strokeWidth={1.6} />
                 {label.text}
+              </div>
+            )}
+            {(showing.reminderSentAt || showing.reminderError || showing.reminderDueAt) && (
+              <div
+                className={`text-[11.5px] flex items-center gap-1 mt-0.5 ${
+                  showing.reminderError ? "text-amber-700 dark:text-amber-400" : showing.reminderSentAt ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground"
+                }`}
+                title={showing.reminderError ?? undefined}
+              >
+                <MessageSquare className="w-3 h-3" strokeWidth={1.6} />
+                {showing.reminderError
+                  ? "Reminder text failed"
+                  : showing.reminderSentAt
+                    ? `Reminder texted ${formatWhen(showing.reminderSentAt)}`
+                    : `Reminder text ${formatWhen(showing.reminderDueAt!)}`}
               </div>
             )}
             {showing.notes && (
@@ -655,5 +685,78 @@ export function FubAppointmentRow({ appt }: { appt: FubAppointment }) {
         <div className="text-[11px] text-muted-foreground mt-2">Read-only — edit in Follow Up Boss.</div>
       </CardContent>
     </Card>
+  );
+}
+
+// ---- Business line setup ------------------------------------------------------
+
+interface SmsStatus {
+  ok: boolean;
+  missing: string[];
+  from: string | null;
+  agentCell: string | null;
+  webhooks: { sms: string; voice: string };
+}
+
+/**
+ * The business line's state on the calendar page: what's configured, the two
+ * webhook URLs to paste into Twilio, and a test text.
+ */
+export function BusinessLineCard() {
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const { data } = useQuery<SmsStatus>({ queryKey: ["/api/admin/sms/status"] });
+  const test = useMutation({
+    mutationFn: async () => (await apiRequest("POST", "/api/admin/sms/test")).json(),
+    onSuccess: () => toast({ title: "Test text sent", description: `Check ${data?.agentCell ?? "your cell"}.` }),
+    onError: (e: any) => toast({ title: "Test text failed", description: e?.message ?? "Try again.", variant: "destructive" }),
+  });
+  if (!data) return null;
+  const ready = data.ok && !!data.agentCell;
+  return (
+    <div className="mb-6 rounded-sm border border-border px-4 py-3" data-testid="business-line-card">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-[13px]">
+          <Phone className="h-3.5 w-3.5 text-muted-foreground" strokeWidth={1.6} />
+          <span className="font-display text-[10px] tracking-[0.18em] text-muted-foreground">BUSINESS LINE</span>
+          {ready ? (
+            <span>
+              {data.from} · texts and calls forward to {data.agentCell} · showing reminders on
+            </span>
+          ) : (
+            <span className="text-amber-700 dark:text-amber-400">
+              Not set up: {[...data.missing, ...(data.agentCell ? [] : ["AGENT_CELL_NUMBER"])].join(", ")}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {data.ok && data.agentCell && (
+            <Button size="sm" variant="outline" className="h-7 rounded-sm text-[11px]" onClick={() => test.mutate()} disabled={test.isPending}>
+              {test.isPending ? <Loader2 className="h-3 w-3 animate-spin mr-1.5" /> : <Send className="h-3 w-3 mr-1.5" />}
+              Send test text
+            </Button>
+          )}
+          <button onClick={() => setOpen(!open)} className="text-[12px] underline underline-offset-2 text-muted-foreground hover:text-foreground">
+            {open ? "Hide setup" : "Setup"}
+          </button>
+        </div>
+      </div>
+      {open && (
+        <div className="mt-3 text-[12.5px] text-muted-foreground leading-relaxed space-y-1.5">
+          <p>
+            In Twilio, open the number (Phone Numbers → Manage → Active numbers) and set both webhooks to <strong>HTTP POST</strong>:
+          </p>
+          <p>
+            A message comes in: <code className="text-foreground select-all">{data.webhooks.sms}</code>
+          </p>
+          <p>
+            A call comes in: <code className="text-foreground select-all">{data.webhooks.voice}</code>
+          </p>
+          <p>
+            Fly secrets: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER (the business line), AGENT_CELL_NUMBER (your cell).
+          </p>
+        </div>
+      )}
+    </div>
   );
 }

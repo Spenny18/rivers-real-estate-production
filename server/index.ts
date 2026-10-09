@@ -179,6 +179,12 @@ app.use((req, res, next) => {
     console.error("[return-alerts] failed to start cron:", err);
   }
   try {
+    const { startShowingReminderCron } = await import("./showing-reminders");
+    startShowingReminderCron();
+  } catch (err) {
+    console.error("[reminders] failed to start cron:", err);
+  }
+  try {
     startCrmSyncCron();
   } catch (err) {
     console.error("[crm-sync] failed to start cron:", err);
