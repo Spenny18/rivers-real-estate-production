@@ -430,7 +430,12 @@ export default function AdminDocumentPage() {
               <Send className="h-4 w-4 mr-1" /> Send for signature
             </Button>
           ) : null}
-          {doc.status === "sent" ? (
+          {doc.status === "sent" && doc.envelopeId ? (
+            <Link href={`/admin/deals/${doc.dealId}`} className="text-[12px] text-muted-foreground underline underline-offset-2">
+              Sent in an envelope — remind or void it from the deal page
+            </Link>
+          ) : null}
+          {doc.status === "sent" && !doc.envelopeId ? (
             <>
               <Button size="sm" variant="outline" disabled={remind.isPending} onClick={() => remind.mutate(undefined)}>
                 <BellRing className="h-4 w-4 mr-1" /> Remind

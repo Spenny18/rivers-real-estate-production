@@ -44,7 +44,24 @@ import {
   type DealDocument,
   type DealSigner,
   type DealField,
+  type DealEnvelope,
+  type DealEnvelopeRecipient,
 } from "@shared/schema";
+import {
+  createEnvelope,
+  envelopeBundles,
+  getEnvelope,
+  listEnvelopesForDeal,
+  normEmail,
+  peopleIn,
+  progressFor,
+  recipientByToken,
+  recipientsOf,
+  refreshEnvelopeStatus,
+  signerFor,
+  touchEnvelope,
+  updateRecipient,
+} from "./envelope-store";
 import { z } from "zod";
 import {
   DOCUMENTS_ROOT,
@@ -57,7 +74,14 @@ import {
   writeDocument,
 } from "./documents-store";
 import { buildSignedPdf } from "./signing";
-import { sendEmail, buildSignRequestHtml, buildSignedCopyHtml, buildSignAgentNoticeHtml } from "./email";
+import {
+  sendEmail,
+  buildSignRequestHtml,
+  buildSignedCopyHtml,
+  buildSignAgentNoticeHtml,
+  buildEnvelopeSignRequestHtml,
+  buildEnvelopeSignedCopyHtml,
+} from "./email";
 import { publicOrigin } from "./origin";
 import { backupStatus, queueDocumentsBackup, runBackup } from "./backup";
 import { AGENT } from "./brand";
@@ -159,6 +183,7 @@ function documentSummary(d: DealDocument, signers: DealSigner[]) {
     source: d.source,
     formTemplateId: d.formTemplateId,
     status: d.status,
+    envelopeId: d.envelopeId ?? null,
     pageCount: d.pageCount,
     signingOrder: d.signingOrder,
     sentAt: d.sentAt,
@@ -240,6 +265,38 @@ function dealView(d: Deal) {
     awaitingSignature: awaiting,
     completedDocuments: docs.filter((x) => x.status === "completed").length,
     documents: docs.map((x) => documentSummary(x, signers.filter((s) => s.documentId === x.id))),
+    envelopes: listEnvelopesForDeal(d.id).map(envelopeView).reverse(),
+  };
+}
+
+/** An envelope as the deal page shows it: its documents and each person's progress. */
+function envelopeView(env: DealEnvelope) {
+  const bundles = envelopeBundles(env.id);
+  return {
+    id: env.id,
+    title: env.title,
+    message: env.message,
+    status: env.status,
+    sentAt: env.sentAt,
+    completedAt: env.completedAt,
+    voidedAt: env.voidedAt,
+    voidReason: env.voidReason,
+    documents: bundles.map((b) => ({ id: b.document.id, title: b.document.title, status: b.document.status, signingOrder: b.document.signingOrder })),
+    recipients: recipientsOf(env.id).map((r) => {
+      const p = progressFor(r, bundles);
+      return {
+        id: r.id,
+        name: r.name,
+        email: r.email,
+        status: r.status,
+        lastEmailAt: r.lastEmailAt,
+        total: p.total,
+        signed: p.signed,
+        canSignNow: p.canSignNow.length,
+        waiting: p.waiting.length,
+        signUrl: `${publicOrigin()}/sign/e/${r.token}`,
+      };
+    }),
   };
 }
 
@@ -305,7 +362,23 @@ async function notifyAgent(b: Bundle, kind: "signed" | "declined" | "completed",
 
 // ---- Completion -------------------------------------------------------------------
 
+// Documents whose signed PDF is being built right now. The last two signers
+// finishing at the same moment would otherwise both see "everyone has signed"
+// and both build (and email) the final copy.
+const finalizing = new Set<number>();
+
 async function finalize(documentId: number): Promise<Bundle> {
+  const current = loadBundle(documentId)!;
+  if (current.document.status === "completed" || finalizing.has(documentId)) return current;
+  finalizing.add(documentId);
+  try {
+    return await buildFinal(documentId);
+  } finally {
+    finalizing.delete(documentId);
+  }
+}
+
+async function buildFinal(documentId: number): Promise<Bundle> {
   const b = loadBundle(documentId)!;
   const images = new Map<string, Uint8Array>();
   for (const s of b.signers) {
@@ -338,6 +411,10 @@ async function finalize(documentId: number): Promise<Bundle> {
     signedBytes: bytes.length,
   });
   queueDocumentsBackup();
+
+  // In an envelope, the signed copies, the agent notice and the FUB note go
+  // out once for the whole envelope when its last document completes.
+  if (b.document.envelopeId) return loadBundle(documentId)!;
 
   // Everyone gets the final copy. Attach it when it is small enough to be
   // welcome in an inbox; the link works regardless.
@@ -637,6 +714,7 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
     const b = loadBundle(Number(req.params.id));
     if (!b) return bad(res, 404, "Document not found");
     if (b.document.status !== "sent") return bad(res, 409, "Only a document that is out for signature can be reminded.");
+    if (b.document.envelopeId) return bad(res, 409, "This document was sent in an envelope. Remind from the envelope on the deal page.");
     const signerId = typeof req.body?.signerId === "number" ? req.body.signerId : null;
     const targets = signersWhoCanSignNow(b).filter((s) => (signerId ? s.id === signerId : true));
     if (!targets.length) return bad(res, 400, "Nobody is waiting to sign right now.");
@@ -650,6 +728,9 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
     if (!b) return bad(res, 404, "Document not found");
     if (b.document.status === "completed") return bad(res, 409, "A completed document cannot be voided. Send a new one instead.");
     if (b.document.status === "voided") return bad(res, 409, "Already voided.");
+    if (b.document.envelopeId && b.document.status === "sent") {
+      return bad(res, 409, "This document was sent in an envelope. Void the envelope from the deal page.");
+    }
     const reason = String(req.body?.reason ?? "").trim().slice(0, 500) || null;
     touchDocument(b.document.id, { status: "voided", voidedAt: nowIso(), voidReason: reason });
     addEventFromReq(b.document.id, "voided", { req, detail: reason });
@@ -957,60 +1038,70 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
     initials: z.object({ png: pngDataUrl }).optional(),
   });
 
-  app.post("/api/sign/:token/complete", signWriteLimiter, async (req, res) => {
-    const hit = bySignerToken(String(req.params.token));
-    if (!hit) return bad(res, 404, "This signing link is not valid.");
-    const { b, signer } = hit;
-    if (b.document.status !== "sent") return bad(res, 409, "This document is no longer open for signing.");
-    if (signer.status === "signed") return bad(res, 409, "You have already signed this document.");
-    if (signer.status === "declined") return bad(res, 409, "You declined this document.");
-    if (!signersWhoCanSignNow(b).some((s) => s.id === signer.id)) {
-      return bad(res, 409, "It is not your turn to sign yet. You will get an email when it is.");
-    }
-    if (!signer.consentAt) return bad(res, 400, "Please agree to sign electronically first.");
-    const parsed = completeSchema.safeParse(req.body ?? {});
-    if (!parsed.success) return bad(res, 400, firstIssue(parsed.error));
-    const { values, signature, initials } = parsed.data;
+  type SignInput = z.infer<typeof completeSchema>;
 
+  /** Why this signer can't sign this document right now, or null if they can. */
+  function cannotSign(b: Bundle, signer: DealSigner): { status: number; message: string } | null {
+    if (b.document.status !== "sent") return { status: 409, message: `${b.document.title} is no longer open for signing.` };
+    if (signer.status === "signed") return { status: 409, message: `You have already signed ${b.document.title}.` };
+    if (signer.status === "declined") return { status: 409, message: `You declined ${b.document.title}.` };
+    if (!signersWhoCanSignNow(b).some((s) => s.id === signer.id)) {
+      return { status: 409, message: "It is not your turn to sign yet. You will get an email when it is." };
+    }
+    if (!signer.consentAt) return { status: 400, message: "Please agree to sign electronically first." };
+    return null;
+  }
+
+  /** What's missing from a submission for one document, or null. */
+  function invalidSubmission(b: Bundle, signer: DealSigner, values: Record<string, string>, hasInitials: boolean): string | null {
     const mine = b.fields.filter((f) => f.signerId === signer.id);
-    const needsInitials = mine.some((f) => f.type === "initials");
-    if (needsInitials && !initials) return bad(res, 400, "Please add your initials as well.");
+    if (mine.some((f) => f.type === "initials") && !hasInitials) return "Please add your initials as well.";
     for (const f of mine) {
       if (!f.required || f.type !== "text") continue; // only typed boxes can be left empty
       const v = values[String(f.id)];
-      if (!v || !v.trim()) return bad(res, 400, `Please fill in ${f.label || "every text box"}.`);
+      if (!v || !v.trim()) return `Please fill in ${f.label || "every text box"}${b.document.envelopeId ? ` on ${b.document.title}` : ""}.`;
     }
+    return null;
+  }
 
-    const sigBytes = Buffer.from(signature.png.split(",")[1], "base64");
-    if (sigBytes.length > MAX_SIGNATURE_PNG_BYTES || !isPng(sigBytes)) return bad(res, 400, "Signature image is not a valid PNG.");
+  function decodePng(dataUrl: string): Buffer | null {
+    const bytes = Buffer.from(dataUrl.split(",")[1] ?? "", "base64");
+    return bytes.length <= MAX_SIGNATURE_PNG_BYTES && isPng(bytes) ? bytes : null;
+  }
+
+  /** Record one signer's signature on one document. The checks above must have passed. */
+  function recordSignature(
+    b: Bundle,
+    signer: DealSigner,
+    input: { values: Record<string, string>; kind: "drawn" | "typed"; sigBytes: Buffer; iniBytes: Buffer | null },
+    req: Request,
+  ) {
+    const mine = b.fields.filter((f) => f.signerId === signer.id);
     const sigKey = documentKey(b.deal.id, b.document.id, `sig-${signer.id}.png`);
-    writeDocument(sigKey, sigBytes);
+    writeDocument(sigKey, input.sigBytes);
     let iniKey: string | null = null;
-    if (initials) {
-      const iniBytes = Buffer.from(initials.png.split(",")[1], "base64");
-      if (iniBytes.length > MAX_SIGNATURE_PNG_BYTES || !isPng(iniBytes)) return bad(res, 400, "Initials image is not a valid PNG.");
+    if (input.iniBytes) {
       iniKey = documentKey(b.deal.id, b.document.id, `ini-${signer.id}.png`);
-      writeDocument(iniKey, iniBytes);
+      writeDocument(iniKey, input.iniBytes);
     }
-
     const at = nowIso();
     const signedAt = new Date(at);
     for (const f of mine) {
       let value: string | null;
       if (f.type === "signature" || f.type === "initials") value = "signed";
-      else if (f.type === "checkbox") value = values[String(f.id)] === "true" ? "true" : "false";
+      else if (f.type === "checkbox") value = input.values[String(f.id)] === "true" ? "true" : "false";
       // Date and time come from the server clock at this moment, never from
       // the browser: the printed date is evidence of when the signature was
       // recorded, in the signing time zone.
       else if (f.type === "date" || f.type === "time") value = formatStamp(f.type, f.format, signedAt);
-      else value = (values[String(f.id)] ?? "").trim() || null;
+      else value = (input.values[String(f.id)] ?? "").trim() || null;
       db.update(dealFields).set({ value, filledAt: at }).where(eq(dealFields.id, f.id)).run();
     }
     db.update(dealSigners)
       .set({
         status: "signed",
         signedAt: at,
-        signatureKind: signature.kind,
+        signatureKind: input.kind,
         signatureKey: sigKey,
         initialsKey: iniKey,
         ip: clientIp(req),
@@ -1018,27 +1109,64 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
       })
       .where(eq(dealSigners.id, signer.id))
       .run();
-    addEventFromReq(b.document.id, "signed", { signerId: signer.id, req, detail: `${signature.kind} signature, ${mine.length} field(s)` });
+    addEventFromReq(b.document.id, "signed", {
+      signerId: signer.id,
+      req,
+      detail: `${input.kind} signature, ${mine.length} field(s)${b.document.envelopeId ? ", signed in envelope" : ""}`,
+    });
+  }
 
-    let fresh = loadBundle(b.document.id)!;
-    const allSigned = fresh.signers.every((s) => s.status === "signed");
-    if (allSigned) {
+  /**
+   * After a signature lands: build the final copy when everyone has signed,
+   * otherwise move the document along. Returns the signers whose turn it now
+   * is on a sequential document — an envelope emails them its own link.
+   */
+  async function afterSigned(documentId: number, signerId: number): Promise<DealSigner[]> {
+    const fresh = loadBundle(documentId)!;
+    if (fresh.signers.every((s) => s.status === "signed")) {
       try {
-        fresh = await finalize(b.document.id);
+        await finalize(documentId);
       } catch (e: any) {
         console.error("[esign] finalize failed:", e);
-        addEventFromReq(b.document.id, "finalize_failed", { detail: String(e?.message ?? e) });
+        addEventFromReq(documentId, "finalize_failed", { detail: String(e?.message ?? e) });
         // The signature is recorded; the agent can retry from the admin.
       }
-    } else {
-      const signed = fresh.signers.find((s) => s.id === signer.id)!;
-      void notifyAgent(fresh, "signed", signed);
-      if (fresh.document.signingOrder === "sequential") {
-        for (const next of signersWhoCanSignNow(fresh)) {
-          if (next.status === "pending") await emailSigner(fresh, next);
-        }
-      }
+      return [];
     }
+    // On a sequential document the next signer's turn starts now.
+    const nextUp = fresh.document.signingOrder === "sequential" ? signersWhoCanSignNow(fresh).filter((n) => n.id !== signerId) : [];
+    if (!fresh.document.envelopeId) {
+      void notifyAgent(fresh, "signed", fresh.signers.find((s) => s.id === signerId));
+      // Alone, the next signer has never been emailed (their link only goes
+      // out on their turn), so "pending" is exactly who to tell.
+      for (const next of nextUp) if (next.status === "pending") await emailSigner(fresh, next);
+    }
+    // In an envelope they may already have its email (for other documents),
+    // so the envelope tells them this one is ready regardless.
+    return nextUp;
+  }
+
+  app.post("/api/sign/:token/complete", signWriteLimiter, async (req, res) => {
+    const hit = bySignerToken(String(req.params.token));
+    if (!hit) return bad(res, 404, "This signing link is not valid.");
+    const { b, signer } = hit;
+    const blocked = cannotSign(b, signer);
+    if (blocked) return bad(res, blocked.status, blocked.message.replace(b.document.title, "this document"));
+    const parsed = completeSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return bad(res, 400, firstIssue(parsed.error));
+    const { values, signature, initials } = parsed.data;
+    const invalid = invalidSubmission(b, signer, values, !!initials);
+    if (invalid) return bad(res, 400, invalid);
+    const sigBytes = decodePng(signature.png);
+    if (!sigBytes) return bad(res, 400, "Signature image is not a valid PNG.");
+    const iniBytes = initials ? decodePng(initials.png) : null;
+    if (initials && !iniBytes) return bad(res, 400, "Initials image is not a valid PNG.");
+
+    recordSignature(b, signer, { values, kind: signature.kind, sigBytes, iniBytes }, req);
+    const nextUp = await afterSigned(b.document.id, signer.id);
+    // A document from an envelope signed through its own link (the client
+    // portal lists documents one by one) still moves the envelope along.
+    if (b.document.envelopeId) await envelopeAfterSigning(b.document.envelopeId, signer.email, nextUp);
     touchDeal(b.deal.id, {});
     const out = bySignerToken(String(req.params.token))!;
     res.json(signerPageView(out.b, out.signer));
@@ -1051,6 +1179,12 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
     if (b.document.status !== "sent") return bad(res, 409, "This document is no longer open for signing.");
     if (signer.status === "signed") return bad(res, 409, "You have already signed this document.");
     const reason = String(req.body?.reason ?? "").trim().slice(0, 1000) || null;
+    // Declining one document of an envelope declines the envelope.
+    if (b.document.envelopeId) {
+      await declineEnvelope(b.document.envelopeId, signer.email, reason, req);
+      const out = bySignerToken(String(req.params.token))!;
+      return res.json(signerPageView(out.b, out.signer));
+    }
     const at = nowIso();
     db.update(dealSigners)
       .set({ status: "declined", declinedAt: at, declineReason: reason, ip: clientIp(req), userAgent: userAgent(req) })
@@ -1064,6 +1198,418 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
     touchDeal(b.deal.id, {});
     const out = bySignerToken(String(req.params.token))!;
     res.json(signerPageView(out.b, out.signer));
+  });
+
+  // ---- Envelopes: several documents, one email, one signing session ----------------------
+  //
+  // Each document keeps its own signers, fields, order, signed PDF and
+  // certificate; the envelope gives each *person* one link for all of theirs.
+  // Per-document audit events are still written for every step, so each
+  // document's certificate reads the same as if it had been sent alone.
+
+  function envelopeUrl(r: DealEnvelopeRecipient): string {
+    return `${publicOrigin()}/sign/e/${r.token}`;
+  }
+
+  /** Email one person the documents waiting on them. */
+  async function emailRecipient(env: DealEnvelope, r: DealEnvelopeRecipient, opts: { reminder?: boolean } = {}): Promise<boolean> {
+    const bundles = envelopeBundles(env.id);
+    const deal = getDeal(env.dealId)!;
+    // Only what they can sign now; a document that's waiting on someone else
+    // gets its own email when their turn comes.
+    const ready = new Set(progressFor(r, bundles).canSignNow);
+    const theirs = bundles.filter((b) => ready.has(b.document.id));
+    if (!theirs.length) return true;
+    const origin = publicOrigin();
+    const result = await sendEmail({
+      to: r.email,
+      subject: `${opts.reminder ? "Reminder: " : ""}Please sign: ${env.title}${theirs.length > 1 ? ` (${theirs.length} documents)` : ""}`,
+      html: buildEnvelopeSignRequestHtml({
+        recipientName: r.name,
+        envelopeTitle: env.title,
+        documents: theirs.map((b) => ({ title: b.document.title })),
+        dealTitle: deal.title,
+        address: deal.address,
+        message: env.message,
+        signUrl: envelopeUrl(r),
+        origin,
+        reminder: opts.reminder,
+      }),
+      replyTo: process.env.RESEND_FROM_EMAIL,
+      cc: "", // signing links are private to the signer
+    });
+    const at = nowIso();
+    if (result.ok) updateRecipient(r.id, { lastEmailAt: at, status: r.status === "pending" ? "sent" : r.status });
+    for (const b of theirs) {
+      const s = signerFor(b, r.email)!;
+      if (result.ok) {
+        db.update(dealSigners).set({ lastEmailAt: at, status: s.status === "pending" ? "sent" : s.status }).where(eq(dealSigners.id, s.id)).run();
+        addEventFromReq(b.document.id, opts.reminder ? "reminder" : "email_sent", { signerId: s.id, detail: `${r.email} (envelope: ${env.title})` });
+      } else {
+        addEventFromReq(b.document.id, "email_failed", { signerId: s.id, detail: result.error ?? "send failed" });
+      }
+    }
+    if (!result.ok) console.error(`[esign] envelope email to ${r.email} failed:`, result.error);
+    return result.ok;
+  }
+
+  function syncRecipientStatuses(envId: number) {
+    const bundles = envelopeBundles(envId);
+    for (const r of recipientsOf(envId)) {
+      const p = progressFor(r, bundles);
+      if (p.declined && r.status !== "declined") updateRecipient(r.id, { status: "declined" });
+      else if (p.total > 0 && p.signed === p.total && r.status !== "signed") updateRecipient(r.id, { status: "signed" });
+    }
+  }
+
+  /** Every signed copy to every person, one notice to Spencer, one FUB note. */
+  async function completeEnvelope(env: DealEnvelope) {
+    const bundles = envelopeBundles(env.id);
+    const deal = getDeal(env.dealId)!;
+    const origin = publicOrigin();
+    for (const r of recipientsOf(env.id)) {
+      const theirs = bundles.filter((b) => signerFor(b, r.email) && b.document.signedKey);
+      if (!theirs.length) continue;
+      const total = theirs.reduce((n, b) => n + (b.document.signedBytes ?? 0), 0);
+      const attach = total <= ATTACH_LIMIT_BYTES;
+      const result = await sendEmail({
+        to: r.email,
+        subject: `Signed copies: ${env.title}`,
+        html: buildEnvelopeSignedCopyHtml({
+          recipientName: r.name,
+          envelopeTitle: env.title,
+          documents: theirs.map((b) => ({ title: b.document.title, sha256: b.document.signedSha256 })),
+          dealTitle: deal.title,
+          address: deal.address,
+          signUrl: envelopeUrl(r),
+          origin,
+          attached: attach,
+        }),
+        attachments: attach
+          ? theirs.map((b) => ({
+              filename: `${safeFilename(b.document.title)}-signed.pdf`,
+              content: Buffer.from(readDocument(b.document.signedKey!)).toString("base64"),
+            }))
+          : undefined,
+        cc: "",
+      });
+      if (!result.ok) console.error(`[esign] envelope signed copies to ${r.email} failed:`, result.error);
+    }
+    const sendResult = await sendEmail({
+      to: agentEmail(),
+      subject: `Completed: ${env.title}`,
+      html: buildSignAgentNoticeHtml({
+        kind: "completed",
+        documentTitle: `${env.title} (${bundles.length} document${bundles.length === 1 ? "" : "s"})`,
+        dealTitle: deal.title,
+        address: deal.address,
+        adminUrl: `${origin}/admin/deals/${deal.id}`,
+        origin,
+      }),
+      cc: "",
+    });
+    if (!sendResult.ok) console.error("[esign] envelope agent notice failed:", sendResult.error);
+    const people = recipientsOf(env.id).map((r) => r.name).join(", ");
+    void noteOnFub(
+      deal,
+      `Signed: ${env.title}`,
+      `All ${bundles.length} document(s) in ${env.title} were signed by ${people}.\n` +
+        bundles.map((b) => `- ${b.document.title} — SHA-256 ${b.document.signedSha256}`).join("\n") +
+        `\nDeal: ${deal.title}${deal.address ? ` — ${deal.address}` : ""}\n${origin}/admin/deals/${deal.id}`,
+    );
+  }
+
+  /**
+   * After someone signs in an envelope (from its link or a document's own):
+   * update everyone's progress, email whoever's turn has come on a sequential
+   * document, and complete the envelope once its last document is.
+   */
+  async function envelopeAfterSigning(envId: number, signerEmail: string, nextUp: DealSigner[]) {
+    syncRecipientStatuses(envId);
+    const before = getEnvelope(envId)!.status;
+    const env = refreshEnvelopeStatus(envId);
+    if (before !== "completed" && env.status === "completed") return completeEnvelope(env);
+
+    // One email per person, however many documents just opened up for them.
+    const recipients = recipientsOf(envId);
+    const emails = new Set(nextUp.map((n) => normEmail(n.email)).filter((e) => e !== normEmail(signerEmail)));
+    for (const r of recipients) if (emails.has(normEmail(r.email))) await emailRecipient(env, r);
+
+    const signer = recipients.find((r) => normEmail(r.email) === normEmail(signerEmail));
+    const deal = getDeal(env.dealId)!;
+    const r = await sendEmail({
+      to: agentEmail(),
+      subject: `${signer?.name ?? "A signer"} signed ${env.title}`,
+      html: buildSignAgentNoticeHtml({
+        kind: "signed",
+        signerName: signer?.name,
+        documentTitle: env.title,
+        dealTitle: deal.title,
+        address: deal.address,
+        adminUrl: `${publicOrigin()}/admin/deals/${deal.id}`,
+        origin: publicOrigin(),
+      }),
+      cc: "",
+    });
+    if (!r.ok) console.error("[esign] envelope agent notice failed:", r.error);
+  }
+
+  /** Declining any document declines the envelope: nothing in it goes ahead. */
+  async function declineEnvelope(envId: number, email: string, reason: string | null, req: Request) {
+    const at = nowIso();
+    let who: string | null = null;
+    for (const b of envelopeBundles(envId)) {
+      if (b.document.status !== "sent") continue;
+      const s = signerFor(b, email);
+      if (s && s.status !== "signed") {
+        who = s.name;
+        db.update(dealSigners)
+          .set({ status: "declined", declinedAt: at, declineReason: reason, ip: clientIp(req), userAgent: userAgent(req) })
+          .where(eq(dealSigners.id, s.id))
+          .run();
+        addEventFromReq(b.document.id, "declined", { signerId: s.id, req, detail: reason });
+      } else {
+        addEventFromReq(b.document.id, "declined", { req, detail: `Envelope declined by ${email}${reason ? `: ${reason}` : ""}` });
+      }
+      touchDocument(b.document.id, { status: "declined" });
+    }
+    syncRecipientStatuses(envId);
+    const env = refreshEnvelopeStatus(envId);
+    const deal = getDeal(env.dealId)!;
+    const r = await sendEmail({
+      to: agentEmail(),
+      subject: `${who ?? email} declined ${env.title}`,
+      html: buildSignAgentNoticeHtml({
+        kind: "declined",
+        signerName: who ?? email,
+        reason,
+        documentTitle: env.title,
+        dealTitle: deal.title,
+        address: deal.address,
+        adminUrl: `${publicOrigin()}/admin/deals/${deal.id}`,
+        origin: publicOrigin(),
+      }),
+      cc: "",
+    });
+    if (!r.ok) console.error("[esign] envelope agent notice failed:", r.error);
+    void noteOnFub(deal, `Declined: ${env.title}`, `${who ?? email} declined to sign ${env.title}.${reason ? ` Reason: ${reason}` : ""}`);
+    touchDeal(deal.id, {});
+  }
+
+  const envelopeCreateSchema = z.object({
+    documentIds: z.array(z.number().int().positive()).min(1, "Pick at least one document").max(20),
+    title: z.string().trim().min(1, "Give the envelope a title").max(200),
+    message: z.string().trim().max(2000).optional().nullable(),
+  });
+
+  app.post("/api/admin/deals/:id/envelopes", requireAuth, async (req, res) => {
+    const deal = getDeal(Number(req.params.id));
+    if (!deal) return bad(res, 404, "Deal not found");
+    const parsed = envelopeCreateSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return bad(res, 400, firstIssue(parsed.error));
+    const ids = Array.from(new Set(parsed.data.documentIds));
+    const bundles: Bundle[] = [];
+    for (const id of ids) {
+      const b = loadBundle(id);
+      if (!b || b.deal.id !== deal.id) return bad(res, 404, "A selected document isn't on this deal.");
+      if (b.document.status !== "draft") return bad(res, 409, `${b.document.title} has already been sent.`);
+      if (b.document.envelopeId) return bad(res, 409, `${b.document.title} is already in an envelope.`);
+      if (b.signers.length === 0) return bad(res, 400, `${b.document.title} has no signers yet.`);
+      for (const s of b.signers) {
+        if (!b.fields.some((f) => f.signerId === s.id && f.type === "signature")) {
+          return bad(res, 400, `${s.name} has no signature box on ${b.document.title}. Place one before sending.`);
+        }
+      }
+      bundles.push(b);
+    }
+    if (!process.env.RESEND_API_KEY) return bad(res, 503, "Email is not configured (RESEND_API_KEY), so signing links cannot be sent.");
+
+    const env = createEnvelope({
+      dealId: deal.id,
+      title: parsed.data.title,
+      message: parsed.data.message || null,
+      documentIds: ids,
+      people: peopleIn(bundles),
+    });
+    const sentAt = nowIso();
+    for (const b of bundles) {
+      touchDocument(b.document.id, { status: "sent", sentAt });
+      addEventFromReq(b.document.id, "sent", { req, detail: `${b.signers.length} signer(s), ${b.document.signingOrder}, in envelope "${env.title}"` });
+    }
+    let failures = 0;
+    const fresh = envelopeBundles(env.id);
+    for (const r of recipientsOf(env.id)) {
+      if (progressFor(r, fresh).canSignNow.length === 0) continue; // their turn comes later
+      if (!(await emailRecipient(env, r))) failures += 1;
+    }
+    touchDeal(deal.id, {});
+    const out = envelopeView(getEnvelope(env.id)!);
+    if (failures) return res.status(207).json({ ...out, warning: `${failures} signing email(s) could not be sent. Use Remind to retry.` });
+    res.status(201).json(out);
+  });
+
+  app.post("/api/admin/envelopes/:id/remind", requireAuth, async (req, res) => {
+    const env = getEnvelope(Number(req.params.id));
+    if (!env) return bad(res, 404, "Envelope not found");
+    if (env.status !== "sent") return bad(res, 409, "Only an envelope that is out for signature can be reminded.");
+    const recipientId = typeof req.body?.recipientId === "number" ? req.body.recipientId : null;
+    const bundles = envelopeBundles(env.id);
+    const targets = recipientsOf(env.id).filter((r) => (recipientId ? r.id === recipientId : true) && progressFor(r, bundles).canSignNow.length > 0);
+    if (!targets.length) return bad(res, 400, "Nobody is waiting to sign right now.");
+    let sent = 0;
+    for (const r of targets) if (await emailRecipient(env, r, { reminder: true })) sent += 1;
+    res.json({ ...envelopeView(getEnvelope(env.id)!), sent });
+  });
+
+  app.post("/api/admin/envelopes/:id/void", requireAuth, async (req, res) => {
+    const env = getEnvelope(Number(req.params.id));
+    if (!env) return bad(res, 404, "Envelope not found");
+    if (env.status === "completed") return bad(res, 409, "A completed envelope cannot be voided.");
+    if (env.status === "voided") return bad(res, 409, "Already voided.");
+    const reason = String(req.body?.reason ?? "").trim().slice(0, 500) || null;
+    const at = nowIso();
+    for (const b of envelopeBundles(env.id)) {
+      if (b.document.status === "completed" || b.document.status === "voided") continue;
+      touchDocument(b.document.id, { status: "voided", voidedAt: at, voidReason: reason });
+      addEventFromReq(b.document.id, "voided", { req, detail: `Envelope voided${reason ? `: ${reason}` : ""}` });
+    }
+    touchEnvelope(env.id, { status: "voided", voidedAt: at, voidReason: reason });
+    touchDeal(env.dealId, {});
+    res.json(envelopeView(getEnvelope(env.id)!));
+  });
+
+  // ---- Public: one person's envelope ----
+
+  function byEnvelopeToken(token: string): { env: DealEnvelope; r: DealEnvelopeRecipient; bundles: Bundle[] } | null {
+    const r = recipientByToken(token);
+    if (!r) return null;
+    const env = getEnvelope(r.envelopeId);
+    if (!env) return null;
+    return { env, r, bundles: envelopeBundles(env.id) };
+  }
+
+  function envelopeSignerView(env: DealEnvelope, r: DealEnvelopeRecipient, bundles: Bundle[]) {
+    const deal = getDeal(env.dealId)!;
+    const documents = bundles
+      .map((b) => ({ b, s: signerFor(b, r.email) }))
+      .filter((x): x is { b: Bundle; s: DealSigner } => !!x.s)
+      .map(({ b, s }) => signerPageView(b, s));
+    return {
+      envelope: { id: env.id, title: env.title, message: env.message, status: env.status, completedAt: env.completedAt },
+      deal: { title: deal.title, address: deal.address },
+      agent: { name: AGENT.name, brokerage: AGENT.brokerage, phone: AGENT.phone, email: AGENT.email },
+      recipient: { name: r.name, email: r.email, status: r.status, consentAt: r.consentAt },
+      documents,
+    };
+  }
+
+  /** The envelope document a request names, if this person signs it. */
+  function envelopeDoc(hit: NonNullable<ReturnType<typeof byEnvelopeToken>>, docId: number) {
+    const b = hit.bundles.find((x) => x.document.id === docId);
+    const s = b && signerFor(b, hit.r.email);
+    return b && s ? { b, s } : null;
+  }
+
+  app.get("/api/sign/e/:token", signLimiter, (req, res) => {
+    const hit = byEnvelopeToken(String(req.params.token));
+    if (!hit) return bad(res, 404, "This signing link is not valid.");
+    // First open is evidence on each document, as with a single document.
+    for (const b of hit.bundles) {
+      const s = signerFor(b, hit.r.email);
+      if (s && b.document.status === "sent" && (s.status === "sent" || s.status === "pending")) {
+        db.update(dealSigners).set({ status: "viewed" }).where(eq(dealSigners.id, s.id)).run();
+        addEventFromReq(b.document.id, "viewed", { signerId: s.id, req, detail: "via envelope" });
+      }
+    }
+    if (hit.r.status === "pending" || hit.r.status === "sent") updateRecipient(hit.r.id, { status: "viewed" });
+    const fresh = byEnvelopeToken(String(req.params.token))!;
+    res.setHeader("Cache-Control", "no-store");
+    res.json(envelopeSignerView(fresh.env, fresh.r, fresh.bundles));
+  });
+
+  app.get("/api/sign/e/:token/doc/:docId/file", signLimiter, (req, res) => {
+    const hit = byEnvelopeToken(String(req.params.token));
+    const d = hit && envelopeDoc(hit, Number(req.params.docId));
+    if (!d) return bad(res, 404, "This signing link is not valid.");
+    const which = req.query.which === "signed" ? "signed" : "original";
+    if (which === "signed" && d.b.document.status === "completed" && req.query.download === "1") {
+      addEventFromReq(d.b.document.id, "downloaded", { signerId: d.s.id, req });
+    }
+    sendPdf(res, d.b, which, req.query.download === "1");
+  });
+
+  app.get("/api/sign/e/:token/doc/:docId/signature/:signerId", signLimiter, (req, res) => {
+    const hit = byEnvelopeToken(String(req.params.token));
+    const d = hit && envelopeDoc(hit, Number(req.params.docId));
+    if (!d) return bad(res, 404, "This signing link is not valid.");
+    sendSignatureImage(res, d.b, Number(req.params.signerId), req.query.kind === "initials" ? "initials" : "signature");
+  });
+
+  app.post("/api/sign/e/:token/consent", signWriteLimiter, (req, res) => {
+    const hit = byEnvelopeToken(String(req.params.token));
+    if (!hit) return bad(res, 404, "This signing link is not valid.");
+    if (hit.env.status !== "sent") return bad(res, 409, "These documents are no longer open for signing.");
+    const at = nowIso();
+    // One agreement, recorded on every document it covers.
+    for (const b of hit.bundles) {
+      const s = signerFor(b, hit.r.email);
+      if (!s || b.document.status !== "sent" || s.consentAt) continue;
+      db.update(dealSigners).set({ consentAt: at, ip: clientIp(req), userAgent: userAgent(req) }).where(eq(dealSigners.id, s.id)).run();
+      addEventFromReq(b.document.id, "consented", { signerId: s.id, req, detail: "Agreed to use electronic records and signatures (envelope)" });
+    }
+    if (!hit.r.consentAt) updateRecipient(hit.r.id, { consentAt: at });
+    const fresh = byEnvelopeToken(String(req.params.token))!;
+    res.json(envelopeSignerView(fresh.env, fresh.r, fresh.bundles));
+  });
+
+  const envelopeCompleteSchema = completeSchema.omit({ values: true }).extend({
+    documents: z.record(z.string(), z.record(z.string(), z.string().max(2000))).default({}),
+  });
+
+  app.post("/api/sign/e/:token/complete", signWriteLimiter, async (req, res) => {
+    const hit = byEnvelopeToken(String(req.params.token));
+    if (!hit) return bad(res, 404, "This signing link is not valid.");
+    if (hit.env.status !== "sent") return bad(res, 409, "These documents are no longer open for signing.");
+    const parsed = envelopeCompleteSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return bad(res, 400, firstIssue(parsed.error));
+    const { documents, signature, initials } = parsed.data;
+    const sigBytes = decodePng(signature.png);
+    if (!sigBytes) return bad(res, 400, "Signature image is not a valid PNG.");
+    const iniBytes = initials ? decodePng(initials.png) : null;
+    if (initials && !iniBytes) return bad(res, 400, "Initials image is not a valid PNG.");
+
+    // Everything this person can sign right now, all at once. Check every
+    // document before recording any, so a problem on the third doesn't leave
+    // the first two signed and the rest not.
+    const todo = progressFor(hit.r, hit.bundles).canSignNow;
+    if (!todo.length) return bad(res, 409, "There's nothing for you to sign right now.");
+    const plan: Array<{ b: Bundle; s: DealSigner; values: Record<string, string> }> = [];
+    for (const docId of todo) {
+      const d = envelopeDoc(hit, docId)!;
+      const blocked = cannotSign(d.b, d.s);
+      if (blocked) return bad(res, blocked.status, blocked.message);
+      const values = documents[String(docId)] ?? {};
+      const invalid = invalidSubmission(d.b, d.s, values, !!initials);
+      if (invalid) return bad(res, 400, invalid);
+      plan.push({ ...d, values });
+    }
+    const nextUp: DealSigner[] = [];
+    for (const { b, s, values } of plan) recordSignature(b, s, { values, kind: signature.kind, sigBytes, iniBytes }, req);
+    for (const { b, s } of plan) nextUp.push(...(await afterSigned(b.document.id, s.id)));
+    await envelopeAfterSigning(hit.env.id, hit.r.email, nextUp);
+    touchDeal(hit.env.dealId, {});
+    const fresh = byEnvelopeToken(String(req.params.token))!;
+    res.json(envelopeSignerView(fresh.env, fresh.r, fresh.bundles));
+  });
+
+  app.post("/api/sign/e/:token/decline", signWriteLimiter, async (req, res) => {
+    const hit = byEnvelopeToken(String(req.params.token));
+    if (!hit) return bad(res, 404, "This signing link is not valid.");
+    if (hit.env.status !== "sent") return bad(res, 409, "These documents are no longer open for signing.");
+    const reason = String(req.body?.reason ?? "").trim().slice(0, 1000) || null;
+    await declineEnvelope(hit.env.id, hit.r.email, reason, req);
+    const fresh = byEnvelopeToken(String(req.params.token))!;
+    res.json(envelopeSignerView(fresh.env, fresh.r, fresh.bundles));
   });
 
   /** Admin retry when the final PDF could not be produced (e.g. a disk hiccup). */

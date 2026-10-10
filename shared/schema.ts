@@ -1172,6 +1172,49 @@ export const deals = sqliteTable("deals", {
 export type Deal = typeof deals.$inferSelect;
 export type InsertDeal = typeof deals.$inferInsert;
 
+// An envelope: several of a deal's documents sent for signature together.
+// Each person gets one email and one signing session for all of them, and
+// one email with every signed copy at the end. Each document still keeps its
+// own signers, fields, signing order, signed PDF and audit certificate, so
+// every document stands on its own as a signed record.
+export const dealEnvelopes = sqliteTable("deal_envelopes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  dealId: integer("deal_id").notNull(),
+  title: text("title").notNull(),
+  message: text("message"),
+  // 'sent' | 'completed' | 'declined' | 'voided'
+  status: text("status").notNull().default("sent"),
+  sentAt: text("sent_at"),
+  completedAt: text("completed_at"),
+  voidedAt: text("voided_at"),
+  voidReason: text("void_reason"),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+  updatedAt: text("updated_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+});
+export type DealEnvelope = typeof dealEnvelopes.$inferSelect;
+
+// One row per person in an envelope, matched to their signer row on each
+// document by email. Their token opens the whole envelope.
+export const dealEnvelopeRecipients = sqliteTable("deal_envelope_recipients", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  envelopeId: integer("envelope_id").notNull(),
+  name: text("name").notNull(),
+  email: text("email").notNull(),
+  token: text("token").notNull().unique(),
+  // 'pending' | 'sent' | 'viewed' | 'signed' | 'declined'
+  status: text("status").notNull().default("pending"),
+  consentAt: text("consent_at"),
+  lastEmailAt: text("last_email_at"),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+});
+export type DealEnvelopeRecipient = typeof dealEnvelopeRecipients.$inferSelect;
+
 export const dealDocuments = sqliteTable("deal_documents", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   dealId: integer("deal_id").notNull(),
@@ -1198,6 +1241,9 @@ export const dealDocuments = sqliteTable("deal_documents", {
   // 'parallel' — everyone is emailed at once. 'sequential' — one at a time,
   // in signer order, each notified when the previous one signs.
   signingOrder: text("signing_order").notNull().default("parallel"),
+  // Set when the document was sent as part of an envelope (deal_envelopes):
+  // its signers are emailed, sign, and receive their copy through it.
+  envelopeId: integer("envelope_id"),
   message: text("message"),
   sentAt: text("sent_at"),
   completedAt: text("completed_at"),

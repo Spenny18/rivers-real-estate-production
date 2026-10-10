@@ -17,7 +17,8 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, CheckCircle2, Clock, Copy, ExternalLink, FilePlus2, FileStack, FileText, Inbox, Loader2, Mail, Plus, RefreshCw, Save, Search, Trash2, Upload, X, XCircle } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Clock, Copy, ExternalLink, FilePlus2, FileStack, FileText, Inbox, Loader2, Mail, Plus, RefreshCw, Save, Search, Send, Trash2, Upload, X, XCircle } from "lucide-react";
+import { EnvelopeCard, SendTogetherDialog } from "@/components/envelopes";
 import { apiErrorMessage, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -76,6 +77,7 @@ export default function AdminDealPage() {
 
   const [edit, setEdit] = useState<Partial<DealView> | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [sendingTogether, setSendingTogether] = useState(false);
   const [pickingForm, setPickingForm] = useState(false);
   const { data: forms = [] } = useQuery<FormTemplateSummary[]>({ queryKey: ["/api/admin/form-templates"] });
   const [file, setFile] = useState<File | null>(null);
@@ -163,12 +165,26 @@ export default function AdminDealPage() {
           <Button size="sm" onClick={() => setPickingForm(true)} data-testid="button-new-from-form">
             <FilePlus2 className="h-4 w-4 mr-1" /> New from form
           </Button>
+          {deal.documents.some((d) => d.status === "draft" && !d.envelopeId) ? (
+            <Button size="sm" variant="outline" onClick={() => setSendingTogether(true)} data-testid="button-send-together">
+              <Send className="h-4 w-4 mr-1" /> Send together
+            </Button>
+          ) : null}
         </div>
       }
     >
+      <SendTogetherDialog deal={deal} open={sendingTogether} onOpenChange={setSendingTogether} />
       <div className="p-6 grid gap-6 lg:grid-cols-[1fr_340px] max-w-6xl">
         {/* Documents */}
         <div className="space-y-3">
+          {deal.envelopes?.length ? (
+            <>
+              <div className="font-display text-[10px] tracking-[0.2em] text-muted-foreground">ENVELOPES</div>
+              {deal.envelopes.map((env) => (
+                <EnvelopeCard key={env.id} dealId={deal.id} env={env} />
+              ))}
+            </>
+          ) : null}
           <div className="font-display text-[10px] tracking-[0.2em] text-muted-foreground">DOCUMENTS</div>
           {deal.documents.length === 0 ? (
             <Card>
@@ -204,6 +220,7 @@ export default function AdminDealPage() {
                       {d.signerCount ? ` · ${d.signedCount}/${d.signerCount} signed` : " · no signers yet"}
                       {d.status === "sent" && d.sentAt ? ` · sent ${fmtDateTime(d.sentAt)}` : ""}
                       {d.status === "completed" && d.completedAt ? ` · completed ${fmtDateTime(d.completedAt)}` : ""}
+                      {d.envelopeId ? ` · in envelope "${deal.envelopes?.find((e) => e.id === d.envelopeId)?.title ?? ""}"` : ""}
                     </div>
                   </div>
                   <Badge variant="outline" className={`text-[10px] ${DOC_STATUS_STYLES[d.status]}`}>

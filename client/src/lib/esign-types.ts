@@ -58,6 +58,8 @@ export interface DocumentSummary {
   id: number;
   dealId: number;
   title: string;
+  /** Set when the document was sent in an envelope. */
+  envelopeId?: number | null;
   originalFilename: string | null;
   source: "upload" | "email" | "template";
   formTemplateId: number | null;
@@ -91,6 +93,7 @@ export interface DocumentDetail extends DocumentSummary {
 }
 
 export interface DealView {
+  envelopes?: EnvelopeView[];
   id: number;
   title: string;
   address: string | null;
@@ -369,4 +372,40 @@ export interface FormPrefill {
   carriedFrom: { id: number; title: string; createdAt: string } | null;
   listing: { id: string; mlsNumber: string; address: string } | null;
   slots: { buyer: number; seller: number };
+}
+
+// ---- Envelopes (several documents sent together) -------------------------------
+
+export interface EnvelopeView {
+  id: number;
+  title: string;
+  message: string | null;
+  status: "sent" | "completed" | "declined" | "voided";
+  sentAt: string | null;
+  completedAt: string | null;
+  voidedAt: string | null;
+  voidReason: string | null;
+  documents: Array<{ id: number; title: string; status: DocumentSummary["status"]; signingOrder: string }>;
+  recipients: Array<{
+    id: number;
+    name: string;
+    email: string;
+    status: "pending" | "sent" | "viewed" | "signed" | "declined";
+    lastEmailAt: string | null;
+    total: number;
+    signed: number;
+    canSignNow: number;
+    waiting: number;
+    signUrl: string;
+  }>;
+  warning?: string;
+}
+
+/** What /api/sign/e/:token returns: one person's view of their envelope. */
+export interface EnvelopeSignerPage {
+  envelope: { id: number; title: string; message: string | null; status: EnvelopeView["status"]; completedAt: string | null };
+  deal: { title: string; address: string | null };
+  agent: SignerPage["agent"];
+  recipient: { name: string; email: string; status: string; consentAt: string | null };
+  documents: SignerPage[];
 }

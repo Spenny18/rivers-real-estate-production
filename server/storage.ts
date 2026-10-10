@@ -1038,6 +1038,45 @@ try {
   console.error("[migration] deals phase two:", e);
 }
 
+// Envelopes: several documents sent for signature together.
+try {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS deal_envelopes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      deal_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      message TEXT,
+      status TEXT NOT NULL DEFAULT 'sent',
+      sent_at TEXT,
+      completed_at TEXT,
+      voided_at TEXT,
+      void_reason TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_deal_envelopes_deal ON deal_envelopes(deal_id);
+    CREATE TABLE IF NOT EXISTS deal_envelope_recipients (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      envelope_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL,
+      token TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'pending',
+      consent_at TEXT,
+      last_email_at TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_deal_envelope_recipients_env ON deal_envelope_recipients(envelope_id);
+  `);
+  const docCols = new Set((sqlite.prepare("PRAGMA table_info(deal_documents)").all() as Array<{ name: string }>).map((c) => c.name));
+  if (docCols.size > 0 && !docCols.has("envelope_id")) {
+    sqlite.exec("ALTER TABLE deal_documents ADD COLUMN envelope_id INTEGER");
+    console.log("[migration] added envelope_id to deal_documents");
+  }
+} catch (e) {
+  console.error("[migration] envelopes:", e);
+}
+
 // Migration: add account_user_id to saved_searches so portal users own
 // their own rows separately from admin-created searches.
 try {
