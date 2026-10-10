@@ -241,6 +241,12 @@ function streetOf(l: MlsListing): string {
   return num || l.fullAddress.split(",")[0].trim();
 }
 
+/** An MLS inclusions/exclusions entry, or null when it's a placeholder like "N/A". */
+export function listedGoods(v: string | null | undefined): string | null {
+  const s = (v ?? "").trim();
+  return !s || /^(n\/?a|none|nil|no|-+|\.+)$/i.test(s) ? null : s;
+}
+
 const PROVINCE_NAMES: Record<string, string> = { AB: "Alberta", BC: "British Columbia", SK: "Saskatchewan", MB: "Manitoba", ON: "Ontario" };
 
 /** The newest document on the deal that was made from a form, with its values. */
@@ -301,6 +307,12 @@ export function prefillForDeal(deal: Deal, template: FormTemplate): Prefill {
     set("listing.brokerage", listing.listOffice, "listing");
     set("listing.agent", listing.listAgentName, "listing");
     set("listing.agentPhone", listing.listAgentPhone, "listing");
+    // What the listing says goes with the house, as a starting point. Typed
+    // on an earlier form for this deal wins: it's what was actually agreed.
+    // AREA contract: unattached goods are excluded unless listed as included,
+    // attached goods included unless listed as excluded.
+    if (!values["offer.unattachedGoods"]) set("offer.unattachedGoods", listedGoods(listing.inclusions), "listing");
+    if (!values["offer.attachedGoods"]) set("offer.attachedGoods", listedGoods(listing.exclusions), "listing");
   } else if (deal.address) {
     // "123 Elbow Dr SW, Calgary, AB T2S 2A1" → street / city.
     const parts = deal.address.split(",").map((s) => s.trim()).filter(Boolean);
