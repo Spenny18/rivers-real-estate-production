@@ -524,6 +524,13 @@ function ClientCard({ deal, onSaved }: { deal: DealView; onSaved: (d: DealView) 
   const [q, setQ] = useState("");
   const [leadQ, setLeadQ] = useState("");
   const [pickingLead, setPickingLead] = useState(false);
+  const [coQ, setCoQ] = useState("");
+  const { data: coMatches = [] } = useQuery<CrmContactLite[]>({
+    queryKey: [`/api/admin/crm/contacts?q=${encodeURIComponent(coQ.trim())}&limit=8`],
+    enabled: coQ.trim().length >= 2,
+  });
+  const party = deal.kind === "listing" ? "seller" : "buyer";
+  const coIds = deal.coContacts.map((c) => c.fubId);
   const { data: matches = [] } = useQuery<CrmContactLite[]>({
     queryKey: [`/api/admin/crm/contacts?q=${encodeURIComponent(q.trim())}&limit=8`],
     enabled: q.trim().length >= 2,
@@ -535,11 +542,12 @@ function ClientCard({ deal, onSaved }: { deal: DealView; onSaved: (d: DealView) 
   const { data: leads = [] } = useQuery<Lead[]>({ queryKey: ["/api/leads"], enabled: pickingLead });
 
   const link = useMutation({
-    mutationFn: async (patch: { crmContactFubId?: string | null; crmDealFubId?: string | null; leadId?: number | null }) =>
+    mutationFn: async (patch: { crmContactFubId?: string | null; crmDealFubId?: string | null; leadId?: number | null; coContactFubIds?: string[] }) =>
       (await apiRequest("PATCH", `/api/admin/deals/${deal.id}`, patch)).json() as Promise<DealView>,
     onSuccess: (d) => {
       onSaved(d);
       setQ("");
+      setCoQ("");
       setPickingLead(false);
     },
     onError: (e) => toast({ title: "Didn't save", description: apiErrorMessage(e), variant: "destructive" }),
@@ -627,6 +635,59 @@ function ClientCard({ deal, onSaved }: { deal: DealView; onSaved: (d: DealView) 
                 </div>
               ) : null}
               <div className="text-[11px] text-muted-foreground">Completed and declined signings post a note on this person in FUB.</div>
+            </div>
+          ) : null}
+
+          {/* Co-buyers / co-sellers */}
+          {deal.crmContact ? (
+            <div className="space-y-1.5">
+              <Label className="text-[11px]">Other {party}s on this deal</Label>
+              {deal.coContacts.map((c) => (
+                <div key={c.fubId} className="flex items-center gap-2 text-[12px]">
+                  <span className="flex-1 min-w-0 truncate">
+                    {c.name || c.email} <span className="text-muted-foreground">{c.email}</span>
+                  </span>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7"
+                    title="Remove"
+                    onClick={() => link.mutate({ coContactFubIds: coIds.filter((x) => x !== c.fubId) })}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ))}
+              {coIds.length < 3 ? (
+                <div className="relative">
+                  <Search className="h-3.5 w-3.5 absolute left-2 top-2.5 text-muted-foreground" />
+                  <Input value={coQ} onChange={(e) => setCoQ(e.target.value)} placeholder={`Add a co-${party}: name, email or phone`} className="h-8 pl-7 text-[12px]" data-testid="input-co-contact" />
+                </div>
+              ) : null}
+              {coQ.trim().length >= 2 ? (
+                <div className="border border-border rounded-sm divide-y divide-border">
+                  {coMatches.filter((c) => c.fubId !== deal.crmContactFubId && !coIds.includes(c.fubId)).length === 0 ? (
+                    <div className="text-[11px] text-muted-foreground p-2">No matches in the CRM mirror.</div>
+                  ) : null}
+                  {coMatches
+                    .filter((c) => c.fubId !== deal.crmContactFubId && !coIds.includes(c.fubId))
+                    .map((c) => (
+                      <button key={c.fubId} className="w-full text-left p-2 hover:bg-secondary text-[12px]" onClick={() => link.mutate({ coContactFubIds: [...coIds, c.fubId] })}>
+                        <div className="font-medium">{c.name || c.email}</div>
+                        <div className="text-[11px] text-muted-foreground">
+                          {c.email}
+                          {c.phone ? ` · ${c.phone}` : ""}
+                        </div>
+                      </button>
+                    ))}
+                </div>
+              ) : null}
+              {deal.clients.length ? (
+                <div className="text-[11px] text-muted-foreground">
+                  Forms fill {deal.clients.map((c, i) => `${party} ${i + 1}: ${c.name || c.email}`).join(" · ")}
+                  {deal.clients.length > 1 + deal.coContacts.length ? " (includes people on the Follow Up Boss deal)" : ""}.
+                </div>
+              ) : null}
             </div>
           ) : null}
 

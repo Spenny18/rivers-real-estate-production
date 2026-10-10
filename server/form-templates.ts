@@ -22,6 +22,7 @@ import {
   dealFields,
   formTemplates,
   mlsListings,
+  crmDeals,
   formTemplateFieldSchema,
   type Deal,
   type DealDocument,
@@ -30,6 +31,7 @@ import {
   type FormFillField,
   type FormSignField,
   type MlsListing,
+  type CrmContact,
 } from "@shared/schema";
 import { z } from "zod";
 import {
@@ -236,6 +238,43 @@ export function contactAddress(contact: { raw: string } | undefined): string | n
   return line || null;
 }
 
+/** The co-buyers / co-sellers saved on the deal, as fub ids in party order. */
+export function coContactIds(deal: Pick<Deal, "coContactFubIds">): string[] {
+  try {
+    const ids = JSON.parse(deal.coContactFubIds || "[]");
+    return Array.isArray(ids) ? ids.map(String).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Everyone on the client side of the deal, in party order: the main contact,
+ * then the co-buyers/co-sellers added on the deal page, then anyone else on
+ * the linked Follow Up Boss deal. One entry per person (by id and by email).
+ */
+export function dealClients(deal: Deal): CrmContact[] {
+  const ids = [deal.crmContactFubId, ...coContactIds(deal)].filter((x): x is string => !!x);
+  if (deal.crmDealFubId) {
+    const row = db.select().from(crmDeals).where(eq(crmDeals.fubId, deal.crmDealFubId)).get();
+    try {
+      const people: any[] = JSON.parse(row?.raw || "{}")?.people ?? [];
+      for (const p of people) if (p?.id != null) ids.push(String(p.id));
+    } catch {}
+  }
+  const out: CrmContact[] = [];
+  const seenEmail = new Set<string>();
+  for (const id of Array.from(new Set(ids))) {
+    const c = storage.getCrmContact(id);
+    if (!c) continue;
+    const email = (c.email ?? "").trim().toLowerCase();
+    if (email && seenEmail.has(email)) continue;
+    if (email) seenEmail.add(email);
+    out.push(c);
+  }
+  return out;
+}
+
 function streetOf(l: MlsListing): string {
   const num = [l.unit ? `${l.unit} -` : "", l.streetNumber ?? "", l.streetName ?? ""].filter(Boolean).join(" ").trim();
   return num || l.fullAddress.split(",")[0].trim();
@@ -336,20 +375,27 @@ export function prefillForDeal(deal: Deal, template: FormTemplate): Prefill {
   set("document.date", today, "auto");
   set("document.year", today.slice(2, 4), "auto");
 
-  // 3. The client, when nobody was carried forward into the first slot.
+  // 3. The clients on the deal fill the empty buyer (or seller) slots in
+  //    order, skipping anyone already on the form from the previous one.
   const clientRole: PartyRole = deal.kind === "listing" ? "seller" : "buyer";
+  const clients = dealClients(deal);
   const contact = deal.crmContactFubId ? storage.getCrmContact(deal.crmContactFubId) : undefined;
-  if (slots[clientRole] > 0 && !values[partyKey(clientRole, 1, "name")] && !values[partyKey(clientRole, 1, "email")]) {
-    const lead = deal.leadId ? storage.getLead(deal.leadId) : undefined;
-    const name = contact?.name || lead?.name;
-    const email = contact?.email || lead?.email;
-    const phone = contact?.phone || lead?.phone;
-    if (name || email) {
-      set(partyKey(clientRole, 1, "name"), name, "contact");
-      set(partyKey(clientRole, 1, "email"), email, "contact");
-      set(partyKey(clientRole, 1, "phone"), phone, "contact");
-      set(partyKey(clientRole, 1, "address"), contactAddress(contact), "contact");
-    }
+  const emailIn = (i: number) => (values[partyKey(clientRole, i, "email")] ?? "").trim().toLowerCase();
+  const onForm = new Set(Array.from({ length: slots[clientRole] }, (_, i) => emailIn(i + 1)).filter(Boolean));
+  const queue: Array<{ name?: string | null; email?: string | null; phone?: string | null; address?: string | null }> = clients
+    .filter((c) => !c.email || !onForm.has(c.email.trim().toLowerCase()))
+    .map((c) => ({ name: c.name, email: c.email, phone: c.phone, address: contactAddress(c) }));
+  if (!clients.length && deal.leadId) {
+    const lead = storage.getLead(deal.leadId);
+    if (lead && !onForm.has((lead.email ?? "").trim().toLowerCase())) queue.push({ name: lead.name, email: lead.email, phone: lead.phone });
+  }
+  for (let i = 1; i <= slots[clientRole] && queue.length; i++) {
+    if (values[partyKey(clientRole, i, "name")] || values[partyKey(clientRole, i, "email")]) continue;
+    const p = queue.shift()!;
+    set(partyKey(clientRole, i, "name"), p.name, "contact");
+    set(partyKey(clientRole, i, "email"), p.email, "contact");
+    set(partyKey(clientRole, i, "phone"), p.phone, "contact");
+    set(partyKey(clientRole, i, "address"), p.address, "contact");
   }
   // The mailing address from Follow Up Boss, whenever the first slot is that
   // person and the address is still blank (a previous form may predate it).

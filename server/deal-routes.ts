@@ -87,7 +87,7 @@ import { backupStatus, queueDocumentsBackup, runBackup } from "./backup";
 import { AGENT } from "./brand";
 import { inboxStatus, pollDealInbox, recentInboundForDeal } from "./deal-inbox";
 import { FUB_PERSON_URL, noteOnFub } from "./deal-fub";
-import { contactAddress } from "./form-templates";
+import { coContactIds, contactAddress, dealClients } from "./form-templates";
 import { requireAccount, type AccountReq } from "./account";
 import { AGENT_SIGNER_ID, dealFieldTemplates, templateFieldSchema, type TemplateField } from "@shared/schema";
 import { formatStamp } from "@shared/esign-format";
@@ -249,6 +249,12 @@ function dealView(d: Deal) {
       : null,
     crmDealFubId: d.crmDealFubId,
     crmDeal: crmDeal ? { fubId: crmDeal.fubId, name: crmDeal.name, stageName: crmDeal.stageName, value: crmDeal.value, status: crmDeal.status } : null,
+    coContacts: coContactIds(d)
+      .map((id) => storage.getCrmContact(id))
+      .filter((c): c is NonNullable<typeof c> => !!c)
+      .map((c) => ({ fubId: c.fubId, name: c.name, email: c.email, phone: c.phone, address: contactAddress(c), stage: c.stage, url: FUB_PERSON_URL(c.fubId) })),
+    /** Everyone forms fill as buyers (or sellers), in order — includes people on the linked FUB deal. */
+    clients: dealClients(d).map((c) => ({ fubId: c.fubId, name: c.name, email: c.email })),
     inboxAddress: dealInboxAddress(d),
     inbound: recentInboundForDeal(d.id).map((m) => ({
       id: m.id,
@@ -532,6 +538,12 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
       if ((v.crmContactFubId || null) !== deal.crmContactFubId) patch.crmDealFubId = null;
     }
     if (v.crmDealFubId !== undefined) patch.crmDealFubId = v.crmDealFubId || null;
+    if (v.coContactFubIds !== undefined) {
+      const primary = patch.crmContactFubId !== undefined ? patch.crmContactFubId : deal.crmContactFubId;
+      const ids = Array.from(new Set(v.coContactFubIds)).filter((id) => id !== primary);
+      if (ids.some((id) => !storage.getCrmContact(id))) return bad(res, 400, "That contact isn't in the CRM.");
+      patch.coContactFubIds = ids.length ? JSON.stringify(ids) : null;
+    }
     res.json(dealView(touchDeal(deal.id, patch)));
   });
 

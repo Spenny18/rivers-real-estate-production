@@ -852,6 +852,7 @@ sqlite.exec(`
     notes TEXT,
     crm_contact_fub_id TEXT,
     crm_deal_fub_id TEXT,
+    co_contact_fub_ids TEXT,
     inbox_token TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -1008,6 +1009,7 @@ try {
   if (dealCols.size > 0) {
     if (!dealCols.has("crm_contact_fub_id")) sqlite.exec("ALTER TABLE deals ADD COLUMN crm_contact_fub_id TEXT");
     if (!dealCols.has("crm_deal_fub_id")) sqlite.exec("ALTER TABLE deals ADD COLUMN crm_deal_fub_id TEXT");
+    if (!dealCols.has("co_contact_fub_ids")) sqlite.exec("ALTER TABLE deals ADD COLUMN co_contact_fub_ids TEXT");
     if (!dealCols.has("inbox_token")) {
       sqlite.exec("ALTER TABLE deals ADD COLUMN inbox_token TEXT");
       console.log("[migration] added crm/inbox columns to deals");
