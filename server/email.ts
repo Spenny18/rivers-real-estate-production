@@ -807,6 +807,81 @@ export function buildSignedCopyHtml(d: SignEmailData & { sha256: string; attache
   });
 }
 
+// ---- Envelope emails (several documents, one email) ------------------------------
+
+export interface EnvelopeEmailData {
+  recipientName: string;
+  envelopeTitle: string;
+  documents: Array<{ title: string; sha256?: string | null }>;
+  dealTitle: string;
+  address?: string | null;
+  message?: string | null;
+  /** The recipient's private link to the whole envelope. */
+  signUrl: string;
+  origin: string;
+}
+
+function documentList(docs: Array<{ title: string; sha256?: string | null }>, accent: string, withHashes = false): string {
+  return `
+    <tr><td style="padding:20px 36px 0;">
+      <div style="border:1px solid ${BRAND.border};border-left:4px solid ${accent};padding:14px 22px;background:#fafafa;">
+        <div style="color:${BRAND.mute};font-size:12px;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:6px;">${docs.length} document${docs.length === 1 ? "" : "s"}</div>
+        ${docs
+          .map(
+            (d, i) =>
+              `<div style="font-size:14px;color:${BRAND.black};line-height:1.5;padding:4px 0;${i ? `border-top:1px solid ${BRAND.border};` : ""}">${i + 1}. ${escapeAttr(d.title)}${
+                withHashes && d.sha256
+                  ? `<div style="font-size:10.5px;color:${BRAND.mute};font-family:Menlo,Consolas,monospace;word-break:break-all;">SHA-256 ${escapeAttr(d.sha256)}</div>`
+                  : ""
+              }</div>`,
+          )
+          .join("")}
+      </div>
+    </td></tr>`;
+}
+
+/** "Please sign these": one email for every document in the envelope. */
+export function buildEnvelopeSignRequestHtml(d: EnvelopeEmailData & { reminder?: boolean }): string {
+  const firstName = d.recipientName.trim().split(/\s+/)[0] || "there";
+  const n = d.documents.length;
+  return bookingShell({
+    eyebrow: d.reminder ? "REMINDER · SIGNATURES REQUESTED" : "SIGNATURES REQUESTED",
+    heading: `${escapeAttr(firstName)}, ${n === 1 ? "a document is" : `${n} documents are`} ready for your signature.`,
+    intro: `Spencer Rivers has sent you <strong style="color:${BRAND.black};">${escapeAttr(d.envelopeTitle)}</strong> to review and sign electronically${
+      n > 1 ? ", all in one sitting: you sign once and it's applied to each document" : ""
+    }. The link below is yours alone — please don't forward it.`,
+    accent: BRAND.gold,
+    origin: d.origin,
+    body: `
+      ${signDetailRows({ documentTitle: d.envelopeTitle, dealTitle: d.dealTitle, address: d.address, message: d.message }, BRAND.gold)}
+      ${documentList(d.documents, BRAND.gold)}
+      ${signButton(d.signUrl, n > 1 ? "Review & sign all" : "Review & sign")}
+      <tr><td style="padding:18px 36px 0;">
+        <p style="font-size:12px;color:${BRAND.mute};line-height:1.6;margin:0;">You'll be asked to confirm that you agree to sign electronically before anything is recorded. Questions? Reply to this email or call (403) 966-9237.</p>
+      </td></tr>`,
+  });
+}
+
+/** "Everything is signed": every signed copy, in one email. */
+export function buildEnvelopeSignedCopyHtml(d: EnvelopeEmailData & { attached: boolean }): string {
+  const firstName = d.recipientName.trim().split(/\s+/)[0] || "there";
+  return bookingShell({
+    eyebrow: "DOCUMENTS COMPLETED",
+    heading: `${escapeAttr(firstName)}, all parties have signed.`,
+    intro: `Everything in <strong style="color:${BRAND.black};">${escapeAttr(d.envelopeTitle)}</strong> is complete. ${
+      d.attached ? "The signed copies are attached, and you can" : "You can"
+    } download them any time from your private link.`,
+    accent: BRAND.forest,
+    origin: d.origin,
+    body: `
+      ${documentList(d.documents, BRAND.forest, true)}
+      ${signButton(d.signUrl, "Download signed copies")}
+      <tr><td style="padding:18px 36px 0;">
+        <p style="font-size:11px;color:${BRAND.mute};line-height:1.6;margin:0;">A copy whose SHA-256 hash matches the value above is unaltered. Each document carries its own signing certificate.</p>
+      </td></tr>`,
+  });
+}
+
 /** To the agent: a signer signed, declined, or the document completed. */
 export function buildSignAgentNoticeHtml(d: {
   kind: "signed" | "declined" | "completed";

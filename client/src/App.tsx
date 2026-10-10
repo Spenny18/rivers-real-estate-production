@@ -94,6 +94,7 @@ const AdminFormTemplatePage = lazy(() => import("@/pages/admin-form-template"));
 
 // E-signature — the signer's private page (/sign/<token>)
 const SignPage = lazy(() => import("@/pages/sign"));
+const SignEnvelopePage = lazy(() => import("@/pages/sign-envelope"));
 
 // Consumer portal (/account/*) pages
 const AccountLoginPage = lazy(() => import("@/pages/account-login"));
@@ -170,6 +171,7 @@ function AppRouter() {
       <Route path="/p/:slug" component={ListingPublicPage} />
 
       {/* E-SIGNATURE — one signer's private page; the token is the credential */}
+      <Route path="/sign/e/:token" component={SignEnvelopePage} />
       <Route path="/sign/:token" component={SignPage} />
 
       {/* CONSUMER PORTAL — /account/* */}
