@@ -73,6 +73,8 @@ interface LocalField {
   required: boolean;
   label: string | null;
   format: string | null;
+  /** Agent-filled boxes (signerId ME) only: what Spencer typed or ticked. */
+  value: string | null;
 }
 
 interface LocalSigner {
@@ -85,6 +87,10 @@ interface LocalSigner {
 
 const PAGE_WIDTH = 720;
 const FIELD_TYPES: FieldType[] = ["signature", "initials", "date", "time", "text", "checkbox"];
+/** signerId for boxes Spencer fills in himself before sending (AGENT_SIGNER_ID on the server). */
+const ME = 0;
+const ME_TYPES: FieldType[] = ["text", "checkbox"];
+const ME_COLOUR = "#7c3aed";
 
 function clamp(n: number, lo: number, hi: number) {
   return Math.min(hi, Math.max(lo, n));
@@ -95,7 +101,7 @@ function uid() {
 }
 
 function fromServerFields(fields: FieldView[]): LocalField[] {
-  return fields.map((f) => ({ key: `f${f.id}`, id: f.id, signerId: f.signerId, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required, label: f.label, format: f.format }));
+  return fields.map((f) => ({ key: `f${f.id}`, id: f.id, signerId: f.signerId, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required, label: f.label, format: f.format, value: f.signerId === ME ? f.value : null }));
 }
 
 function fromServerSigners(signers: SignerView[]): LocalSigner[] {
@@ -185,7 +191,7 @@ export default function AdminDocumentPage() {
       setSigners(fromServerSigners(d.signers));
       // Fields of removed signers vanished server-side; refresh the layout too.
       if (!fieldsDirty) setFields(fromServerFields(d.fields));
-      else setFields((fs) => (fs ?? []).filter((f) => d.signers.some((s) => s.id === f.signerId)));
+      else setFields((fs) => (fs ?? []).filter((f) => f.signerId === ME || d.signers.some((s) => s.id === f.signerId)));
       toast({ title: "Signers saved" });
     },
     onError: fail("Signers didn't save"),
@@ -196,7 +202,7 @@ export default function AdminDocumentPage() {
       const res = await apiRequest(
         "PUT",
         `/api/admin/documents/${id}/fields`,
-        (fields ?? []).map((f) => ({ id: f.id, signerId: f.signerId, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required, label: f.label, format: f.format })),
+        (fields ?? []).map((f) => ({ id: f.id, signerId: f.signerId, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required, label: f.label, format: f.format, value: f.value })),
       );
       return (await res.json()) as DocumentDetail;
     },
@@ -343,9 +349,11 @@ export default function AdminDocumentPage() {
       y: clamp(at.y - h / 2, 0, 1 - h),
       w,
       h,
-      required: true,
+      required: arm.signerId !== ME,
       label: null,
       format: null,
+      // A checkbox you place for yourself is almost always one you mean to tick.
+      value: arm.signerId === ME && arm.type === "checkbox" ? "true" : null,
     };
     setFields((fs) => [...(fs ?? []), f]);
     setFieldsDirty(true);
@@ -399,6 +407,7 @@ export default function AdminDocumentPage() {
   const showSigned = doc.status === "completed" && !!doc.signedSha256;
   const pdfUrl = apiUrl(`/api/admin/documents/${doc.id}/file?which=${showSigned ? "signed" : "original"}&v=${doc.updatedAt}`);
   const pageSizesForView = showSigned ? [...doc.pageSizes, { w: 612, h: 792 }, { w: 612, h: 792 }] : doc.pageSizes;
+  const blankMine = fields.filter((f) => f.signerId === ME && f.type === "text" && !f.value?.trim());
   const missingSignature = signers.filter((s) => s.id && !fields.some((f) => f.signerId === s.id && f.type === "signature"));
   const unsavedSigners = signers.filter((s) => !s.id);
   const canSend = isDraft && signers.length > 0 && unsavedSigners.length === 0 && missingSignature.length === 0 && !signersDirty;
@@ -461,7 +470,8 @@ export default function AdminDocumentPage() {
         <div className="overflow-auto bg-secondary/40 p-8" style={{ cursor: arm && isDraft ? "crosshair" : undefined }}>
           {arm && isDraft ? (
             <div className="sticky top-0 z-10 mb-4 mx-auto w-fit bg-foreground text-background text-[12px] px-3 py-1.5 rounded-sm shadow flex items-center gap-2">
-              Click on a page to place a <strong>{FIELD_LABELS[arm.type]}</strong> box for {signers.find((s) => s.id === arm.signerId)?.name ?? "the signer"}.
+              Click on a page to place a <strong>{FIELD_LABELS[arm.type]}</strong> box{" "}
+              {arm.signerId === ME ? "that you fill in now" : `for ${signers.find((s) => s.id === arm.signerId)?.name ?? "the signer"}`}.
               <button className="underline underline-offset-2" onClick={() => setArm(null)}>
                 Done
               </button>
@@ -485,11 +495,11 @@ export default function AdminDocumentPage() {
                       <FieldBox
                         key={f.key}
                         field={f}
-                        colour={signerColour(signerIndex(f.signerId))}
-                        signerName={signers.find((s) => s.id === f.signerId)?.name ?? "?"}
+                        colour={f.signerId === ME ? ME_COLOUR : signerColour(signerIndex(f.signerId))}
+                        signerName={f.signerId === ME ? "Me" : signers.find((s) => s.id === f.signerId)?.name ?? "?"}
                         editable={!!isDraft}
                         selected={selected === f.key}
-                        filled={doc.fields.find((x) => x.id === f.id)?.value ?? null}
+                        filled={f.signerId === ME ? f.value : doc.fields.find((x) => x.id === f.id)?.value ?? null}
                         onSelect={() => setSelected(f.key)}
                         onChange={(patch) => updateField(f.key, patch)}
                         onRemove={() => removeField(f.key)}
@@ -653,7 +663,14 @@ export default function AdminDocumentPage() {
                 <>
                   <div className="space-y-1.5">
                     <Label className="text-[11px]">For</Label>
-                    <Select value={arm ? String(arm.signerId) : ""} onValueChange={(v) => setArm({ signerId: Number(v), type: arm?.type ?? "signature" })}>
+                    <Select
+                      value={arm ? String(arm.signerId) : ""}
+                      onValueChange={(v) => {
+                        const signerId = Number(v);
+                        const type = arm?.type ?? (signerId === ME ? "text" : "signature");
+                        setArm({ signerId, type: signerId === ME && !ME_TYPES.includes(type) ? "text" : type });
+                      }}
+                    >
                       <SelectTrigger className="h-8 text-[12px]">
                         <SelectValue placeholder="Choose a signer" />
                       </SelectTrigger>
@@ -663,6 +680,7 @@ export default function AdminDocumentPage() {
                             {s.name}
                           </SelectItem>
                         ))}
+                        <SelectItem value={String(ME)}>Me — I'll fill it in now</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -673,7 +691,7 @@ export default function AdminDocumentPage() {
                         size="sm"
                         variant={arm?.type === t ? "default" : "outline"}
                         className="h-8 text-[11px]"
-                        disabled={!arm && doc.signers.length === 0}
+                        disabled={(!arm && doc.signers.length === 0) || (arm?.signerId === ME && !ME_TYPES.includes(t))}
                         onClick={() => setArm({ signerId: arm?.signerId ?? doc.signers[0].id, type: t })}
                       >
                         {FIELD_LABELS[t]}
@@ -682,8 +700,14 @@ export default function AdminDocumentPage() {
                   </div>
                   <div className="text-[11px] text-muted-foreground leading-relaxed">
                     Pick a type, then click on the page where it goes. Drag boxes to move them, drag the corner to resize, Delete to remove. Date and time
-                    boxes fill themselves with the moment the person signs.
+                    boxes fill themselves with the moment the person signs. Choose <strong>Me</strong> to type text or tick a box yourself — it's printed
+                    on the document and the signers see it, but can't change it.
                   </div>
+                  {blankMine.length > 0 ? (
+                    <div className="text-[11px] text-amber-700">
+                      {blankMine.length} of your text box{blankMine.length === 1 ? " is" : "es are"} still empty — click {blankMine.length === 1 ? "it" : "one"} to type.
+                    </div>
+                  ) : null}
                   {missingSignature.length > 0 ? (
                     <div className="text-[11px] text-amber-700">Needs a signature box: {missingSignature.map((s) => s.name || "unnamed").join(", ")}</div>
                   ) : null}
@@ -846,6 +870,12 @@ export default function AdminDocumentPage() {
                 {fields.filter((f) => f.signerId === s.id).length} box(es)
               </li>
             ))}
+            {fields.some((f) => f.signerId === ME) ? (
+              <li>
+                <span className="font-medium">You</span> <span className="text-muted-foreground">filled in {fields.filter((f) => f.signerId === ME).length} box(es)</span>
+                {blankMine.length ? <span className="text-amber-700"> · {blankMine.length} left empty</span> : null}
+              </li>
+            ) : null}
           </ul>
           <DialogFooter>
             <Button variant="outline" onClick={() => setSending(false)}>
@@ -965,6 +995,7 @@ function SelectedFieldEditor({ field, onChange, onRemove }: { field: LocalField;
         <div className="flex items-center justify-between">
           <div className="text-[12px] font-medium">
             {FIELD_LABELS[field.type]} · page {field.page}
+            {field.signerId === ME ? " · Me" : ""}
           </div>
           <Button size="sm" variant="ghost" className="h-7 text-[11px] text-muted-foreground" onClick={onRemove}>
             <Trash2 className="h-3.5 w-3.5 mr-1" /> Remove
@@ -991,13 +1022,35 @@ function SelectedFieldEditor({ field, onChange, onRemove }: { field: LocalField;
             <div className="text-[11px] text-muted-foreground">Filled with the moment the signer signs, in Calgary time. Not editable by them.</div>
           </div>
         ) : null}
-        {field.type === "text" || field.type === "checkbox" ? (
+        {field.signerId === ME ? (
+          <div className="space-y-1">
+            <div className="text-[11px] text-muted-foreground">Filled in by you. Printed on the document; the signers see it but can't change it.</div>
+            {field.type === "text" ? (
+              <Textarea
+                key={field.key}
+                autoFocus
+                rows={2}
+                className="text-[13px]"
+                value={field.value ?? ""}
+                onChange={(e) => onChange({ value: e.target.value })}
+                placeholder="Type what goes in this box"
+                data-testid="input-my-field"
+              />
+            ) : (
+              <div className="flex items-center justify-between">
+                <Label className="text-[11px]">Ticked</Label>
+                <Switch checked={field.value === "true"} onCheckedChange={(v) => onChange({ value: v ? "true" : "false" })} />
+              </div>
+            )}
+          </div>
+        ) : null}
+        {(field.type === "text" || field.type === "checkbox") && field.signerId !== ME ? (
           <div className="space-y-1">
             <Label className="text-[11px]">Label</Label>
             <Input className="h-8 text-[12px]" value={field.label ?? ""} onChange={(e) => onChange({ label: e.target.value || null })} placeholder="e.g. Deposit amount" />
           </div>
         ) : null}
-        {field.type === "text" ? (
+        {field.type === "text" && field.signerId !== ME ? (
           <div className="flex items-center justify-between">
             <Label className="text-[11px]">Required</Label>
             <Switch checked={field.required} onCheckedChange={(v) => onChange({ required: v })} />
