@@ -109,6 +109,10 @@ export interface DealView {
   crmContact: { fubId: string; name: string | null; email: string | null; phone: string | null; address: string | null; stage: string | null; url: string } | null;
   crmDealFubId: string | null;
   crmDeal: { fubId: string; name: string | null; stageName: string | null; value: number | null; status: string | null } | null;
+  /** Co-buyers / co-sellers added on the deal page, in party order. */
+  coContacts: Array<{ fubId: string; name: string | null; email: string | null; phone: string | null; address: string | null; stage: string | null; url: string }>;
+  /** Who forms fill as buyer 1, 2… (or sellers): main contact, co-contacts, then people on the FUB deal. */
+  clients: Array<{ fubId: string; name: string | null; email: string | null }>;
   inboxAddress: string | null;
   inbound: InboundMessage[];
   createdAt: string;

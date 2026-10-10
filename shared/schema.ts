@@ -1158,6 +1158,10 @@ export const deals = sqliteTable("deals", {
   // page. When set, a completed signing posts a note on the FUB person.
   crmContactFubId: text("crm_contact_fub_id"),
   crmDealFubId: text("crm_deal_fub_id"),
+  // The other buyers or sellers on the deal (co-buyer, spouse…), as a JSON
+  // array of crm_contacts fub ids in party order. Forms fill buyer 2, 3…
+  // from these after the main contact.
+  coContactFubIds: text("co_contact_fub_ids"),
   // Short unguessable id in the deal's inbound address
   // (<mailbox>+deal-<token>@<domain>): forms emailed there from WEBForms are
   // imported as draft documents by server/deal-inbox.ts.
@@ -1344,6 +1348,7 @@ export const createDealSchema = z.object({
   notes: z.string().max(5000).nullable().optional(),
   crmContactFubId: z.string().trim().max(32).nullable().optional(),
   crmDealFubId: z.string().trim().max(32).nullable().optional(),
+  coContactFubIds: z.array(z.string().trim().min(1).max(32)).max(3).optional(),
 });
 export type CreateDealInput = z.infer<typeof createDealSchema>;
 
