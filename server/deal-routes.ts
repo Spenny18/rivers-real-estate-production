@@ -89,7 +89,7 @@ import { inboxStatus, pollDealInbox, recentInboundForDeal } from "./deal-inbox";
 import { FUB_PERSON_URL, noteOnFub } from "./deal-fub";
 import { contactAddress } from "./form-templates";
 import { requireAccount, type AccountReq } from "./account";
-import { dealFieldTemplates, templateFieldSchema, type TemplateField } from "@shared/schema";
+import { AGENT_SIGNER_ID, dealFieldTemplates, templateFieldSchema, type TemplateField } from "@shared/schema";
 import { formatStamp } from "@shared/esign-format";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
@@ -657,11 +657,16 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
     if (!parsed.success) return bad(res, 400, firstIssue(parsed.error));
     const signerIds = new Set(b.signers.map((s) => s.id));
     for (const f of parsed.data) {
-      if (!signerIds.has(f.signerId)) return bad(res, 400, "A field points at a signer who is not on this document.");
+      if (f.signerId === AGENT_SIGNER_ID) {
+        if (f.type !== "text" && f.type !== "checkbox") return bad(res, 400, "Only text and checkbox boxes can be filled in by you.");
+      } else if (!signerIds.has(f.signerId)) return bad(res, 400, "A field points at a signer who is not on this document.");
       if (f.page > b.document.pageCount) return bad(res, 400, "A field is placed on a page that does not exist.");
     }
+    const at = nowIso();
     db.delete(dealFields).where(eq(dealFields.documentId, b.document.id)).run();
     for (const f of parsed.data) {
+      const self = f.signerId === AGENT_SIGNER_ID;
+      const value = !self ? null : f.type === "checkbox" ? (f.value === "true" ? "true" : "false") : f.value?.trim() || null;
       db.insert(dealFields)
         .values({
           documentId: b.document.id,
@@ -672,9 +677,11 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
           y: f.y,
           w: f.w,
           h: f.h,
-          required: f.required ?? true,
+          required: self ? false : f.required ?? true,
           label: f.label || null,
           format: f.format || null,
+          value,
+          filledAt: self ? at : null,
         })
         .run();
     }
@@ -792,7 +799,7 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
       pageCount: t.pageCount,
       pageSizes: JSON.parse(t.pageSizes) as Array<{ w: number; h: number }>,
       fieldCount: fields.length,
-      slots: Array.from(new Set(fields.map((f) => `${f.role}:${f.roleIndex}`))).map((k) => {
+      slots: Array.from(new Set(fields.filter((f) => f.role !== "self").map((f) => `${f.role}:${f.roleIndex}`))).map((k) => {
         const [role, idx] = k.split(":");
         return { role, roleIndex: Number(idx) };
       }),
@@ -821,6 +828,7 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
       counts[s.role] = idx + 1;
       slotOf.set(s.id, { role: s.role, roleIndex: idx });
     }
+    slotOf.set(AGENT_SIGNER_ID, { role: "self", roleIndex: 0 });
     const fields: TemplateField[] = b.fields
       .filter((f) => slotOf.has(f.signerId))
       .map((f) => ({ ...slotOf.get(f.signerId)!, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required, label: f.label, format: f.format } as TemplateField));
@@ -856,7 +864,7 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
     const t = db.select().from(dealFieldTemplates).where(eq(dealFieldTemplates.id, Number(req.body?.templateId))).get();
     if (!t) return bad(res, 404, "Layout not found");
     const fields = JSON.parse(t.fields) as TemplateField[];
-    const bySlot = new Map<string, number>();
+    const bySlot = new Map<string, number>([["self:0", AGENT_SIGNER_ID]]);
     const counts: Record<string, number> = {};
     for (const s of b.signers) {
       const idx = counts[s.role] ?? 0;
@@ -868,7 +876,7 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
       .filter((f) => f.page <= b.document.pageCount)
       .map((f) => {
         const signerId = bySlot.get(`${f.role}:${f.roleIndex}`);
-        if (!signerId) {
+        if (signerId === undefined) {
           skipped += 1;
           return null;
         }

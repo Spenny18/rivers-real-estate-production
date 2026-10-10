@@ -1355,9 +1355,13 @@ export const signerInputSchema = z.object({
 });
 export type SignerInput = z.infer<typeof signerInputSchema>;
 
+// signerId 0 = a box the agent fills in before sending ("Me"). Only text and
+// checkbox boxes can be agent-filled; the value is printed as typed.
+export const AGENT_SIGNER_ID = 0;
+
 export const fieldInputSchema = z.object({
   id: z.number().int().positive().optional(),
-  signerId: z.number().int().positive(),
+  signerId: z.number().int().min(0),
   type: z.enum(FIELD_TYPES),
   page: z.number().int().min(1),
   x: z.number().min(0).max(1),
@@ -1367,6 +1371,7 @@ export const fieldInputSchema = z.object({
   required: z.boolean().optional(),
   label: z.string().trim().max(80).nullable().optional(),
   format: z.string().trim().max(20).nullable().optional(),
+  value: z.string().max(2000).nullable().optional(),
 });
 export type FieldInput = z.infer<typeof fieldInputSchema>;
 
@@ -1389,8 +1394,10 @@ export const dealFieldTemplates = sqliteTable("deal_field_templates", {
 });
 export type DealFieldTemplate = typeof dealFieldTemplates.$inferSelect;
 
+// role "self" = an agent-filled box (signerId 0); its value is not saved,
+// since what Spencer types is specific to the deal.
 export const templateFieldSchema = z.object({
-  role: z.enum(SIGNER_ROLES),
+  role: z.enum([...SIGNER_ROLES, "self"] as const),
   roleIndex: z.number().int().min(0).max(11),
   type: z.enum(FIELD_TYPES),
   page: z.number().int().min(1),
