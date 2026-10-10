@@ -14,6 +14,7 @@ import "dotenv/config";
 import { RetsClient, RetsAuthError } from "./rets-client";
 import { storage } from "./storage";
 import type { InsertMlsListing } from "@shared/schema";
+import { propertyFields, optionalSelect, probePropertyFields } from "./rets-fields";
 
 const CALGARY_NEIGHBOURHOOD_HINTS: Array<[RegExp, string]> = [
   [/springbank\s*hill/i, "Springbank Hill"],
@@ -34,7 +35,7 @@ function inferNeighbourhood(...sources: (string | undefined)[]): string | undefi
 }
 
 // Convert a RETS row (alphabetical columns) into an InsertMlsListing record.
-function normalizeListing(row: Record<string, string>): InsertMlsListing | null {
+function normalizeListing(row: Record<string, string>, optional: Array<{ column: string; field: string }> = []): InsertMlsListing | null {
   const listingId = row.ListingId?.trim();
   if (!listingId) return null;
   const listingKeyRaw = row.ListingKeyNumeric ? parseInt(row.ListingKeyNumeric, 10) : NaN;
@@ -146,8 +147,13 @@ function normalizeListing(row: Record<string, string>): InsertMlsListing | null 
     suite: rawText(row.Suite) ?? undefined,
     legalSuiteYn: rawBool(row.LegalSuiteYN) ?? undefined,
     suiteLocation: rawText(row.SuiteLocation) ?? undefined,
+    // Fields the feed was found to define (rets-fields.ts).
+    ...Object.fromEntries(optional.map((o) => [o.column, rawText(row[o.field])])),
   } as any;
 }
+
+/** Report once per process what the feed offers for forms (legal description etc.). */
+let fieldsReported = false;
 
 const SELECT_FIELDS = [
   "ListingId",
@@ -258,6 +264,29 @@ export async function runSync(): Promise<{
   try {
     await client.login();
 
+    // Extra fields, only those the feed's metadata defines: a field it does
+    // not know fails the whole search.
+    let optional: Array<{ column: string; field: string }> = [];
+    try {
+      optional = optionalSelect(await propertyFields(client));
+    } catch (e: any) {
+      console.warn("[mls-sync] field metadata unavailable, syncing the base fields only:", e?.message ?? e);
+    }
+    const select = [SELECT_FIELDS, ...optional.map((o) => o.field)].join(",");
+    if (!fieldsReported) {
+      fieldsReported = true;
+      try {
+        const p = await probePropertyFields(client);
+        console.log(
+          `[mls-fields] feed defines ${p.totalFields} fields; syncing extra: ${p.optionalSynced.map((o) => `${o.field}->${o.column}`).join(", ") || "none"}; ` +
+            `candidates: ${p.candidates.map((c) => c.systemName + (c.longName ? ` (${c.longName})` : "")).join(", ") || "none"}; ` +
+            `sample: ${JSON.stringify(p.sample?.values ?? {})}${p.sampleError ? `; sample error: ${p.sampleError}` : ""}`,
+        );
+      } catch (e: any) {
+        console.warn("[mls-fields] probe failed:", e?.message ?? e);
+      }
+    }
+
     // Iterate every postal-code prefix Pillar 9 serves so we cover Calgary +
     // surrounding municipalities (Rocky View, Foothills, Airdrie, Cochrane,
     // Okotoks, Strathmore, etc.) Pillar 9's service area is roughly all
@@ -276,7 +305,7 @@ export async function runSync(): Promise<{
           resource: "Property",
           class: "Property",
           query: `(StandardStatus=|A),(PostalCode=${prefix})`,
-          select: SELECT_FIELDS,
+          select,
           limit: pageSize,
           offset,
         });
@@ -285,7 +314,7 @@ export async function runSync(): Promise<{
         for (const row of result.rows) {
           // No city post-filter — we want the whole Pillar 9 service area
           // (Calgary + Rocky View + Foothills + Cochrane + Airdrie + …).
-          const listing = normalizeListing(row);
+          const listing = normalizeListing(row, optional);
           if (!listing) continue;
           storage.upsertMlsListing(listing);
           seenIds.add(listing.id);

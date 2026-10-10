@@ -3004,6 +3004,32 @@ export async function registerRoutes(
     }
   });
 
+  // GET /api/admin/mls-sync/field-probe (auth) — which fields the feed defines
+  // that forms could use (legal description, title, inclusions, listing
+  // contacts), with sample values from a few active listings. Read-only.
+  app.get("/api/admin/mls-sync/field-probe", requireAuth, async (_req, res) => {
+    if (!process.env.RETS_LOGIN_URL) return res.status(503).json({ message: "RETS credentials are not set on this deploy." });
+    try {
+      const { RetsClient } = await import("./rets-client");
+      const { probePropertyFields } = await import("./rets-fields");
+      const c = new RetsClient({
+        loginUrl: process.env.RETS_LOGIN_URL!,
+        username: process.env.RETS_USERNAME!,
+        password: process.env.RETS_PASSWORD!,
+        userAgent: process.env.RETS_USER_AGENT ?? "RiversRealEstate/1.0",
+        uaPassword: process.env.RETS_UA_PASSWORD || undefined,
+      });
+      await c.login();
+      try {
+        res.json(await probePropertyFields(c));
+      } finally {
+        try { await c.logout(); } catch {}
+      }
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message ?? "Probe failed" });
+    }
+  });
+
   // GET /api/admin/mls-sync/history (auth) — what the sold/off-market history
   // table holds, and the progress of a run in flight.
   app.get("/api/admin/mls-sync/history", requireAuth, async (_req, res) => {
