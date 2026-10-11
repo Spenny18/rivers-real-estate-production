@@ -136,6 +136,23 @@ export default function AdminFormTemplatePage() {
     onError: fail("Boxes didn't save"),
   });
 
+  // Replace every box with the built-in AREA layout for this form, when one exists.
+  const applyLayout = useMutation({
+    mutationFn: async () =>
+      (await apiRequest("POST", `/api/admin/form-templates/${id}/apply-layout`, {})).json() as Promise<FormTemplateDetail & { matched: { name: string; boxes: number; sameRevision: boolean } }>,
+    onSuccess: (t) => {
+      qc.setQueryData(key, t);
+      qc.invalidateQueries({ queryKey: ["/api/admin/form-templates"] });
+      setDirty(false);
+      setBoxes(t.fields);
+      toast({
+        title: `Built-in layout applied: ${t.matched.name}`,
+        description: `${t.matched.boxes} boxes placed${t.matched.sameRevision ? "" : " (measured on a different revision — check them)"}.`,
+      });
+    },
+    onError: fail("No built-in layout"),
+  });
+
   const saveMeta = useMutation({
     mutationFn: async () => (await apiRequest("PATCH", `/api/admin/form-templates/${id}`, { name: meta?.name, kind: meta?.kind })).json() as Promise<FormTemplateDetail>,
     onSuccess: (t) => {
@@ -324,6 +341,18 @@ export default function AdminFormTemplatePage() {
                 Save name
               </Button>
             ) : null}
+            <Button
+              size="sm"
+              variant="outline"
+              className="w-full h-8 text-[12px]"
+              disabled={applyLayout.isPending}
+              onClick={() => {
+                if (window.confirm("Replace every box on this form with the built-in AREA layout? Boxes you placed or changed by hand are removed.")) applyLayout.mutate();
+              }}
+              data-testid="button-apply-area-layout"
+            >
+              {applyLayout.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null} Use the built-in AREA layout
+            </Button>
             <div className="text-[11px] text-muted-foreground">
               {form.pageCount} page{form.pageCount === 1 ? "" : "s"} · {fillCount} fill box{fillCount === 1 ? "" : "es"} · {signCount} sign box{signCount === 1 ? "" : "es"}
               {usedSlots.length ? ` · signed by ${usedSlots.map((s) => { const [r, i] = s.split(":"); return slotLabel(r as SignerRole, Number(i)).toLowerCase(); }).join(", ")}` : ""}

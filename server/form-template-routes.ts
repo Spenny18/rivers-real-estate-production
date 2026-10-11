@@ -18,6 +18,7 @@ import { getDeal, loadBundle, nowIso } from "./deal-store";
 import { clientMeta, documentDetail } from "./deal-routes";
 import { publicOrigin } from "./origin";
 import {
+  applyAreaLayout,
   createDocumentFromTemplate,
   deleteTemplate,
   getTemplate,
@@ -28,6 +29,7 @@ import {
   renderFormPdf,
   signersFromValues,
   templateFields,
+  upgradeDetectedTemplates,
 } from "./form-templates";
 import { queueDocumentsBackup } from "./backup";
 
@@ -69,6 +71,9 @@ const valuesSchema = z.record(z.string().max(80), z.string().max(4000));
 
 export function registerFormTemplateRoutes(app: Express, deps: { requireAuth: Middleware }) {
   const { requireAuth } = deps;
+  // Forms uploaded before their built-in layout existed get it now (only
+  // those still on auto-detected blanks, so hand-placed boxes are never lost).
+  setTimeout(() => void upgradeDetectedTemplates().catch((e) => console.warn("[forms] upgrade failed:", e?.message ?? e)), 3000);
 
   app.get("/api/admin/form-templates", requireAuth, (_req, res) => {
     res.json(listTemplates().map(summary));
@@ -102,6 +107,19 @@ export function registerFormTemplateRoutes(app: Express, deps: { requireAuth: Mi
     const t = getTemplate(Number(req.params.id));
     if (!t) return bad(res, 404, "Form not found");
     res.json(detail(t));
+  });
+
+  /** Replace the boxes with the built-in AREA layout for this form, if there is one. */
+  app.post("/api/admin/form-templates/:id/apply-layout", requireAuth, async (req, res) => {
+    const t = getTemplate(Number(req.params.id));
+    if (!t) return bad(res, 404, "Form not found");
+    try {
+      const matched = await applyAreaLayout(t);
+      if (!matched) return bad(res, 404, "There's no built-in layout for this form (or its page count differs).");
+      res.json({ ...detail(getTemplate(t.id)!), matched });
+    } catch (e: any) {
+      bad(res, 500, e?.message ?? "Couldn't read the blank form.");
+    }
   });
 
   app.patch("/api/admin/form-templates/:id", requireAuth, (req, res) => {
