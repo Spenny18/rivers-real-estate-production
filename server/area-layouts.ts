@@ -124,16 +124,19 @@ function residentialPurchaseContract(): FormTemplateField[] {
   const md = { dataType: "date" as const, format: "month-day" };
   const yy = { dataType: "date" as const, format: "yy", align: "center" as const };
 
-  // Buyer's side only, like the condo contract: the listing agent completes
-  // the seller's names, details and signatures.
+  // Buyer's side, like the condo contract: no seller signature, initials or
+  // conveyancing boxes. Seller names are typed (listing.sellerName*, never
+  // signers); the seller's brokerage comes from the MLS listing.
   for (let p = 1; p <= 6; p++) b.blank(p, 478, 574, 748.3, "document.number", { h: 12, align: "center" });
   // Footer initials on pages 1–5: two buyers.
   for (let p = 1; p <= 5; p++) {
     b.sign(p, 372, 415, 52, 12, "buyer", 0, "initials").sign(p, 424, 468, 52, 12, "buyer", 1, "initials");
   }
 
-  // Page 1 — buyers and the property.
-  b.blank(1, 347, 574, 668.4, "buyer.1.name")
+  // Page 1 — sellers (names only), buyers and the property.
+  b.blank(1, 66, 292, 668.4, "listing.sellerName1")
+    .blank(1, 66, 292, 649.9, "listing.sellerName2")
+    .blank(1, 347, 574, 668.4, "buyer.1.name")
     .blank(1, 347, 574, 649.9, "buyer.2.name")
     .blank(1, 168, 573, 589.3, "property.street")
     .blank(1, 85, 422, 569, "property.city")
@@ -186,8 +189,13 @@ function residentialPurchaseContract(): FormTemplateField[] {
   // exported from WEBForms already carries the agent's standard clauses.)
   b.blank(4, 106, 573, 623.5, "offer.otherAttachment");
 
-  // Page 5 — the buyer's brokerage and the confirmation initials.
-  b.blank(5, 352, 573, 443, "agent.brokerage")
+  // Page 5 — both brokerages (the seller's from the MLS listing) and the confirmation initials.
+  b.blank(5, 89, 306, 443, "listing.brokerage")
+    .blank(5, 105, 306, 426.7, "listing.brokerageAddress")
+    .blank(5, 89, 306, 377.6, "listing.agent")
+    .blank(5, 96, 305, 361.2, "listing.agentPhone")
+    .blank(5, 95, 306, 328.5, "listing.agentEmail")
+    .blank(5, 352, 573, 443, "agent.brokerage")
     .para(5, 366, 573, 426.7, 410.2, "agent.address", { fontSize: 8 })
     .blank(5, 352, 573, 377.6, "agent.name")
     .blank(5, 354, 573, 361.2, "agent.phone")
@@ -201,14 +209,8 @@ function residentialPurchaseContract(): FormTemplateField[] {
     .signedAndDated(6, 653, "buyer", 0, SIGNED_AT)
     .sign(6, 36, 205, 635, SIG_H, "buyer", 0, "signature")
     .signedAndDated(6, 605.7, "buyer", 1, SIGNED_AT)
-    .sign(6, 36, 205, 588, SIG_H, "buyer", 1, "signature")
-    .blank(6, 352, 573, 207.9, "buyer.1.address")
-    .blank(6, 343, 445, 175.2, "buyer.1.phone")
-    .blank(6, 371, 573, 158.9, "conveyancing.buyerLawyer")
-    .blank(6, 356, 573, 142.5, "conveyancing.buyerLawyerFirm")
-    .blank(6, 370, 573, 126.1, "conveyancing.buyerLawyerAddress")
-    .blank(6, 358, 446, 93.5, "conveyancing.buyerLawyerPhone")
-    .blank(6, 361, 573, 77.1, "conveyancing.buyerLawyerEmail");
+    .sign(6, 36, 205, 588, SIG_H, "buyer", 1, "signature");
+  // The conveyancing information below is left for the lawyers.
 
   return b.out;
 }
@@ -224,18 +226,21 @@ function condoPurchaseContract(): FormTemplateField[] {
   // Typed on the review screen; no deal data behind them.
   const typed = (label: string) => ({ label });
 
-  // Buyer's side only: Spencer writes the offer for the buyer, and the
-  // listing agent completes the seller's names, details and signatures on
-  // their end. So no seller boxes — names, initials, signatures, brokerage,
-  // representative, conveyancing — are placed.
+  // Buyer's side: Spencer writes the offer for the buyer and the sellers
+  // sign through the listing agent, so no seller signature or initials
+  // boxes. Seller names are typed (listing.sellerName*, which never become
+  // signers); the seller's brokerage and representative come from the MLS
+  // listing. Conveyancing information is left for the lawyers.
   for (let p = 1; p <= 8; p++) b.blank(p, 476, 576, 748.3, "document.number", { h: 12, align: "center" });
   // Footer initials on pages 1–6: two buyers.
   for (let p = 1; p <= 6; p++) {
     b.sign(p, 372, 415, 52, 12, "buyer", 0, "initials").sign(p, 424, 468, 52, 12, "buyer", 1, "initials");
   }
 
-  // Page 1 — buyers, the unit, goods, price.
-  b.blank(1, 347, 574, 668.4, "buyer.1.name")
+  // Page 1 — sellers (names only), buyers, the unit, goods, price.
+  b.blank(1, 66, 292, 668.4, "listing.sellerName1")
+    .blank(1, 66, 292, 649.9, "listing.sellerName2")
+    .blank(1, 347, 574, 668.4, "buyer.1.name")
     .blank(1, 347, 574, 649.9, "buyer.2.name")
     .blank(1, 166, 575, 589.3, "property.street")
     .blank(1, 83, 424, 569, "property.city")
@@ -319,10 +324,16 @@ function condoPurchaseContract(): FormTemplateField[] {
     .blank(5, 397, 575, 455.6, "custom.non-titled-fee", typed("Monthly fee for non-titled, assigned or leased areas"))
     .para(5, 66, 575, 425.4, 393.6, "offer.additionalTerms");
 
-  // Pages 6–7 — authorization: the buyer's brokerage and representative (Spencer).
-  b.blank(6, 350, 575, 133.8, "agent.brokerage")
+  // Pages 6–7 — authorization: the seller's brokerage and representative
+  // from the MLS listing, the buyer's (Spencer's) from the agent profile.
+  b.blank(6, 87, 307, 133.8, "listing.brokerage")
+    .blank(6, 103, 307, 117.5, "listing.brokerageAddress")
+    .blank(6, 350, 575, 133.8, "agent.brokerage")
     .blank(6, 364, 575, 117.5, "agent.address", { fontSize: 8 });
-  b.blank(7, 350, 575, 704.4, "agent.name")
+  b.blank(7, 87, 307, 704.4, "listing.agent")
+    .blank(7, 94, 307, 688, "listing.agentPhone")
+    .blank(7, 93, 307, 655.3, "listing.agentEmail")
+    .blank(7, 350, 575, 704.4, "agent.name")
     .blank(7, 352, 575, 688, "agent.phone")
     .blank(7, 354, 575, 655.3, "agent.email")
     .sign(7, 440, 506, 433, 12, "buyer", 0, "initials")
@@ -335,16 +346,7 @@ function condoPurchaseContract(): FormTemplateField[] {
     .sign(7, 36, 205, 301, SIG_H, "buyer", 0, "signature")
     .signedAndDated(7, 271.8, "buyer", 1, SIGNED_AT)
     .sign(7, 36, 205, 254, SIG_H, "buyer", 1, "signature");
-
-  // Page 8 — the buyer's conveyancing information.
-  b.blank(8, 350, 575, 493.1, "buyer.1.address")
-    .blank(8, 341, 447, 460.3, "buyer.1.phone")
-    .blank(8, 340, 575, 444, "buyer.1.email")
-    .blank(8, 369, 575, 427.7, "conveyancing.buyerLawyer")
-    .blank(8, 354, 575, 411.4, "conveyancing.buyerLawyerFirm")
-    .blank(8, 368, 575, 394.9, "conveyancing.buyerLawyerAddress")
-    .blank(8, 356, 447, 362.3, "conveyancing.buyerLawyerPhone")
-    .blank(8, 359, 575, 346, "conveyancing.buyerLawyerEmail");
+  // Page 8's conveyancing information is left for the lawyers.
 
   return b.out;
 }
@@ -456,7 +458,7 @@ export const AREA_LAYOUTS: AreaLayout[] = [
     kind: "purchase",
     measuredOn: "AREA©158CLDA_JAN2026",
     pageCount: 6,
-    description: "Buyer's side: buyers, property, price, deposits, conditions, your brokerage and the buyer's conveyancing filled from the deal; signature, date and initials boxes for two buyers. The listing agent completes the seller's side.",
+    description: "Buyer's side: buyers, property, price, deposits, conditions and both brokerages (the seller's from MLS) filled from the deal; seller names typed; signature, date and initials boxes for two buyers.",
     fields: residentialPurchaseContract,
   },
   {
@@ -465,7 +467,7 @@ export const AREA_LAYOUTS: AreaLayout[] = [
     kind: "purchase",
     measuredOn: "AREA©157CLDA_MAR2026",
     pageCount: 8,
-    description: "Buyer's side: buyers, the unit and its legal description, condo fee, price, deposits, conditions, your brokerage and the buyer's conveyancing filled from the deal; signature, date and initials boxes for two buyers. The listing agent completes the seller's side.",
+    description: "Buyer's side: buyers, the unit and its legal description, condo fee, price, deposits, conditions and both brokerages (the seller's from MLS) filled from the deal; seller names typed; signature, date and initials boxes for two buyers.",
     fields: condoPurchaseContract,
   },
   {
