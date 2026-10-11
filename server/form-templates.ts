@@ -15,6 +15,7 @@
 import { eq, desc, asc } from "drizzle-orm";
 import { PDFDocument, StandardFonts, type PDFFont, type PDFPage } from "pdf-lib";
 import { db, storage } from "./storage";
+import { getListingDetails } from "./listing-details";
 import {
   deals,
   dealDocuments,
@@ -352,6 +353,22 @@ export function prefillForDeal(deal: Deal, template: FormTemplate): Prefill {
     // attached goods included unless listed as excluded.
     if (!values["offer.unattachedGoods"]) set("offer.unattachedGoods", listedGoods(listing.inclusions), "listing");
     if (!values["offer.attachedGoods"]) set("offer.attachedGoods", listedGoods(listing.exclusions), "listing");
+    // Legal description and listing contacts (form-only, listing-details.ts).
+    // Like the goods above, a value typed on an earlier form wins.
+    const d = getListingDetails(listing.id);
+    if (d) {
+      const keep = (key: string, v: string | null | undefined) => {
+        if (!values[key]) set(key, v, "listing");
+      };
+      // "1610979;24;5" when the parts aren't sent separately: plan first.
+      const parts = (d.legalDescription ?? "").split(";").map((x) => x.trim());
+      keep("property.legalPlan", d.legalPlan || parts[0]);
+      keep("property.legalBlock", d.legalBlock);
+      keep("property.legalLot", d.legalLot);
+      keep("property.legalOther", d.legalUnit ? `Unit ${d.legalUnit}` : null);
+      keep("property.linc", d.parcelNumber);
+      keep("listing.agentEmail", d.listAgentEmail);
+    }
   } else if (deal.address) {
     // "123 Elbow Dr SW, Calgary, AB T2S 2A1" → street / city.
     const parts = deal.address.split(",").map((s) => s.trim()).filter(Boolean);

@@ -34,6 +34,7 @@ import {
   FORM_KIND_LABELS,
 } from "@/lib/esign-types";
 import type { Lead } from "@shared/schema";
+import { ListingCard, ListingSearch } from "@/components/listing-picker";
 
 export const DOC_STATUS_STYLES: Record<DocumentSummary["status"], string> = {
   draft: "bg-secondary text-secondary-foreground border-border",
@@ -94,6 +95,18 @@ export default function AdminDealPage() {
       qc.invalidateQueries({ queryKey: ["/api/admin/deals"] });
       setEdit(null);
       toast({ title: "Deal saved" });
+    },
+    onError: (e) => toast({ title: "Didn't save", description: apiErrorMessage(e), variant: "destructive" }),
+  });
+
+  // Linking or unlinking the listing saves at once (and keeps any unsaved edits).
+  const linkListing = useMutation({
+    mutationFn: async (mlsNumber: string | null) => (await apiRequest("PATCH", `/api/admin/deals/${id}`, { mlsNumber })).json() as Promise<DealView>,
+    onSuccess: (d) => {
+      qc.setQueryData(key, d);
+      qc.invalidateQueries({ queryKey: ["/api/admin/deals"] });
+      if (edit) setEdit({ ...edit, mlsNumber: d.mlsNumber, listingId: d.listingId, address: edit.address || d.address });
+      toast({ title: d.listing ? "Listing linked" : "Listing unlinked", description: d.listing ? "Forms for this deal now fill from it." : undefined });
     },
     onError: (e) => toast({ title: "Didn't save", description: apiErrorMessage(e), variant: "destructive" }),
   });
@@ -294,8 +307,17 @@ export default function AdminDealPage() {
                 </div>
               </div>
               <div className="space-y-1.5">
-                <Label>MLS® number</Label>
-                <Input value={form.mlsNumber ?? ""} onChange={(e) => setEdit({ ...form, mlsNumber: e.target.value })} />
+                <Label>MLS® listing</Label>
+                {deal.listing ? (
+                  <ListingCard listing={deal.listing} onClear={() => linkListing.mutate(null)} />
+                ) : (
+                  <>
+                    {deal.mlsNumber ? (
+                      <div className="text-[11px] text-amber-700">MLS® {deal.mlsNumber} isn't in the listing mirror, so forms can't fill from it. Search for the property instead.</div>
+                    ) : null}
+                    <ListingSearch onPick={(l) => l.mlsNumber && linkListing.mutate(l.mlsNumber)} />
+                  </>
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label>Notes</Label>

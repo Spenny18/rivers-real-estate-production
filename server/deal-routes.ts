@@ -88,6 +88,19 @@ import { AGENT } from "./brand";
 import { inboxStatus, pollDealInbox, recentInboundForDeal } from "./deal-inbox";
 import { FUB_PERSON_URL, noteOnFub } from "./deal-fub";
 import { coContactIds, contactAddress, dealClients } from "./form-templates";
+import { normalizeMlsNumber, resolveShowingListing } from "./showings";
+
+/**
+ * An MLS number on a deal links the listing in the mirror, so forms fill from
+ * it (address, legal description, inclusions, listing agent). Unknown numbers
+ * are kept as typed, unlinked.
+ */
+function linkByMls(mlsNumber: string | null | undefined): { mlsNumber: string | null; listingId: string | null; address: string | null } {
+  const mls = mlsNumber ? normalizeMlsNumber(mlsNumber) : "";
+  if (!mls) return { mlsNumber: null, listingId: null, address: null };
+  const row = storage.getMlsListingById(mls);
+  return { mlsNumber: mls, listingId: row?.id ?? null, address: row?.fullAddress ?? null };
+}
 import { requireAccount, type AccountReq } from "./account";
 import { AGENT_SIGNER_ID, dealFieldTemplates, templateFieldSchema, type TemplateField } from "@shared/schema";
 import { formatStamp } from "@shared/esign-format";
@@ -248,6 +261,12 @@ function dealView(d: Deal) {
       ? { fubId: contact.fubId, name: contact.name, email: contact.email, phone: contact.phone, address: contactAddress(contact), stage: contact.stage, url: FUB_PERSON_URL(contact.fubId) }
       : null,
     crmDealFubId: d.crmDealFubId,
+    listing: (() => {
+      const id = d.listingId || d.mlsNumber;
+      if (!id) return null;
+      const l = resolveShowingListing(id);
+      return l.source === "mls" ? { ...l, status: storage.getMlsListingById(l.mlsNumber ?? id)?.status ?? null } : null;
+    })(),
     crmDeal: crmDeal ? { fubId: crmDeal.fubId, name: crmDeal.name, stageName: crmDeal.stageName, value: crmDeal.value, status: crmDeal.status } : null,
     coContacts: coContactIds(d)
       .map((id) => storage.getCrmContact(id))
@@ -489,16 +508,17 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
     const parsed = createDealSchema.safeParse(req.body ?? {});
     if (!parsed.success) return bad(res, 400, firstIssue(parsed.error));
     const v = parsed.data;
+    const linked = linkByMls(v.mlsNumber || v.listingId);
     const r = db
       .insert(deals)
       .values({
         title: v.title,
-        address: v.address || null,
+        address: v.address || linked.address,
         kind: v.kind ?? "purchase",
         status: v.status ?? "active",
         leadId: v.leadId ?? null,
-        listingId: v.listingId || null,
-        mlsNumber: v.mlsNumber || null,
+        listingId: linked.listingId,
+        mlsNumber: linked.mlsNumber,
         notes: v.notes || null,
         crmContactFubId: v.crmContactFubId || null,
         crmDealFubId: v.crmDealFubId || null,
@@ -529,8 +549,13 @@ export function registerDealRoutes(app: Express, deps: { requireAuth: Middleware
     if (v.kind !== undefined) patch.kind = v.kind;
     if (v.status !== undefined) patch.status = v.status;
     if (v.leadId !== undefined) patch.leadId = v.leadId;
-    if (v.listingId !== undefined) patch.listingId = v.listingId || null;
-    if (v.mlsNumber !== undefined) patch.mlsNumber = v.mlsNumber || null;
+    if (v.mlsNumber !== undefined || v.listingId !== undefined) {
+      const linked = linkByMls(v.mlsNumber !== undefined ? v.mlsNumber : v.listingId);
+      patch.mlsNumber = linked.mlsNumber;
+      patch.listingId = linked.listingId;
+      const address = patch.address !== undefined ? patch.address : deal.address;
+      if (!address && linked.address) patch.address = linked.address;
+    }
     if (v.notes !== undefined) patch.notes = v.notes || null;
     if (v.crmContactFubId !== undefined) {
       patch.crmContactFubId = v.crmContactFubId || null;
