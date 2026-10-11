@@ -21,6 +21,7 @@ import { CloudUpload, FileSignature, FolderOpen, Loader2, Plus, ShieldAlert, Shi
 import { apiErrorMessage, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { fmtDateTime, type BackupStatus, type DealView } from "@/lib/esign-types";
+import { ListingCard, ListingMatches, ListingSearch, useListingMatches, type PickedListing } from "@/components/listing-picker";
 
 const KIND_LABELS: Record<DealView["kind"], string> = {
   purchase: "Purchase",
@@ -43,6 +44,14 @@ export default function AdminDealsPage() {
   const [filter, setFilter] = useState<"active" | "closed" | "archived" | "all">("active");
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState(EMPTY);
+  const [listing, setListing] = useState<PickedListing | null>(null);
+  // While no property is picked, the deal name ("48 Glamis Green SW #134")
+  // is searched too, so the listing is one click away.
+  const fromTitle = useListingMatches(draft.title, creating && !listing && draft.title.trim().length >= 6);
+  const pick = (l: PickedListing) => {
+    setListing(l);
+    setDraft((d) => ({ ...d, mlsNumber: l.mlsNumber ?? "", address: l.address, title: d.title.trim() ? d.title : l.address }));
+  };
 
   const listKey = [`/api/admin/deals${filter === "all" ? "" : `?status=${filter}`}`];
   const { data: deals = [], isLoading } = useQuery<DealView[]>({ queryKey: listKey });
@@ -55,6 +64,7 @@ export default function AdminDealsPage() {
         address: draft.address || undefined,
         kind: draft.kind,
         mlsNumber: draft.mlsNumber || null,
+        listingId: listing?.mlsNumber ?? null,
         notes: draft.notes || null,
       });
       return (await res.json()) as DealView;
@@ -64,6 +74,7 @@ export default function AdminDealsPage() {
       qc.invalidateQueries({ queryKey: listKey });
       setCreating(false);
       setDraft(EMPTY);
+      setListing(null);
       window.location.assign(`/admin/deals/${d.id}`);
     },
     onError: (e) => toast({ title: "Didn't save", description: apiErrorMessage(e), variant: "destructive" }),
@@ -210,7 +221,7 @@ export default function AdminDealsPage() {
       </div>
 
       <Dialog open={creating} onOpenChange={(o) => !o && setCreating(false)}>
-        <DialogContent>
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>New deal</DialogTitle>
             <DialogDescription>One per transaction. You can add documents once it exists.</DialogDescription>
@@ -221,7 +232,7 @@ export default function AdminDealsPage() {
               <Input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="e.g. Smith purchase — 123 Elbow Dr SW" autoFocus />
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 col-span-1">
                 <Label>Type</Label>
                 <Select value={draft.kind} onValueChange={(v) => setDraft({ ...draft, kind: v as DealView["kind"] })}>
                   <SelectTrigger>
@@ -236,22 +247,45 @@ export default function AdminDealsPage() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1.5">
-                <Label>MLS® number</Label>
-                <Input value={draft.mlsNumber} onChange={(e) => setDraft({ ...draft, mlsNumber: e.target.value })} placeholder="Optional" />
-              </div>
             </div>
             <div className="space-y-1.5">
-              <Label>Property address</Label>
-              <Input value={draft.address} onChange={(e) => setDraft({ ...draft, address: e.target.value })} placeholder="Optional" />
+              <Label>Property</Label>
+              {listing ? (
+                <ListingCard
+                  listing={listing}
+                  onClear={() => {
+                    setListing(null);
+                    setDraft((d) => ({ ...d, mlsNumber: "", address: "" }));
+                  }}
+                />
+              ) : (
+                <>
+                  {fromTitle.matches.length ? (
+                    <div className="space-y-1">
+                      <div className="text-[12px] text-muted-foreground">Matches for the deal name — pick one to link the listing:</div>
+                      <ListingMatches matches={fromTitle.matches.slice(0, 3)} onPick={pick} />
+                    </div>
+                  ) : null}
+                  <ListingSearch onPick={pick} />
+                </>
+              )}
+              <div className="text-[11px] text-muted-foreground">
+                Linking the MLS® listing fills the address, legal plan, inclusions and listing agent on every form for this deal.
+              </div>
             </div>
+            {!listing ? (
+              <div className="space-y-1.5">
+                <Label>Property address (if it isn't on MLS®)</Label>
+                <Input value={draft.address} onChange={(e) => setDraft({ ...draft, address: e.target.value })} placeholder="Optional" />
+              </div>
+            ) : null}
             <div className="space-y-1.5">
               <Label>Notes</Label>
               <Textarea value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} rows={3} placeholder="Private to you" />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCreating(false)}>
+            <Button variant="outline" onClick={() => { setCreating(false); setListing(null); setDraft(EMPTY); }}>
               Cancel
             </Button>
             <Button onClick={() => create.mutate()} disabled={!draft.title.trim() || create.isPending}>

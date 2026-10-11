@@ -108,6 +108,8 @@ export interface DealView {
   crmContactFubId: string | null;
   crmContact: { fubId: string; name: string | null; email: string | null; phone: string | null; address: string | null; stage: string | null; url: string } | null;
   crmDealFubId: string | null;
+  /** The linked MLS® listing forms fill from, if any. */
+  listing: { source: "mls"; mlsNumber: string | null; address: string; summary: string | null; price: number | null; url: string | null; photoUrl: string | null; status: string | null } | null;
   crmDeal: { fubId: string; name: string | null; stageName: string | null; value: number | null; status: string | null } | null;
   /** Co-buyers / co-sellers added on the deal page, in party order. */
   coContacts: Array<{ fubId: string; name: string | null; email: string | null; phone: string | null; address: string | null; stage: string | null; url: string }>;

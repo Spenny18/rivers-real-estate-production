@@ -56,10 +56,10 @@ export async function propertyFields(client: RetsClient): Promise<FeedField[]> {
 }
 
 /** The optional fields to add to the sync's Select, and which column each fills. */
-export function optionalSelect(fields: FeedField[]): Array<{ column: string; field: string }> {
+export function optionalSelect(fields: FeedField[], wanted: Record<string, string[]> = OPTIONAL_LISTING_FIELDS): Array<{ column: string; field: string }> {
   const names = new Set(fields.map((f) => f.systemName));
   const out: Array<{ column: string; field: string }> = [];
-  for (const [column, candidates] of Object.entries(OPTIONAL_LISTING_FIELDS)) {
+  for (const [column, candidates] of Object.entries(wanted)) {
     const field = candidates.find((c) => names.has(c));
     if (field) out.push({ column, field });
   }

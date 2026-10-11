@@ -14,7 +14,8 @@ import "dotenv/config";
 import { RetsClient, RetsAuthError } from "./rets-client";
 import { storage } from "./storage";
 import type { InsertMlsListing } from "@shared/schema";
-import { propertyFields, optionalSelect, probePropertyFields } from "./rets-fields";
+import { propertyFields, optionalSelect, candidateFields } from "./rets-fields";
+import { DETAIL_FIELDS, upsertListingDetails } from "./listing-details";
 
 const CALGARY_NEIGHBOURHOOD_HINTS: Array<[RegExp, string]> = [
   [/springbank\s*hill/i, "Springbank Hill"],
@@ -267,20 +268,26 @@ export async function runSync(): Promise<{
     // Extra fields, only those the feed's metadata defines: a field it does
     // not know fails the whole search.
     let optional: Array<{ column: string; field: string }> = [];
+    // Form-only details (legal description…), stored apart from the public listing row.
+    let details: Array<{ column: string; field: string }> = [];
     try {
-      optional = optionalSelect(await propertyFields(client));
+      const fields = await propertyFields(client);
+      optional = optionalSelect(fields);
+      details = optionalSelect(fields, DETAIL_FIELDS);
     } catch (e: any) {
       console.warn("[mls-sync] field metadata unavailable, syncing the base fields only:", e?.message ?? e);
     }
-    const select = [SELECT_FIELDS, ...optional.map((o) => o.field)].join(",");
+    const select = Array.from(new Set([...SELECT_FIELDS.split(","), ...optional.map((o) => o.field), ...details.map((o) => o.field)])).join(",");
     if (!fieldsReported) {
       fieldsReported = true;
       try {
-        const p = await probePropertyFields(client);
+        const all = await propertyFields(client);
+        const p = { totalFields: all.length, candidates: candidateFields(all) };
         console.log(
-          `[mls-fields] feed defines ${p.totalFields} fields; syncing extra: ${p.optionalSynced.map((o) => `${o.field}->${o.column}`).join(", ") || "none"}; ` +
-            `candidates: ${p.candidates.map((c) => c.systemName + (c.longName ? ` (${c.longName})` : "")).join(", ") || "none"}; ` +
-            `sample: ${JSON.stringify(p.sample?.values ?? {})}${p.sampleError ? `; sample error: ${p.sampleError}` : ""}`,
+          // Field names only: sample values (agent emails…) stay behind the
+          // authenticated /api/admin/mls-sync/field-probe.
+          `[mls-fields] feed defines ${p.totalFields} fields; syncing extra: ${[...optional, ...details].map((o) => `${o.field}->${o.column}`).join(", ") || "none"}; ` +
+            `candidates: ${p.candidates.map((c) => c.systemName).join(", ") || "none"}`,
         );
       } catch (e: any) {
         console.warn("[mls-fields] probe failed:", e?.message ?? e);
@@ -317,6 +324,7 @@ export async function runSync(): Promise<{
           const listing = normalizeListing(row, optional);
           if (!listing) continue;
           storage.upsertMlsListing(listing);
+          if (details.length) upsertListingDetails(listing.id, Object.fromEntries(details.map((o) => [o.column, rawText(row[o.field])])));
           seenIds.add(listing.id);
           upserted++;
         }

@@ -86,6 +86,7 @@ export const BINDINGS: Binding[] = [
   { key: "property.legalLot", label: "Legal description — lot", group: "property", type: "text", source: "manual" },
   { key: "property.legalOther", label: "Legal description — other (unit / condo plan)", group: "property", type: "text", source: "manual" },
   { key: "property.title", label: "Title number", group: "property", type: "text", source: "manual" },
+  { key: "property.linc", label: "LINC number", group: "property", type: "text", source: "manual" },
 
   ...partyBindings("buyer"),
   ...partyBindings("seller"),
