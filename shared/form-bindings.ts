@@ -162,6 +162,10 @@ export const BINDINGS: Binding[] = [
   { key: "agreement.retainer", label: "Retainer", group: "agreement", type: "money", source: "manual" },
 
   // Listing brokerage, from the MLS mirror.
+  // The sellers' names on a buyer-side offer: printed only. Unlike the
+  // seller.N party keys these never make the sellers signers.
+  { key: "listing.sellerName1", label: "Seller's name", group: "listing", type: "text", source: "manual" },
+  { key: "listing.sellerName2", label: "Second seller's name", group: "listing", type: "text", source: "manual" },
   { key: "listing.brokerage", label: "Listing brokerage", group: "listing", type: "text", source: "listing" },
   { key: "listing.brokerageAddress", label: "Listing brokerage — address", group: "listing", type: "text", source: "manual" },
   { key: "listing.agent", label: "Listing agent", group: "listing", type: "text", source: "listing" },
@@ -191,7 +195,7 @@ export const BINDING_GROUP_LABELS: Record<BindingGroup, string> = {
   conveyancing: "Conveyancing",
   amendment: "Amendment / notice",
   agreement: "Representation agreement",
-  listing: "Listing brokerage",
+  listing: "Seller's side",
   agent: "Agent",
   document: "Document",
 };
