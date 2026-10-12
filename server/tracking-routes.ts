@@ -87,6 +87,7 @@ const IDENTIFYING_FORMS: Array<{ pattern: RegExp; via: string }> = [
   { pattern: /^\/api\/inquiry$/, via: "inquiry form" },
   { pattern: /^\/api\/public\/leads\/unlock$/, via: "listing unlock" },
   { pattern: /^\/api\/public\/valuation\/email$/, via: "home valuation" },
+  { pattern: /^\/api\/public\/neighbourhoods\/[^/]+\/report$/, via: "community report" },
   { pattern: /^\/api\/home-value$/, via: "home value" },
   { pattern: /^\/api\/newsletter\/subscribe$/, via: "newsletter signup" },
   { pattern: /^\/api\/booking\/event-types\/[^/]+\/book$/, via: "booking" },

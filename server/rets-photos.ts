@@ -23,9 +23,31 @@ interface CacheEntry {
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MAX_ENTRIES = 500;
 // Cache "we know this listing has no photo" results for 1 hour so we don't
-// re-poke the RETS server on every page view.
+// re-poke the RETS server on every page view. A failed fetch (expired
+// session, throttling, timeout) is NOT "no photo" — it only backs off briefly.
+// Caching failures for the full hour blanked every card's lead photo after
+// each restart, when the first page loads fire dozens of fetches at once.
 const NEGATIVE_TTL_MS = 60 * 60 * 1000;
+const ERROR_TTL_MS = 30 * 1000;
 const negativeCache = new Map<string, number>();
+
+// Pillar 9 throttles bursts of GetObject calls; a listing grid asks for a
+// dozen photos at once. Cap concurrent fetches, and share one fetch between
+// simultaneous requests for the same photo.
+const MAX_CONCURRENT = 2;
+let active = 0;
+const waiters: Array<() => void> = [];
+async function withSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (active >= MAX_CONCURRENT) await new Promise<void>((r) => waiters.push(r));
+  active++;
+  try {
+    return await fn();
+  } finally {
+    active--;
+    waiters.shift()?.();
+  }
+}
+const inFlight = new Map<string, Promise<{ contentType: string; body: Buffer } | null>>();
 const cache = new Map<string, CacheEntry>();
 
 let client: RetsClient | null = null;
@@ -92,7 +114,22 @@ export async function fetchListingPhoto(
   index: number,
 ): Promise<{ contentType: string; body: Buffer } | null> {
   if (!process.env.RETS_USERNAME || !process.env.RETS_PASSWORD) return null;
+  const key = `${listingId}:${index}`;
+  const cached = cache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { contentType: cached.contentType, body: cached.body };
+  }
+  const pending = inFlight.get(key);
+  if (pending) return pending;
+  const p = withSlot(() => fetchListingPhotoUncached(listingId, index)).finally(() => inFlight.delete(key));
+  inFlight.set(key, p);
+  return p;
+}
 
+async function fetchListingPhotoUncached(
+  listingId: string,
+  index: number,
+): Promise<{ contentType: string; body: Buffer } | null> {
   const key = `${listingId}:${index}`;
   // 1-based for RETS GetObject \u2014 the API accepts 0-based indexing externally
   const retsIndex = index + 1;
@@ -168,7 +205,8 @@ export async function fetchListingPhoto(
       if (lastErr) {
         console.error(`[rets-photos] all types failed for ${key}:`, (lastErr as any)?.message ?? lastErr);
       }
-      negativeCache.set(key, Date.now() + NEGATIVE_TTL_MS);
+      // Only a clean "no such object" answer means the photo doesn't exist.
+      negativeCache.set(key, Date.now() + (lastErr ? ERROR_TTL_MS : NEGATIVE_TTL_MS));
       return null;
     }
     lruSet(key, {
@@ -179,8 +217,8 @@ export async function fetchListingPhoto(
     return result;
   } catch (err) {
     console.error(`[rets-photos] failed for ${key}:`, (err as any)?.message ?? err);
-    // Cache negative briefly so we don't hammer
-    negativeCache.set(key, Date.now() + NEGATIVE_TTL_MS);
+    // Back off briefly so we don't hammer — but retry soon, it's not "no photo".
+    negativeCache.set(key, Date.now() + ERROR_TTL_MS);
     return null;
   }
 }

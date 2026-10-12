@@ -1,7 +1,10 @@
 import { useState, useMemo } from "react";
-import { MapContainer, TileLayer, Marker, Popup, CircleMarker, Tooltip } from "react-leaflet";
+import { MapContainer, Marker, Popup, CircleMarker, Tooltip } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import {
+  RiversBasemap,
+} from "@/components/rivers-map";
 import {
   TreePine,
   Coffee,
@@ -85,10 +88,7 @@ export function NeighbourhoodMap({ amenities, centerLat, centerLng, propertyAddr
           style={{ height: "100%", width: "100%" }}
           attributionControl={true}
         >
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
+          <RiversBasemap />
 
           {/* Amenity markers — small grayscale circles */}
           {visible.map((a) => {

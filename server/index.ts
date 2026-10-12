@@ -190,6 +190,12 @@ app.use((req, res, next) => {
     console.error("[backup] failed to start cron:", err);
   }
   try {
+    const { startDbMaintenance } = await import("./db-maintenance");
+    startDbMaintenance();
+  } catch (err) {
+    console.error("[db-maintenance] failed to start:", err);
+  }
+  try {
     const { startDealInboxCron } = await import("./deal-inbox");
     startDealInboxCron();
   } catch (err) {
@@ -249,6 +255,32 @@ app.use((req, res, next) => {
       // become the deployed behaviour — it decides booking links, outbound
       // email and the Google OAuth redirect URI.
       warnIfPublicOriginUnset();
+      // Pre-render the busiest pages into the SSR cache once the server has
+      // settled, so the first visitor after a deploy doesn't wait on a cold
+      // render. After this, stale-while-revalidate (server/ssr.ts) keeps
+      // them warm. One page at a time, to stay out of real traffic's way.
+      if (process.env.NODE_ENV === "production") {
+        setTimeout(async () => {
+          for (const path of ["/", "/neighbourhoods", "/condos", "/blog", "/about"]) {
+            const t0 = Date.now();
+            try {
+              const r = await fetch(`http://127.0.0.1:${port}${path}`, {
+                headers: { "User-Agent": "RiversWarmup/1.0", accept: "text/html" },
+                signal: AbortSignal.timeout(30_000),
+              });
+              await r.text();
+              log(`[warmup] ${path} ${r.status} in ${Date.now() - t0}ms`);
+            } catch (e: any) {
+              log(`[warmup] ${path} failed: ${e?.message ?? e}`);
+            }
+          }
+        }, 15_000);
+        // The SEO keyword report (what "Improve" plans against): reloaded from
+        // disk at startup; crawl a fresh one only if there's none at all.
+        import("./seo-report-cache")
+          .then((m) => m.scheduleBootSeoReport())
+          .catch((e) => log(`[seo-keywords] boot scheduling failed: ${e?.message ?? e}`));
+      }
     },
   );
 })();

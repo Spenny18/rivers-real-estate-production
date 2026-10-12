@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { trackListingView } from "@/lib/activity-tracker";
 import { Link, useRoute } from "wouter";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -28,7 +28,7 @@ import {
 import { PublicLayout } from "@/components/public-layout";
 import { ListingCard } from "@/components/listing-card";
 import { NeighbourhoodPois } from "@/components/neighbourhood-pois";
-import { useAccount, useNote, useSaveNote, useRequestTour } from "@/lib/account";
+import { useAccount, useNote, useSaveNote, useRequestTour, loginHref } from "@/lib/account";
 import { Lock, FileText, CalendarPlus } from "lucide-react";
 import { SeoHead } from "@/components/seo-head";
 import { Button } from "@/components/ui/button";
@@ -260,7 +260,7 @@ function ListingSoftGate({ listingId }: { listingId: string }) {
       {/* Primary CTA: portal sign-in */}
       <div className="px-8 pt-2 pb-2">
         <a
-          href="/account/login"
+          href={loginHref()}
           className="block w-full text-center rounded-sm h-11 leading-[44px] font-display tracking-[0.18em] text-[11px] text-white"
           style={{ background: "#0a0a0a" }}
           data-testid="btn-soft-gate-signin"
@@ -478,6 +478,15 @@ function MlsDetailBody({ listing }: { listing: PublicMlsListingDetail }) {
   // see the full page. Everyone else gets a gated preview.
   const isPageUnlocked = useIsUnlocked();
   const { data: portalAccount } = useAccount();
+  // The server render (and its 5-minute cache) is always the signed-out
+  // view, so a signed-in client may arrive with the sold price withheld —
+  // fetch their own copy once.
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (isSold && listing.soldLocked && portalAccount) {
+      queryClient.invalidateQueries({ queryKey: ["/api/public/mls"] });
+    }
+  }, [isSold, listing.soldLocked, portalAccount, queryClient]);
 
   const gallery = useMemo(() => {
     // For RETS-sourced listings (those with photoCount), construct photo URLs
@@ -601,8 +610,29 @@ function MlsDetailBody({ listing }: { listing: PublicMlsListingDetail }) {
               className="mt-5 font-serif text-[34px] lg:text-[44px] tabular-nums"
               data-testid="text-listing-price"
             >
-              {formatPrice(listing.listPrice)}
+              {isSold && listing.soldPrice != null ? formatPrice(listing.soldPrice) : formatPrice(listing.listPrice)}
             </div>
+            {isSold && (
+              <div className="mt-2 text-sm text-muted-foreground" data-testid="text-sold-detail">
+                {listing.soldPrice != null ? (
+                  <>
+                    Sold
+                    {listing.soldDate
+                      ? ` ${new Date(`${listing.soldDate}T12:00:00`).toLocaleDateString("en-CA", { month: "long", day: "numeric", year: "numeric" })}`
+                      : ""}
+                    {` · listed at ${formatPrice(listing.listPrice)}`}
+                    {listing.daysOnMarket != null ? ` · ${listing.daysOnMarket} days on market` : ""}
+                  </>
+                ) : (
+                  <>
+                    Sold · listed at {formatPrice(listing.listPrice)} ·{" "}
+                    <a href={loginHref()} className="underline" data-testid="link-sold-price-signin">
+                      sign in to see the sold price
+                    </a>
+                  </>
+                )}
+              </div>
+            )}
 
             <div className="mt-8 grid grid-cols-2 sm:grid-cols-4 gap-y-5 gap-x-4 border-t border-b border-border py-6">
               <Stat icon={Bed} label="Beds" value={String(listing.beds)} />

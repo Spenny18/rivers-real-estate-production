@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useRoute } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { MapContainer, TileLayer, Marker, Polygon, useMap } from "react-leaflet";
+import { MapContainer, Marker, Polygon, useMap } from "react-leaflet";
 import { useEffect } from "react";
 import type * as L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -10,6 +10,7 @@ import { PublicLayout } from "@/components/public-layout";
 import { ListingCard } from "@/components/listing-card";
 import { FaqAccordion } from "@/components/faq-accordion";
 import { NeighbourhoodPois } from "@/components/neighbourhood-pois";
+import { NeighbourhoodReport } from "@/components/neighbourhood-report";
 import { ClientOnly } from "@/components/client-only";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -19,9 +20,7 @@ import {
   type PublicNeighbourhoodDetail,
 } from "@/lib/mls-types";
 import {
-  RIVERS_TILE_URL,
-  RIVERS_TILE_SUBDOMAINS,
-  RIVERS_TILE_ATTRIBUTION,
+  RiversBasemap,
   buildPricePill,
   buildSubjectPin,
   FitBoundsOnce,
@@ -355,6 +354,9 @@ export default function NeighbourhoodDetailPage() {
         </div>
       </section>
 
+      {/* Community market report — page 1 free, full PDF emailed (lead magnet) */}
+      <NeighbourhoodReport slug={data.slug} name={data.name} />
+
       {/* FAQ — visible content only; no FAQPage JSON-LD (Google dropped FAQ
           rich results May 2026). */}
       <FaqAccordion
@@ -496,11 +498,7 @@ function NeighbourhoodAirbnbMap({
         scrollWheelZoom={false}
         style={{ height: "100%", width: "100%", background: "#f5f5f5" }}
       >
-        <TileLayer
-          attribution={RIVERS_TILE_ATTRIBUTION}
-          url={RIVERS_TILE_URL}
-          subdomains={RIVERS_TILE_SUBDOMAINS}
-        />
+        <RiversBasemap />
         {rings.length > 0 ? <FitToPolygon rings={rings} /> : <FitBoundsOnce points={points} />}
 
         {/* Community boundary from OSM, when available */}

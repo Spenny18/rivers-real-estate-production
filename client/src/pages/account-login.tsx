@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { PublicLayout } from "@/components/public-layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useRequestMagicLink, useAccount } from "@/lib/account";
+import { useRequestMagicLink, useAccount, safeNext } from "@/lib/account";
 import { useEffect } from "react";
 import { PrivacyLink } from "@/components/privacy-link";
 
@@ -24,22 +24,24 @@ export default function AccountLoginPage() {
   const requestLink = useRequestMagicLink();
   const { data: me } = useAccount();
 
-  // Already signed in? Bounce to dashboard.
-  useEffect(() => {
-    if (me) setLocation("/account/dashboard");
-  }, [me, setLocation]);
-
-  // Pull ?error= from the URL (set by the magic-callback redirect on failure).
+  // Pull ?error= (set by the magic-callback redirect on failure) and ?next=
+  // (the page to return to, e.g. a sold-listings search) from the URL.
   const params = new URLSearchParams(
     typeof window !== "undefined" ? window.location.search : "",
   );
+  const next = safeNext(params.get("next"));
+
+  // Already signed in? Go where they were headed, else the dashboard.
+  useEffect(() => {
+    if (me) setLocation(next ?? "/account/dashboard");
+  }, [me, next, setLocation]);
   const errorKey = params.get("error");
   const errorMessage = errorKey ? ERROR_LABELS[errorKey] ?? null : null;
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!email.trim()) return;
-    requestLink.mutate(email.trim(), {
+    requestLink.mutate({ email: email.trim(), next }, {
       onSuccess: () => setSent(true),
     });
   }

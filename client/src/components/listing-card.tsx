@@ -9,6 +9,7 @@ import {
   useIsFavorited,
   useAddFavorite,
   useRemoveFavorite,
+  loginHref,
 } from "@/lib/account";
 
 const FALLBACK_HERO =
@@ -35,8 +36,8 @@ export function ListingCard({ listing, variant = "default" }: Props) {
     e.preventDefault();
     e.stopPropagation();
     if (!me) {
-      // Not signed in — bounce them through the login flow.
-      window.location.href = "/account/login";
+      // Not signed in — through the login flow and back to this page.
+      window.location.href = loginHref();
       return;
     }
     if (isFavorited) removeFavorite.mutate(listing.id);

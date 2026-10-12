@@ -173,6 +173,13 @@ export function createSsrPipeline(opts: SsrPipelineOptions) {
   const maxEntries = opts.cacheMaxEntries ?? 300;
   const cache = new Map<string, CacheEntry>();
   liveCaches.add(cache);
+  // Background refreshes in flight, per path — one re-render at a time.
+  const refreshing = new Map<string, Promise<string | null>>();
+  // Past its TTL a cached page is still served (instantly) while a fresh one
+  // renders in the background — stale-while-revalidate. Visitors never wait
+  // on a render because the clock ran out; staleness is bounded by how often
+  // the page is requested. Beyond this age it's re-rendered inline instead.
+  const STALE_MAX_MS = 24 * 60 * 60 * 1000;
 
   /**
    * Render `rawPath` into `template` (index.html with head meta already
@@ -197,11 +204,33 @@ export function createSsrPipeline(opts: SsrPipelineOptions) {
     const cached = ttl > 0 && cacheable ? cache.get(rawPath) : undefined;
     if (cached && Date.now() - cached.at < ttl) {
       // Cache holds the complete page (head meta + body). Head and body are
-      // built from the same DB read, so they age together — max staleness is
-      // one TTL, after which the next request re-renders both.
+      // built from the same DB read, so they age together.
       return cached.html;
     }
+    if (cached && Date.now() - cached.at < STALE_MAX_MS) {
+      if (!refreshing.has(rawPath)) {
+        const p = renderFresh(template, rawPath, search, keys, cacheable).finally(() => refreshing.delete(rawPath));
+        refreshing.set(rawPath, p);
+      }
+      return cached.html;
+    }
+    // Uncacheable renders (noindex pages, dev) are never shared or stored.
+    if (!(ttl > 0 && cacheable)) return renderFresh(template, rawPath, search, keys, cacheable);
+    // Nothing usable cached: render now, sharing a render already in flight.
+    const inflight = refreshing.get(rawPath);
+    if (inflight) return inflight;
+    const p = renderFresh(template, rawPath, search, keys, cacheable).finally(() => refreshing.delete(rawPath));
+    refreshing.set(rawPath, p);
+    return p;
+  }
 
+  async function renderFresh(
+    template: string,
+    rawPath: string,
+    search: string,
+    keys: unknown[][],
+    cacheable: boolean,
+  ): Promise<string | null> {
     try {
       const [render, seed] = await Promise.all([
         opts.getRender(),

@@ -175,6 +175,22 @@ export function accountEmailFromRequest(req: Request): string | null {
   return resolveSession(parseCookie(req))?.email ?? null;
 }
 
+/**
+ * Where to send someone after sign-in: a path on this site only (e.g.
+ * "/mls?statuses=Sold"). Anything that could leave the site — absolute URLs,
+ * protocol-relative "//host", backslash tricks — or point at the API is
+ * refused, so the sign-in link can't be turned into an open redirect.
+ */
+export function safeNextPath(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const p = raw.trim();
+  if (!p || p.length > 1000) return null;
+  if (!p.startsWith("/") || p.startsWith("//") || p.includes("\\")) return null;
+  if (/[\u0000-\u001f\u007f]/.test(p)) return null;
+  if (/^\/api(\/|$)/i.test(p)) return null;
+  return p;
+}
+
 // ---- Auth middleware ------------------------------------------------------
 
 export interface AccountReq extends Request {
@@ -243,7 +259,11 @@ export function registerAccountRoutes(app: Express) {
       } as any)
       .run();
     const origin = originFromReq(req);
-    const link = `${origin}/api/account/auth/magic-callback?token=${token}`;
+    // Carry the page they were on so the link brings them back to it.
+    const next = safeNextPath(req.body?.next);
+    const link =
+      `${origin}/api/account/auth/magic-callback?token=${token}` +
+      (next ? `&next=${encodeURIComponent(next)}` : "");
     await emailMagicLink(email, link);
     res.json({ ok: true });
   });
@@ -251,16 +271,19 @@ export function registerAccountRoutes(app: Express) {
   // -- Auth: consume magic link
   app.get("/api/account/auth/magic-callback", (req, res) => {
     const token = String(req.query.token || "");
-    if (!token) return res.redirect("/account/login?error=missing_token");
+    const next = safeNextPath(req.query.next);
+    const fail = (error: string) =>
+      res.redirect(`/account/login?error=${error}${next ? `&next=${encodeURIComponent(next)}` : ""}`);
+    if (!token) return fail("missing_token");
     const row = db
       .select()
       .from(accountMagicTokens)
       .where(eq(accountMagicTokens.id, token))
       .get();
-    if (!row) return res.redirect("/account/login?error=invalid_token");
-    if (row.consumedAt) return res.redirect("/account/login?error=token_used");
+    if (!row) return fail("invalid_token");
+    if (row.consumedAt) return fail("token_used");
     if (new Date(row.expiresAt).getTime() < Date.now()) {
-      return res.redirect("/account/login?error=token_expired");
+      return fail("token_expired");
     }
     db.update(accountMagicTokens)
       .set({ consumedAt: nowIso() })
@@ -273,7 +296,7 @@ export function registerAccountRoutes(app: Express) {
       .run();
     const sid = issueSession(user.id);
     setSessionCookie(res, sid);
-    res.redirect("/account/dashboard");
+    res.redirect(next ?? "/account/dashboard");
   });
 
   // -- Auth: current user

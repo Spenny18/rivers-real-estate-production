@@ -759,3 +759,44 @@ export function buildSignAgentNoticeHtml(d: {
       ${signButton(d.adminUrl, "Open deal")}`,
   });
 }
+
+/** The full community report, sent to whoever asked for it on a neighbourhood page. */
+export function buildCommunityReportEmailHtml(d: {
+  recipientName: string;
+  communityName: string;
+  subtitle: string;
+  periodLabel: string;
+  pdfUrl: string;
+  previewUrl: string;
+  pageUrl: string;
+  origin: string;
+}): string {
+  const firstName = d.recipientName.trim().split(/\s+/)[0] || "there";
+  const name = escapeAttr(d.communityName);
+  // "All residential" reads as no qualifier; a class reads "Mission Apartment".
+  const cls = /^all\b/i.test(d.subtitle) ? "" : escapeAttr(d.subtitle);
+  return bookingShell({
+    eyebrow: cls ? `COMMUNITY MARKET REPORT · ${cls.toUpperCase()}` : "COMMUNITY MARKET REPORT",
+    heading: `${name} · ${escapeAttr(d.periodLabel)}`,
+    intro: `Hi ${escapeAttr(firstName)}, here's the full ${name}${cls ? ` ${cls.toLowerCase()}` : ""} market report you asked for: median sold prices, active and sold listings, days on market, and where in the price range homes are selling.`,
+    accent: BRAND.forest,
+    origin: d.origin,
+    body: `
+      <tr><td style="padding:22px 36px 0;">
+        <a href="${escapeAttr(d.pdfUrl)}" style="text-decoration:none;">
+          <img src="${escapeAttr(d.previewUrl)}" alt="${name} market report, page 1" width="528" style="display:block;width:100%;max-width:528px;height:auto;border:1px solid ${BRAND.border};" />
+        </a>
+      </td></tr>
+      ${signButton(d.pdfUrl, "Download the full report (PDF)")}
+      <tr><td style="padding:22px 36px 0;">
+        <p style="font-size:14px;color:${BRAND.black};line-height:1.6;margin:0;">
+          Thinking about buying or selling in ${name}? Reply to this email or call me at
+          <a href="tel:+14039669237" style="color:${BRAND.forest};text-decoration:none;">(403) 966-9237</a>
+          and I'll walk you through what these numbers mean for your home.
+        </p>
+        <p style="font-size:13px;margin:14px 0 0;">
+          <a href="${escapeAttr(d.pageUrl)}" style="color:${BRAND.forest};">See homes for sale in ${name} →</a>
+        </p>
+      </td></tr>`,
+  });
+}

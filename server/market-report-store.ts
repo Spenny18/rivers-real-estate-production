@@ -17,6 +17,7 @@ import { PROPERTY_CLASSES, isValidPeriod, monthStats, shiftPeriod, type ClassFil
 import { CITYWIDE, periodLabel } from "./market-report";
 import { buildReportData, defaultReportPeriod } from "./market-report-render";
 import { renderReportToFiles } from "./render-host";
+import { ensureNeighbourhoodReports } from "./neighbourhood-reports";
 
 export type ScopeKind = Scope["kind"];
 export const SCOPE_KINDS: readonly ScopeKind[] = ["city", "subdivision", "district"];
@@ -247,19 +248,32 @@ function mountainDayOfMonth(now = new Date()): number {
  * From the 2nd of the month, make sure last month's set exists. Hourly check,
  * cheap when there is nothing to do; idempotent because it only fills gaps.
  */
+let monthlyRunning = false;
+
 export async function ensureMonthlyReports(now = new Date()): Promise<void> {
   if (mountainDayOfMonth(now) < 2) return;
-  if (storage.listReportPresets().length === 0) return;
   if (storage.mlsHistorySummary().sold === 0) return; // nothing to report from yet
-  const period = defaultReportPeriod(now);
-  // The citywide figures first, so the Market at a Glance graphic is ready
-  // for the newsletter without anyone typing them in.
+  // A full neighbourhood fill can outlast the hourly tick; never overlap.
+  if (monthlyRunning) return;
+  monthlyRunning = true;
   try {
-    autofillMarketFigures(period);
-  } catch (e) {
-    console.error("[market-reports] autofill failed:", e);
+    const period = defaultReportPeriod(now);
+    if (storage.listReportPresets().length > 0) {
+      // The citywide figures first, so the Market at a Glance graphic is ready
+      // for the newsletter without anyone typing them in.
+      try {
+        autofillMarketFigures(period);
+      } catch (e) {
+        console.error("[market-reports] autofill failed:", e);
+      }
+      await generateAllPresets(period, true);
+    }
+    // Then a report for every neighbourhood page that still lacks one, for
+    // the page-1 teaser + "email me the full report" lead magnet.
+    await ensureNeighbourhoodReports(period);
+  } finally {
+    monthlyRunning = false;
   }
-  await generateAllPresets(period, true);
 }
 
 export function startMarketReportCron() {

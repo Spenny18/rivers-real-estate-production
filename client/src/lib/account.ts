@@ -35,14 +35,34 @@ export function useAccount() {
   });
 }
 
-/** Request a magic-link email. */
+/**
+ * A path on this site to return to after sign-in, or null. Mirrors the
+ * server's safeNextPath: same-site paths only, never another origin.
+ */
+export function safeNext(raw: string | null | undefined): string | null {
+  if (!raw || raw.length > 1000) return null;
+  if (!raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) return null;
+  if (/^\/api(\/|$)/i.test(raw) || raw.startsWith("/account/login")) return null;
+  return raw;
+}
+
+/** The sign-in page, set to bring the visitor back to `path` (default: here). */
+export function loginHref(path?: string): string {
+  const here =
+    path ?? (typeof window !== "undefined" ? window.location.pathname + window.location.search : "");
+  const next = safeNext(here);
+  return next ? `/account/login?next=${encodeURIComponent(next)}` : "/account/login";
+}
+
+/** Request a magic-link email; `next` is where the link should land. */
 export function useRequestMagicLink() {
   return useMutation({
-    mutationFn: async (email: string) => {
+    mutationFn: async (input: string | { email: string; next?: string | null }) => {
+      const { email, next } = typeof input === "string" ? { email: input, next: null } : input;
       const r = await fetch("/api/account/auth/magic-link", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, ...(next ? { next } : {}) }),
       });
       if (!r.ok) throw new Error("Failed to send magic link");
       return r.json();
