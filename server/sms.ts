@@ -24,6 +24,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { sqlite, storage } from "./storage";
 import { publicOrigin } from "./origin";
+import { createNativeContact } from "./contacts";
 
 sqlite.exec(`
   CREATE TABLE IF NOT EXISTS sms_messages (
@@ -270,12 +271,31 @@ export function whoIs(e164: string): PhoneMatch {
   return { contactFubId: null, name: l?.name ?? null };
 }
 
+/**
+ * The contact for a phone number, creating one the first time someone new
+ * calls or texts the business line, so their history has somewhere to live
+ * (and shows in the Inbox). Spencer can rename them afterwards.
+ */
+export function ensureContactForPhone(e164: string, via: "call" | "text"): PhoneMatch & { created: boolean } {
+  const who = whoIs(e164);
+  if (who.contactFubId) return { ...who, created: false };
+  if (last10(e164).length < 10) return { ...who, created: false };
+  const c = createNativeContact({
+    // A website lead with this phone lends its name; otherwise a placeholder.
+    name: who.name ?? `New ${via === "call" ? "caller" : "texter"} · ${prettyPhone(e164)}`,
+    phone: e164,
+    stage: "Lead",
+    source: via === "call" ? "Business line · call" : "Business line · text",
+  });
+  return { contactFubId: c.fubId, name: c.name, created: true };
+}
+
 // ---- The relay -----------------------------------------------------------------------------
 
 /** How long a forwarded text stays the default target for Spencer's reply. */
 const REPLY_WINDOW_MS = 24 * 3600_000;
 
-function setReplyTarget(e164: string) {
+export function setReplyTarget(e164: string) {
   sqlite
     .prepare(
       `INSERT INTO sms_relay_state (key, value, updated_at) VALUES ('reply_to', ?, ?)
@@ -284,7 +304,7 @@ function setReplyTarget(e164: string) {
     .run(e164, new Date().toISOString());
 }
 
-function replyTarget(): string | null {
+export function replyTarget(): string | null {
   const row = sqlite.prepare(`SELECT value, updated_at AS updatedAt FROM sms_relay_state WHERE key = 'reply_to'`).get() as
     | { value: string; updatedAt: string }
     | undefined;
@@ -312,7 +332,7 @@ export async function handleInboundSms(from: string, body: string, sid: string |
         "Not sent: no client has texted in the last 24 hours to reply to. To start a conversation, text 4035551234: your message",
       );
     }
-    const who = whoIs(target);
+    const who = ensureContactForPhone(target, "text");
     const sent = await sendSms(target, text, { kind: "relay", contactFubId: who.contactFubId });
     if (!sent.ok) return twimlMessage(`Not sent to ${who.name ?? prettyPhone(target)}: ${sent.error}`);
     setReplyTarget(target);
@@ -320,7 +340,7 @@ export async function handleInboundSms(from: string, body: string, sid: string |
   }
 
   // From anyone else: a client. Log it and forward it to Spencer's cell.
-  const who = whoIs(sender);
+  const who = ensureContactForPhone(sender, "text");
   logMessage({ direction: "inbound", kind: "client", from: sender, to: cfg.from ?? "", body, sid, contactFubId: who.contactFubId });
   logOnContact(who.contactFubId, "inbound", body, sid);
   if (cfg.agentCell) {

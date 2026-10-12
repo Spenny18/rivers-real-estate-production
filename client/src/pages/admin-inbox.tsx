@@ -18,6 +18,8 @@ import {
   MessageSquare,
   MousePointerClick,
   Phone,
+  PhoneOutgoing,
+  Play,
   Search,
   Send,
   StickyNote,
@@ -149,7 +151,7 @@ const KIND_ICON: Record<string, typeof Mail> = { email: Mail, text: MessageSquar
 
 // ---- Page ------------------------------------------------------------------------------
 
-type Filter = "all" | "unread" | "text" | "email";
+type Filter = "all" | "unread" | "text" | "email" | "call";
 
 export default function AdminInboxPage() {
   const [filter, setFilter] = useState<Filter>("all");
@@ -193,7 +195,7 @@ export default function AdminInboxPage() {
                 />
               </div>
               <div className="flex gap-1">
-                {(["all", "unread", "text", "email"] as Filter[]).map((f) => (
+                {(["all", "unread", "text", "email", "call"] as Filter[]).map((f) => (
                   <button
                     key={f}
                     onClick={() => setFilter(f)}
@@ -201,7 +203,7 @@ export default function AdminInboxPage() {
                       filter === f ? "bg-foreground text-background" : "text-muted-foreground hover:bg-secondary"
                     }`}
                   >
-                    {f === "text" ? "Texts" : f === "email" ? "Emails" : f}
+                    {f === "text" ? "Texts" : f === "email" ? "Emails" : f === "call" ? "Calls" : f}
                   </button>
                 ))}
               </div>
@@ -328,6 +330,7 @@ function Conversation({ fubId, status, onBack }: { fubId: string; status?: Inbox
             <input type="checkbox" checked={showActivity} onChange={(e) => setShowActivity(e.target.checked)} />
             Show activity
           </label>
+          {c.phone && <CallButton contactFubId={c.fubId} name={c.name || c.phone} ready={!!status?.canText.ok} />}
           <Link href={`/admin/crm?contact=${encodeURIComponent(c.fubId)}`} className="text-[12px] underline underline-offset-2 text-muted-foreground hover:text-foreground">
             CRM
           </Link>
@@ -374,6 +377,9 @@ function Message({ item }: { item: ThreadItem }) {
             ? `${item.direction === "inbound" ? "Incoming" : item.direction === "outbound" ? "Outgoing" : ""} call${mins ? ` · ${mins} min` : ""}${item.meta.outcome ? ` · ${item.meta.outcome}` : ""}`
             : item.subject ?? "Appointment"}
           <span>· {stamp(item.at)}</span>
+          {item.kind === "call" && item.meta.hasRecording && typeof item.meta.callLogId === "number" && (
+            <RecordingButton callLogId={item.meta.callLogId} />
+          )}
         </div>
       </div>
     );
@@ -694,5 +700,70 @@ function Stat({ label, value }: { label: string; value: React.ReactNode }) {
       <div className="text-[13px]">{value}</div>
       <div className="text-[10.5px] text-muted-foreground">{label}</div>
     </div>
+  );
+}
+
+/**
+ * Click-to-call from the business line: Twilio rings Spencer's cell first;
+ * he presses 1 and it dials the client, who sees the business number.
+ */
+function CallButton({ contactFubId, name, ready }: { contactFubId: string; name: string; ready: boolean }) {
+  const { toast } = useToast();
+  const call = useMutation({
+    mutationFn: async () => (await apiRequest("POST", "/api/admin/calls", { contactFubId })).json(),
+    onSuccess: () =>
+      toast({ title: "Calling your cell…", description: `Answer, then press 1 to be connected to ${name}. They'll see your business line.` }),
+    onError: (e: Error) => toast({ title: "Couldn't start the call", description: e.message.replace(/^\d+:\s*/, ""), variant: "destructive" }),
+  });
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      className="h-8 gap-1.5"
+      disabled={!ready || call.isPending}
+      title={ready ? "Ring your cell, then connect to them from the business line" : "Set up the business line first (Admin → Calendar)"}
+      onClick={() => call.mutate()}
+      data-testid="inbox-call"
+    >
+      {call.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PhoneOutgoing className="h-3.5 w-3.5" strokeWidth={1.8} />}
+      Call
+    </Button>
+  );
+}
+
+/**
+ * Plays a business-line call's recording. Fetched with the admin's auth and
+ * played from a blob — an <audio src> can't send the Authorization header.
+ */
+function RecordingButton({ callLogId }: { callLogId: number }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => () => {
+    if (url) URL.revokeObjectURL(url);
+  }, [url]);
+  if (url) return <audio src={url} controls autoPlay className="h-7 max-w-[220px]" />;
+  return (
+    <button
+      type="button"
+      className="inline-flex items-center gap-1 underline underline-offset-2 hover:text-foreground"
+      disabled={loading}
+      onClick={async () => {
+        setLoading(true);
+        setError(null);
+        try {
+          const r = await apiRequest("GET", `/api/admin/calls/${callLogId}/recording`);
+          setUrl(URL.createObjectURL(await r.blob()));
+        } catch (e: any) {
+          setError(String(e?.message ?? "Couldn't load").replace(/^\d+:\s*/, ""));
+        } finally {
+          setLoading(false);
+        }
+      }}
+      data-testid={`play-recording-${callLogId}`}
+    >
+      {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
+      {error ?? "Recording"}
+    </button>
   );
 }
