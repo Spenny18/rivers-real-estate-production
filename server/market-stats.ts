@@ -150,6 +150,22 @@ function historyFloor(): string | null {
   return r?.d ?? null;
 }
 
+/**
+ * Sales per property class in a scope over the twelve months ending now,
+ * busiest first. Classes with no sales are left out.
+ */
+export function classMix(scope: Scope, months = 12): Array<{ cls: PropertyClass; sales: number }> {
+  const since = periodBounds(shiftPeriod(currentPeriod(), -months)).start;
+  return sqlite
+    .prepare(
+      `SELECT (${CLASS_SQL}) AS cls, COUNT(*) AS sales FROM mls_history
+        WHERE status = 'S' AND close_date >= @since AND close_price >= ${MIN_SANE_PRICE}
+          AND ${scopeWhere(scope)} AND (${CLASS_SQL}) IS NOT NULL
+        GROUP BY 1 ORDER BY sales DESC`,
+    )
+    .all({ ...params(scope, "all"), since }) as Array<{ cls: PropertyClass; sales: number }>;
+}
+
 export function monthStats(scope: Scope, cls: ClassFilter, period: string, floor?: string | null): MonthStats {
   const { start, end } = periodBounds(period);
   const p = params(scope, cls, { start, end });

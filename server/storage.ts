@@ -28,6 +28,7 @@ import {
   crmDeals,
   crmActivities,
   crmSyncRuns,
+  mlsHistory,
 } from "@shared/schema";
 import type {
   User,
@@ -83,7 +84,7 @@ import type {
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
-import { eq, desc, and, gte, lte, like, sql, or, asc, inArray } from "drizzle-orm";
+import { eq, desc, and, gte, lte, like, sql, or, asc, inArray, getTableColumns } from "drizzle-orm";
 import { assignMlsAliasSlugLookup, assignMlsSeoSlugs } from "@shared/mls-url";
 
 // Use data.db for SQLite. The publish flow snapshots/restores `data.db` across
@@ -105,22 +106,49 @@ function openDb(): InstanceType<typeof Database> {
       fs.mkdirSync(dir, { recursive: true });
     }
   } catch {}
-  try {
-    const db = new Database(path);
-    // Probe for corruption with a cheap PRAGMA quick_check
-    const check = db.prepare("PRAGMA quick_check").get() as { quick_check?: string } | undefined;
-    if (check && check.quick_check && check.quick_check !== "ok") {
-      console.warn("[storage] quick_check =", check.quick_check, "— rebuilding data.db");
-      db.close();
-      try { fs.renameSync(path, path + ".corrupt." + Date.now()); } catch (e) { try { fs.unlinkSync(path); } catch {} }
-      return new Database(path);
+  // One-time restore: a file at `<DB_PATH>.restore` replaces the database at
+  // startup, before anything opens it. The file it replaces (and its WAL/SHM)
+  // is kept alongside as `.replaced.<ts>`, never deleted.
+  const restore = path + ".restore";
+  if (fs.existsSync(restore)) {
+    const stamp = Date.now();
+    for (const suffix of ["", "-wal", "-shm"]) {
+      if (fs.existsSync(path + suffix)) fs.renameSync(path + suffix, `${path}.replaced.${stamp}${suffix}`);
     }
-    return db;
-  } catch (err: any) {
-    console.error("[storage] open failed, rebuilding:", err?.message);
-    try { fs.renameSync(path, path + ".corrupt." + Date.now()); } catch (e) { try { fs.unlinkSync(path); } catch {} }
-    return new Database(path);
+    fs.renameSync(restore, path);
+    console.warn(`[storage] restored database from ${restore}; previous file kept as ${path}.replaced.${stamp}`);
   }
+
+  // A database that fails to open or fails quick_check stops the server. It
+  // used to be renamed aside and replaced with an empty database, which on
+  // 2026-10-11 (volume full → corrupt file) silently reset production to seed
+  // data: leads, deals and CRM vanished from the site while it kept serving.
+  // An outage is loud and recoverable; an empty database looks like data loss.
+  // Only a missing file starts fresh (first boot / local dev).
+  const existed = fs.existsSync(path);
+  let db: InstanceType<typeof Database>;
+  try {
+    db = new Database(path);
+  } catch (err: any) {
+    console.error(`[storage] FATAL: cannot open ${path}: ${err?.message}. Refusing to start on a replacement database.`);
+    throw err;
+  }
+  if (existed) {
+    let result: string;
+    try {
+      const check = db.prepare("PRAGMA quick_check").get() as { quick_check?: string } | undefined;
+      result = check?.quick_check ?? "no result";
+    } catch (err: any) {
+      result = err?.message ?? String(err);
+    }
+    if (result !== "ok") {
+      db.close();
+      const msg = `[storage] FATAL: ${path} failed quick_check (${result}). Refusing to start — restore it (see server/backup.ts, script/restore-backup.ts) instead of starting empty.`;
+      console.error(msg);
+      throw new Error(msg);
+    }
+  }
+  return db;
 }
 export const sqlite = openDb();
 sqlite.pragma("journal_mode = WAL");
@@ -1452,6 +1480,57 @@ try {
   console.error("[migration] failed to add png3_path to market_reports:", err);
 }
 
+// The columns MLS search result cards and map pins actually render (see
+// ResultCard / map popup in client/src/pages/mls-search.tsx). "card" view
+// returns only these — the search page doesn't need descriptions, feature
+// lists or agent details for 50 rows at a time.
+const CARD_COLUMNS = [
+  "id", "mlsNumber", "listingKey", "status", "listPrice", "soldPrice", "streetNumber", "streetName", "unit",
+  "fullAddress", "neighbourhood", "city", "province", "postalCode", "lat", "lng", "propertyType", "propertySubType",
+  "beds", "baths", "halfBaths", "sqft", "yearBuilt", "subdivision", "district", "condoFee", "previousPrice",
+  "priceChangedAt", "listDate", "daysOnMarket", "listOffice", "heroImage", "photoCount", "syncedAt",
+] as const;
+function pickCardColumns<T extends Record<string, unknown>>(cols: T): Partial<T> {
+  const out: Record<string, unknown> = {};
+  for (const k of CARD_COLUMNS) if (k in cols) out[k] = cols[k];
+  return out as Partial<T>;
+}
+
+// Targeted indexes for the listing queries that used to read every row.
+// mls_listings carries each listing's raw RETS record (raw_json), so a full
+// scan reads ~370MB — 1-2s per query on the shared CPU. Since the sync never
+// deletes, ~70% of rows are "Removed" listings these queries don't want.
+//   - subdivision / district / city: the DISTINCT lists (community matching
+//     on every neighbourhood page, the search filter lists) become index-only.
+//   - status + lower(subdivision): a community's active listings. The
+//     expression must match the query's exactly (listMlsBySubdivision).
+//   - status + city: active-by-city and the default Calgary search.
+//   - status + lat + lng: the near-point fallback (listMlsNearPoint).
+// IF NOT EXISTS makes this a no-op after the first boot that builds them.
+try {
+  const t0 = Date.now();
+  sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_mls_subdivision ON mls_listings(subdivision);
+    CREATE INDEX IF NOT EXISTS idx_mls_district ON mls_listings(district);
+    CREATE INDEX IF NOT EXISTS idx_mls_city ON mls_listings(city);
+    CREATE INDEX IF NOT EXISTS idx_mls_status_subdivision_lower ON mls_listings(status, lower(subdivision));
+    CREATE INDEX IF NOT EXISTS idx_mls_status_city ON mls_listings(status, city);
+    CREATE INDEX IF NOT EXISTS idx_mls_status_geo ON mls_listings(status, lat, lng);
+  `);
+  // Planner statistics (sqlite_stat1) were lost in the 2026-10-12 restore and
+  // new indexes need them to be chosen well. analysis_limit samples each
+  // index instead of reading it whole, so this stays fast; skip if present.
+  const hasStats = sqlite.prepare("SELECT 1 FROM sqlite_master WHERE name = 'sqlite_stat1'").get();
+  if (!hasStats) {
+    sqlite.pragma("analysis_limit = 1000");
+    sqlite.exec("ANALYZE");
+  }
+  const ms = Date.now() - t0;
+  if (ms > 500) console.log(`[migration] listing indexes/statistics ready in ${ms}ms`);
+} catch (err) {
+  console.error("[migration] failed to create listing indexes:", err);
+}
+
 export const db = drizzle(sqlite);
 
 // Convert raw row → public-shape (parse JSON arrays)
@@ -1644,6 +1723,30 @@ const SUBSCRIBER_COLS = `id, email, first_name AS firstName, last_name AS lastNa
 
 const ISSUE_COLS = `id, period, subject, preheader, content_json AS contentJson, status, scheduled_for AS scheduledFor,
   sent_at AS sentAt, recipients, delivered, failed, created_at AS createdAt, updated_at AS updatedAt`;
+
+// Page names are display labels; CREB subdivision values are the
+// authoritative community signal. Both are compared through this key
+// (lowercase, & → and, strip all non-alphanumerics).
+export function subdivisionNormKey(s: string): string {
+  return s.toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, "");
+}
+
+/**
+ * Every normalized CREB subdivision key that belongs to a neighbourhood page:
+ * its name, its name without a trailing "(Qualifier)", and curated aliases
+ * that can't be derived by normalization alone. Shared by the listing match
+ * cascade and the community-report lookup so the two always agree.
+ */
+export function neighbourhoodSubdivisionKeys(n: { slug: string; name: string }): Set<string> {
+  const SUBDIVISION_ALIASES: Record<string, string[]> = {
+    "bridgeland-riverside": ["Bridgeland/Riverside"],
+    "heritage-pointe": ["Heritage Point"],
+  };
+  const baseName = n.name.replace(/\s*\([^)]*\)\s*$/, "").trim();
+  const keys = new Set([subdivisionNormKey(n.name), subdivisionNormKey(baseName)]);
+  for (const a of SUBDIVISION_ALIASES[n.slug] ?? []) keys.add(subdivisionNormKey(a));
+  return keys;
+}
 
 export class DatabaseStorage implements IStorage {
   private mlsSlugCache: Map<string, string> | null = null;
@@ -1862,6 +1965,15 @@ export class DatabaseStorage implements IStorage {
     }
     return db.insert(mlsListings).values(data).returning().get();
   }
+  /** The recorded sale for a listing, if the sales history has one. */
+  getMlsSale(id: string): { closePrice: number | null; closeDate: string | null; daysOnMarket: number | null } | undefined {
+    return sqlite
+      .prepare(
+        `SELECT close_price AS closePrice, close_date AS closeDate, days_on_market AS daysOnMarket
+           FROM mls_history WHERE id = ? AND status = 'S'`,
+      )
+      .get(id) as any;
+  }
   getMlsListingById(id: string): MlsListing | undefined {
     return db.select().from(mlsListings).where(eq(mlsListings.id, id)).get();
   }
@@ -1994,10 +2106,26 @@ export class DatabaseStorage implements IStorage {
     sort?: "price-asc" | "price-desc" | "newest" | "sqft-desc";
     limit?: number;
     offset?: number;
+    /** "Sold" status: sales closed in the last N days (default 90). */
+    soldDays?: number;
+    /**
+     * Whether sold prices may be returned. Sold data is VOW content: only
+     * signed-in portal clients (or the admin) see it. Signed out, a "Sold"
+     * search returns just how many sold homes match, as soldLocked/soldTotal.
+     */
+    allowSold?: boolean;
+    /** "card": only the columns result cards and map pins use. */
+    view?: "card" | "full";
   }) {
+    // "Sold" isn't a status rows in mls_listings ever carry — a listing that
+    // leaves the feed is marked "Removed" with no reason. Sales live in
+    // mls_history (status 'S', with close price/date), keyed by the same
+    // ListingId, so sold results are history sales joined to their listing
+    // row (photos, details, detail page). Sales whose listing predates our
+    // sync have no listing row and are left out.
+    const wantsSold = !!opts.statuses?.some((st) => st.toLowerCase() === "sold");
+    const otherStatuses = (opts.statuses ?? []).filter((st) => st.toLowerCase() !== "sold");
     const where: any[] = [];
-    if (opts.minPrice) where.push(gte(mlsListings.listPrice, opts.minPrice));
-    if (opts.maxPrice) where.push(lte(mlsListings.listPrice, opts.maxPrice));
     if (opts.beds) where.push(gte(mlsListings.beds, opts.beds));
     if (opts.baths) where.push(gte(mlsListings.baths, opts.baths));
     if (opts.propertyType && opts.propertyType !== "Any") where.push(eq(mlsListings.propertyType, opts.propertyType));
@@ -2009,9 +2137,6 @@ export class DatabaseStorage implements IStorage {
     }
     if (opts.neighbourhood) where.push(eq(mlsListings.neighbourhood, opts.neighbourhood));
     if (opts.postalCode) where.push(like(mlsListings.postalCode, `${opts.postalCode.toUpperCase()}%`));
-    if (opts.statuses?.length) {
-      where.push(or(...opts.statuses.map((s) => eq(mlsListings.status, s)))!);
-    }
     if (opts.minSqft) where.push(gte(mlsListings.sqft, opts.minSqft));
     if (opts.maxSqft) where.push(lte(mlsListings.sqft, opts.maxSqft));
     if (opts.yearMin) where.push(gte(mlsListings.yearBuilt, opts.yearMin));
@@ -2107,34 +2232,110 @@ export class DatabaseStorage implements IStorage {
         where.push(like(mlsListings.description, `%${term}%`));
       }
     }
-    let qb: any = db.select().from(mlsListings);
-    if (where.length) qb = qb.where(and(...where));
-    switch (opts.sort) {
-      case "price-asc":
-        qb = qb.orderBy(asc(mlsListings.listPrice));
-        break;
-      case "price-desc":
-        qb = qb.orderBy(desc(mlsListings.listPrice));
-        break;
-      case "sqft-desc":
-        qb = qb.orderBy(desc(mlsListings.sqft));
-        break;
-      case "newest":
-      default:
-        qb = qb.orderBy(desc(mlsListings.listDate), desc(mlsListings.syncedAt));
-        break;
+    // Two phases. Phase 1 reads only the sort keys of every match (a few
+    // columns, no wide text) to order, count and page them; phase 2 loads full
+    // rows for just the page being returned. Loading all ~7,000 Calgary
+    // matches whole — descriptions, feature lists, the raw RETS record — only
+    // to slice 50 of them was most of the search's time.
+    type Key = { id: string; price: number; date: string; sqft: number; sold?: { price: number | null; date: string | null; dom: number | null } };
+    const keys: Key[] = [];
+    const listStatuses = wantsSold ? otherStatuses : opts.statuses ?? [];
+    if (!wantsSold || otherStatuses.length) {
+      const w = [...where];
+      if (listStatuses.length) w.push(or(...listStatuses.map((st) => eq(mlsListings.status, st)))!);
+      if (opts.minPrice) w.push(gte(mlsListings.listPrice, opts.minPrice));
+      if (opts.maxPrice) w.push(lte(mlsListings.listPrice, opts.maxPrice));
+      let qb: any = db
+        .select({ id: mlsListings.id, listPrice: mlsListings.listPrice, listDate: mlsListings.listDate, syncedAt: mlsListings.syncedAt, sqft: mlsListings.sqft })
+        .from(mlsListings);
+      if (w.length) qb = qb.where(and(...w));
+      for (const r of qb.all() as Array<{ id: string; listPrice: number; listDate: string | null; syncedAt: string | null; sqft: number | null }>) {
+        keys.push({ id: r.id, price: r.listPrice, date: r.listDate ?? r.syncedAt ?? "", sqft: r.sqft ?? 0 });
+      }
     }
-    const all = qb.all() as MlsListing[];
-    const total = all.length;
+
+    // Sales, priced on the sold price.
+    let soldLocked = false;
+    let soldTotal = 0;
+    if (wantsSold) {
+      const days = Math.max(1, Math.min(3650, opts.soldDays ?? 90));
+      const since = new Date(Date.now() - days * 86400 * 1000).toISOString().slice(0, 10);
+      const w = [...where, eq(mlsHistory.status, "S"), gte(mlsHistory.closeDate, since)];
+      if (opts.minPrice) w.push(gte(mlsHistory.closePrice, opts.minPrice));
+      if (opts.maxPrice) w.push(lte(mlsHistory.closePrice, opts.maxPrice));
+      if (opts.domMax != null) w.push(lte(mlsHistory.daysOnMarket, opts.domMax));
+      const rows = db
+        .select({
+          id: mlsListings.id,
+          listPrice: mlsListings.listPrice,
+          sqft: mlsListings.sqft,
+          closePrice: mlsHistory.closePrice,
+          closeDate: mlsHistory.closeDate,
+          dom: mlsHistory.daysOnMarket,
+        })
+        .from(mlsListings)
+        .innerJoin(mlsHistory, eq(mlsHistory.id, mlsListings.id))
+        .where(and(...w))
+        .all() as Array<{ id: string; listPrice: number; sqft: number | null; closePrice: number | null; closeDate: string | null; dom: number | null }>;
+      soldTotal = rows.length;
+      if (!opts.allowSold) {
+        soldLocked = true;
+      } else {
+        for (const r of rows) {
+          keys.push({
+            id: r.id,
+            price: r.closePrice ?? r.listPrice,
+            date: r.closeDate ?? "",
+            sqft: r.sqft ?? 0,
+            sold: { price: r.closePrice, date: r.closeDate, dom: r.dom },
+          });
+        }
+      }
+    }
+
+    // One ordering across both: newest = most recent list date (active) or
+    // close date (sold); price = asking or sold price.
+    const cmp: Record<string, (a: Key, b: Key) => number> = {
+      "price-asc": (a, b) => a.price - b.price,
+      "price-desc": (a, b) => b.price - a.price,
+      "sqft-desc": (a, b) => b.sqft - a.sqft,
+      newest: (a, b) => (b.date || "").localeCompare(a.date || ""),
+    };
+    keys.sort(cmp[opts.sort ?? "newest"] ?? cmp.newest);
+
+    const total = keys.length;
     const limit = opts.limit ?? 24;
     const offset = opts.offset ?? 0;
-    const items = all.slice(offset, offset + limit).map((row) => ({
-      ...row,
-      seoSlug: this.getMlsSeoSlug(row),
-      gallery: safeParseArray(row.gallery),
-      features: safeParseArray(row.features),
-    }));
-    return { items, total };
+    const page = keys.slice(offset, offset + limit);
+
+    // Phase 2: full rows for this page only. The raw RETS record is never
+    // returned; "card" mode (the search page) also drops the long text the
+    // result cards and map don't show.
+    const { rawJson: _raw, ...withoutRaw } = getTableColumns(mlsListings);
+    const cols = opts.view === "card" ? pickCardColumns(withoutRaw) : withoutRaw;
+    const byId = new Map<string, any>();
+    for (let i = 0; i < page.length; i += 500) {
+      const ids = page.slice(i, i + 500).map((k) => k.id);
+      for (const row of db.select(cols).from(mlsListings).where(inArray(mlsListings.id, ids)).all() as any[]) {
+        byId.set(row.id, row);
+      }
+    }
+    const items = page
+      .map((k) => {
+        const row = byId.get(k.id);
+        if (!row) return null;
+        const base = {
+          ...row,
+          seoSlug: this.getMlsSeoSlug(row),
+          gallery: "gallery" in row ? safeParseArray(row.gallery) : [],
+          features: "features" in row ? safeParseArray(row.features) : [],
+        };
+        return k.sold
+          ? { ...base, status: "Sold", soldPrice: k.sold.price, soldDate: k.sold.date, daysOnMarket: k.sold.dom ?? row.daysOnMarket }
+          : base;
+      })
+      .filter(Boolean);
+    return wantsSold ? { items, total, soldLocked, soldTotal } : { items, total };
   }
   // Featured rail on the home page: Calgary residential $4M+, newest first —
   // excluding the NE quadrant and vacant land. "Newest" = Pillar 9
@@ -2951,28 +3152,19 @@ export class DatabaseStorage implements IStorage {
     // Heights/Briar Hill", "St. Andrews" vs "St Andrews". Compare through a
     // normalization key (lowercase, & → and, strip all non-alphanumerics)
     // and strip a trailing "(Qualifier)" from the display name.
-    const normKey = (s: string) =>
-      s.toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, "");
     const baseName = n.name.replace(/\s*\([^)]*\)\s*$/, "").trim();
-    const keys = new Set([normKey(n.name), normKey(baseName)]);
-    // Curated CREB labels that belong to a page but can't be derived by
-    // normalization alone.
-    const SUBDIVISION_ALIASES: Record<string, string[]> = {
-      "bridgeland-riverside": ["Bridgeland/Riverside"],
-      "heritage-pointe": ["Heritage Point"],
-    };
-    for (const a of SUBDIVISION_ALIASES[n.slug] ?? []) keys.add(normKey(a));
+    const keys = neighbourhoodSubdivisionKeys(n);
     // A row whose subdivision names a DIFFERENT community must never appear
     // via the guess-based steps (stale legacy tags, GPS proximity), no
     // matter how close it sits. (Britannia was showing Windsor Park homes;
     // Spring Creek was showing South Canmore.)
     const subdivisionAgrees = (m: any) =>
-      !m.subdivision || keys.has(normKey(m.subdivision));
+      !m.subdivision || keys.has(subdivisionNormKey(m.subdivision));
 
     // 1. Authoritative: rows whose CREB subdivision normalizes to this page.
     let matches: MlsListing[] = [];
     const matchingSubs = this.distinctMlsValues("subdivision").filter((s) =>
-      keys.has(normKey(s)),
+      keys.has(subdivisionNormKey(s)),
     );
     for (const s of matchingSubs) {
       matches = matches.concat(this.listMlsBySubdivision(s, limit));
@@ -3500,19 +3692,27 @@ export class DatabaseStorage implements IStorage {
       (l) => l.status === "Active" && l.syncedAt > cutoff,
     );
 
-    // 2) sold — current status Sold OR removedReason=Sold within window
-    const sold = candidates.filter(
-      (l) =>
-        (l.status === "Sold" || l.removedReason === "Sold") &&
-        ((l.removedAt && l.removedAt > cutoff) || (l.syncedAt > cutoff && l.status === "Sold")),
+    // 2) sold — closed within the window per the sales history. The feed sync
+    //    marks every listing that leaves as "Removed" with reason "Unknown",
+    //    so the listing row alone can't tell a sale from an expiry; mls_history
+    //    (status 'S', close date + price) can.
+    const salesInWindow = new Map<string, number | null>(
+      (
+        sqlite
+          .prepare(`SELECT id, close_price AS price FROM mls_history WHERE status = 'S' AND close_date >= ?`)
+          .all(cutoff.slice(0, 10)) as Array<{ id: string; price: number | null }>
+      ).map((r) => [r.id, r.price]),
     );
+    const sold = candidates
+      .filter((l) => salesInWindow.has(l.id))
+      .map((l) => ({ ...l, soldPrice: salesInWindow.get(l.id) ?? l.soldPrice }));
 
-    // 3) terminated/expired/withdrawn within window (non-Sold removals)
+    // 3) terminated/expired/withdrawn within window — removals that weren't sales
     const terminated = candidates.filter(
       (l) =>
         l.removedAt &&
         l.removedAt > cutoff &&
-        l.removedReason &&
+        !salesInWindow.has(l.id) &&
         l.removedReason !== "Sold",
     );
 

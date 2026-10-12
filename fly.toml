@@ -67,5 +67,9 @@ primary_region = "sjc"
   # resolution plus the PDF) peaks around 300MB of native memory in its
   # worker process, on top of the server's own ~150MB. At 512MB that was an
   # out-of-memory kill, a restart, and a 502 for whoever pressed Regenerate.
-  memory = "1gb"
+  # 2GB since 2026-10-12: at 1GB the server (~390MB) plus a report worker
+  # (~230MB) left too little page cache for the ~370MB database, so every
+  # query went to disk, renders/crawls stalled the event loop, and Fly's
+  # health check failed (503s). The whole DB now fits in cache.
+  memory = "2gb"
   cpus = 1

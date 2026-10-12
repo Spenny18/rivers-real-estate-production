@@ -5,13 +5,145 @@ import { useEffect } from "react";
 import { useMap } from "react-leaflet";
 import L from "leaflet";
 
-// OpenStreetMap's standard public tiles do not require an API key. Keep the
-// provider in one place so every public map uses the same supported source.
+// Basemap: OpenFreeMap's "Positron" vector style (free, no API key, OK for
+// commercial use) recoloured Airbnb-style — grey land and roads, with soft
+// blue water and green parks/woods as the only colour besides the pills.
+// Rendered inside Leaflet via maplibre-gl-leaflet so markers/clusters are
+// unchanged. Falls back to greyscaled OSM raster tiles if WebGL or the style
+// fetch fails.
+export const RIVERS_STYLE_URL = "https://tiles.openfreemap.org/styles/positron";
+export const RIVERS_BASEMAP_ATTRIBUTION =
+  '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> &copy; <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors';
+
 export const RIVERS_TILE_URL =
   "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
 export const RIVERS_TILE_SUBDOMAINS = ["a", "b", "c"];
+export const RIVERS_TILE_CLASS = "rivers-tiles";
 export const RIVERS_TILE_ATTRIBUTION =
   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+
+export const RIVERS_BASEMAP_COLORS = {
+  water: "#c3dbea",
+  waterway: "#a9cbe0",
+  waterLabel: "#4f7590",
+  park: "#d6e8cf",
+  wood: "#cde3c4",
+  grass: "#dcebd5",
+} as const;
+
+// Style is fetched once per page load and shared by every map instance.
+let stylePromise: Promise<any> | null = null;
+function loadRiversStyle(): Promise<any> {
+  if (!stylePromise) {
+    stylePromise = fetch(RIVERS_STYLE_URL)
+      .then((r) => {
+        if (!r.ok) throw new Error(`style ${r.status}`);
+        return r.json();
+      })
+      .then(recolourStyle)
+      .catch((err) => {
+        stylePromise = null;
+        throw err;
+      });
+  }
+  return stylePromise;
+}
+
+function recolourStyle(style: any) {
+  const c = RIVERS_BASEMAP_COLORS;
+  const layers: any[] = style.layers ?? [];
+  const byId = (id: string) => layers.find((l) => l.id === id);
+  const paint = (id: string, props: Record<string, unknown>) => {
+    const l = byId(id);
+    if (l) l.paint = { ...(l.paint ?? {}), ...props };
+  };
+  paint("water", { "fill-color": c.water });
+  paint("waterway", { "line-color": c.waterway });
+  paint("park", { "fill-color": c.park });
+  paint("landcover_wood", { "fill-color": c.wood });
+  for (const id of ["water_name_point_label", "water_name_line_label", "waterway_line_label"]) {
+    paint(id, { "text-color": c.waterLabel });
+  }
+  // Positron has no grass layer — add one so golf courses, fields and
+  // green belts read green too.
+  const woodIdx = layers.findIndex((l) => l.id === "landcover_wood");
+  if (woodIdx >= 0 && !byId("landcover_grass")) {
+    layers.splice(woodIdx + 1, 0, {
+      id: "landcover_grass",
+      type: "fill",
+      source: "openmaptiles",
+      "source-layer": "landcover",
+      filter: ["==", ["get", "class"], "grass"],
+      paint: {
+        "fill-color": c.grass,
+        "fill-opacity": ["interpolate", ["linear"], ["zoom"], 8, 0, 12, 0.9],
+      },
+    });
+  }
+  return style;
+}
+
+function supportsWebGL(): boolean {
+  try {
+    const canvas = document.createElement("canvas");
+    return !!(canvas.getContext("webgl2") || canvas.getContext("webgl"));
+  } catch {
+    return false;
+  }
+}
+
+// Drop-in replacement for <TileLayer>: render inside any <MapContainer>.
+// maplibre-gl is imported dynamically so it never loads during SSR.
+export function RiversBasemap() {
+  const map = useMap();
+  useEffect(() => {
+    let cancelled = false;
+    let layer: L.Layer | null = null;
+
+    const useRasterFallback = () => {
+      if (cancelled) return;
+      layer = L.tileLayer(RIVERS_TILE_URL, {
+        subdomains: RIVERS_TILE_SUBDOMAINS,
+        attribution: RIVERS_TILE_ATTRIBUTION,
+        className: RIVERS_TILE_CLASS,
+      }).addTo(map);
+    };
+
+    if (!supportsWebGL()) {
+      useRasterFallback();
+    } else {
+      Promise.all([
+        loadRiversStyle(),
+        import("@maplibre/maplibre-gl-leaflet"),
+        import("maplibre-gl/dist/maplibre-gl.css"),
+      ])
+        .then(([style, mod]) => {
+          if (cancelled) return;
+          layer = mod.maplibreGL({ style, attributionControl: false } as any);
+          (layer as any).options.attribution = RIVERS_BASEMAP_ATTRIBUTION;
+          layer.addTo(map);
+        })
+        .catch(useRasterFallback);
+    }
+
+    // Leaflet only re-measures on window resize. Maps that mount hidden
+    // (mobile list/map toggle) or change size with the layout would keep a
+    // 0×0 GL canvas and misplaced markers, so watch the container directly.
+    const container = map.getContainer();
+    const observer =
+      typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => map.invalidateSize())
+        : null;
+    observer?.observe(container);
+
+    return () => {
+      cancelled = true;
+      observer?.disconnect();
+      if (layer) map.removeLayer(layer);
+    };
+  }, [map]);
+  return null;
+}
 
 // Brand palette — kept here so any new map references the same swatches.
 export const RIVERS_MAP_COLORS = {

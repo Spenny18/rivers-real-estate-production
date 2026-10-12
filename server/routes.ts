@@ -19,7 +19,8 @@ import { pushLeadToFollowUpBoss } from "./follow-up-boss";
 import { getNeighbourhoodPolygon } from "./neighbourhood-polygons";
 import { pointInGeometry } from "./point-in-polygon";
 import { fetchValuation } from "./gnowise";
-import { sendEmail, buildValuationEmailHtml } from "./email";
+import { sendEmail, buildValuationEmailHtml, buildCommunityReportEmailHtml } from "./email";
+import { classOptions, isClassFilter, previewReport, publicReportTeaser, reportForClass } from "./neighbourhood-reports";
 import {
   getPageContent,
   getPublicPageContent,
@@ -33,6 +34,7 @@ import { invalidateSsrCache } from "./ssr";
 import * as seoReports from "./seo-report-cache";
 
 import { publicOrigin } from "./origin";
+import { accountEmailFromRequest } from "./account";
 import { freshestLastmod, indexNowKey, INDEXNOW_KEY_PATH, lastRecrawl } from "./recrawl";
 const execFileAsync = promisify(execFile);
 
@@ -2013,7 +2015,14 @@ export async function registerRoutes(
       sort: q.sort as any,
       limit: num(q.limit) ?? 24,
       offset: num(q.offset) ?? 0,
+      soldDays: num(q.soldDays),
+      view: q.view === "card" ? "card" : "full",
+      // Sold prices are VOW data: signed-in portal clients and the admin only.
+      allowSold: !!accountEmailFromRequest(req) || resolveUserId(req) !== null,
     });
+    // Personalised by sign-in state — never let a shared cache serve one
+    // visitor's sold results to another.
+    if ("soldLocked" in result) res.set("Cache-Control", "private, no-store");
     res.json(result);
   });
 
@@ -2080,8 +2089,24 @@ export async function registerRoutes(
       try { return JSON.parse(s); } catch { return []; }
     };
     const similar = storage.listSimilarMls(listing, 4);
+    // A listing that left the feed is only "Removed"; if the sales history
+    // has it as sold, show it as Sold. The sold price and date are VOW data
+    // for signed-in clients / the admin; others see "Sold" without them.
+    const sale = storage.getMlsSale(listing.id);
+    const soldVisible = !!sale && (!!accountEmailFromRequest(req) || resolveUserId(req) !== null);
+    const soldFields = sale
+      ? {
+          status: "Sold",
+          soldPrice: soldVisible ? sale.closePrice : null,
+          soldDate: soldVisible ? sale.closeDate : null,
+          daysOnMarket: soldVisible ? (sale.daysOnMarket ?? listing.daysOnMarket) : listing.daysOnMarket,
+          soldLocked: !soldVisible,
+        }
+      : {};
+    if (sale) res.set("Cache-Control", "private, no-store");
     res.json({
       ...listing,
+      ...soldFields,
       seoSlug: storage.getMlsSeoSlug(listing),
       gallery: safeParse(listing.gallery as any),
       features: safeParse(listing.features as any),
@@ -3227,6 +3252,109 @@ export async function registerRoutes(
         error: err?.message ?? "Overpass error",
       });
     }
+  });
+
+  // ---------- Community report lead magnet (neighbourhood pages) ----------
+  // GET: page 1 of the community's latest report as a teaser — never the PDF.
+  // 404 when the community has no report yet; the page then hides the block.
+  app.get("/api/public/neighbourhoods/:slug/report", (req, res) => {
+    const n = storage.getNeighbourhoodBySlug(req.params.slug);
+    if (!n) return res.status(404).json({ message: "Neighbourhood not found" });
+    const preview = previewReport(n);
+    if (!preview) return res.status(404).json({ message: "No report yet" });
+    res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=3600");
+    res.json(publicReportTeaser(preview.report, preview.scope));
+  });
+
+  // POST: email the full PDF to the visitor and capture them as a lead
+  // (admin leads list + Spencer's notification + Follow Up Boss).
+  app.post("/api/public/neighbourhoods/:slug/report", inquiryLimiter, async (req, res) => {
+    const n = storage.getNeighbourhoodBySlug(String(req.params.slug));
+    if (!n) return res.status(404).json({ ok: false, message: "Neighbourhood not found" });
+    const name = String(req.body?.name ?? "").trim().slice(0, 120);
+    const email = String(req.body?.email ?? "").trim().slice(0, 200);
+    const phone = String(req.body?.phone ?? "").trim().slice(0, 40);
+    if (name.length < 2 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ ok: false, message: "Please enter your name and a valid email." });
+    }
+    const preview = previewReport(n);
+    if (!preview) {
+      return res.status(404).json({ ok: false, message: "This report isn't available yet." });
+    }
+    // The visitor picks the property class; default to the preview's.
+    const cls = req.body?.cls ?? preview.report.cls;
+    if (!isClassFilter(cls) || !classOptions(preview.scope).some((o) => o.value === cls)) {
+      return res.status(400).json({ ok: false, message: "Please choose a property type." });
+    }
+    let report;
+    try {
+      report = await reportForClass(preview.scope, cls);
+    } catch (e: any) {
+      console.error(`[community report] generate failed for ${n.slug} ${cls}:`, e?.message ?? e);
+      return res.status(500).json({ ok: false, message: "We couldn't prepare that report. Please try again or call (403) 966-9237." });
+    }
+
+    const origin = publicOrigin().replace(/\/+$/, "");
+    const teaser = publicReportTeaser(report, preview.scope);
+    const reportLabel = `${n.name} ${report.subtitle} market report (${teaser.periodLabel})`;
+
+    const visitorEmail = await sendEmail({
+      to: email,
+      subject: `Your ${n.name} ${report.subtitle} market report — ${teaser.periodLabel}`,
+      html: buildCommunityReportEmailHtml({
+        recipientName: name,
+        communityName: n.name,
+        subtitle: report.subtitle,
+        periodLabel: teaser.periodLabel,
+        pdfUrl: `${origin}${report.pdfUrl}`,
+        previewUrl: `${origin}${report.png1Url}`,
+        pageUrl: `${origin}/neighbourhoods/${n.slug}`,
+        origin,
+      }),
+      replyTo: "spencer@riversrealestate.ca",
+      track: { kind: "community-report" },
+    });
+
+    const source = "Community report request";
+    const message = [
+      `Requested the ${reportLabel} from the /neighbourhoods/${n.slug} page.`,
+      visitorEmail.ok ? `Report emailed to ${email}.` : `Report email FAILED to send: ${visitorEmail.error ?? "unknown error"}`,
+    ].join("\n");
+    const lead = storage.createLead({
+      listingId: null as any,
+      name,
+      email,
+      phone: phone || (null as any),
+      message,
+      source,
+      status: "new",
+    } as any);
+    sendInquiryEmail({
+      name,
+      email,
+      phone: phone || undefined,
+      message,
+      listingTitle: reportLabel,
+    }).then((r) => {
+      if (!r.ok) console.warn("[community report] spencer notify failed:", r.error);
+    });
+    pushLeadToFollowUpBoss({
+      name,
+      email,
+      phone: phone || undefined,
+      message,
+      source,
+    }).then((r) => {
+      if (!r.ok && !r.skipped) console.warn("[community report] FUB push failed:", r.error);
+    });
+
+    res.json({
+      ok: visitorEmail.ok,
+      leadId: lead.id,
+      message: visitorEmail.ok
+        ? "Sent — check your inbox."
+        : "We couldn't send the email. Please try again or call (403) 966-9237.",
+    });
   });
 
   // GET /api/public/neighbourhoods/:slug/pois — same shape as the MLS/condo

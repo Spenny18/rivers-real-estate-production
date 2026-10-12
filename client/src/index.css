@@ -268,3 +268,8 @@
     inset: -1px;
   }
 }
+
+/* Map basemap — monochrome (black/grey), softened Airbnb-style tiles. */
+.leaflet-tile-pane .rivers-tiles {
+  filter: grayscale(1) brightness(1.06) contrast(0.82);
+}

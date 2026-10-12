@@ -353,7 +353,9 @@ export class RetsClient {
     if (contentType.includes("xml") || contentType.includes("text")) {
       const text = await res.text();
       // RETS error shape: <RETS ReplyCode="20403" ReplyText="No Object Found"/>
-      if (/ReplyCode=\"(?!0\")/.test(text)) return null;
+      // Only 20403 means the photo doesn't exist; any other code (session,
+      // throttling, server busy) is a failure the caller should retry.
+      if (/ReplyCode="20403"/.test(text)) return null;
       // Otherwise treat as opaque error
       throw new Error(`GetObject returned non-binary: ${text.slice(0, 200)}`);
     }

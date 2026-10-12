@@ -1,6 +1,6 @@
 import { Link, useRoute } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { MapContainer, TileLayer, Marker } from "react-leaflet";
+import { MapContainer, Marker } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { ChevronLeft, MapPin, ArrowRight, Building2, Layers, Calendar } from "lucide-react";
@@ -13,9 +13,7 @@ import { apiUrl } from "@/lib/queryClient";
 import { mlsPropertyPath } from "@shared/mls-url";
 import { SeoHead } from "@/components/seo-head";
 import {
-  RIVERS_TILE_ATTRIBUTION,
-  RIVERS_TILE_SUBDOMAINS,
-  RIVERS_TILE_URL,
+  RiversBasemap,
 } from "@/components/rivers-map";
 
 interface CondoDetail {
@@ -440,11 +438,7 @@ export default function CondoDetailPage() {
               scrollWheelZoom={false}
               style={{ height: "100%", width: "100%" }}
             >
-              <TileLayer
-                attribution={RIVERS_TILE_ATTRIBUTION}
-                url={RIVERS_TILE_URL}
-                subdomains={RIVERS_TILE_SUBDOMAINS}
-              />
+              <RiversBasemap />
               <Marker position={[data.lat, data.lng]} icon={propertyIcon} />
             </MapContainer>
           </ClientOnly>

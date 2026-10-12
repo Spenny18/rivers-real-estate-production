@@ -9,7 +9,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   MapContainer,
-  TileLayer,
   Marker,
   CircleMarker,
   Tooltip,
@@ -22,9 +21,7 @@ import "leaflet/dist/leaflet.css";
 import { apiUrl } from "@/lib/queryClient";
 import { ClientOnly } from "@/components/client-only";
 import {
-  RIVERS_TILE_ATTRIBUTION,
-  RIVERS_TILE_SUBDOMAINS,
-  RIVERS_TILE_URL,
+  RiversBasemap,
 } from "@/components/rivers-map";
 
 const propertyIcon = L.divIcon({
@@ -278,11 +275,7 @@ function NeighbourhoodPoisInner({
             scrollWheelZoom={false}
             style={{ height: "100%", width: "100%" }}
           >
-            <TileLayer
-              attribution={RIVERS_TILE_ATTRIBUTION}
-              url={RIVERS_TILE_URL}
-              subdomains={RIVERS_TILE_SUBDOMAINS}
-            />
+            <RiversBasemap />
             <Circle
               center={[lat, lng]}
               radius={1000}

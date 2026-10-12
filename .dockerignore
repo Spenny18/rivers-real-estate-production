@@ -16,3 +16,6 @@ data.db*
 .vscode
 .idea
 *.tsbuildinfo
+
+# Claude Code worktrees, session data and settings — never part of the image
+.claude

@@ -12,7 +12,7 @@
 
 import "dotenv/config";
 import { RetsClient, RetsAuthError } from "./rets-client";
-import { storage } from "./storage";
+import { sqlite, storage } from "./storage";
 import type { InsertMlsListing } from "@shared/schema";
 import { propertyFields, optionalSelect, candidateFields } from "./rets-fields";
 import { DETAIL_FIELDS, upsertListingDetails } from "./listing-details";
@@ -318,16 +318,22 @@ export async function runSync(): Promise<{
         });
         if (result.rows.length === 0) break;
         fetched += result.rows.length;
-        for (const row of result.rows) {
-          // No city post-filter — we want the whole Pillar 9 service area
-          // (Calgary + Rocky View + Foothills + Cochrane + Airdrie + …).
-          const listing = normalizeListing(row, optional);
-          if (!listing) continue;
-          storage.upsertMlsListing(listing);
-          if (details.length) upsertListingDetails(listing.id, Object.fromEntries(details.map((o) => [o.column, rawText(row[o.field])])));
-          seenIds.add(listing.id);
-          upserted++;
-        }
+        // One transaction per page: 200 upserts as a single commit instead of
+        // 200, so the page saves in a fraction of the time and the event loop
+        // (which serves the site) is free again while the next page downloads.
+        // Per-row commits kept the server busy for seconds each hourly sync.
+        sqlite.transaction(() => {
+          for (const row of result.rows) {
+            // No city post-filter — we want the whole Pillar 9 service area
+            // (Calgary + Rocky View + Foothills + Cochrane + Airdrie + …).
+            const listing = normalizeListing(row, optional);
+            if (!listing) continue;
+            storage.upsertMlsListing(listing);
+            if (details.length) upsertListingDetails(listing.id, Object.fromEntries(details.map((o) => [o.column, rawText(row[o.field])])));
+            seenIds.add(listing.id);
+            upserted++;
+          }
+        })();
         if (result.rows.length < pageSize) break;
         offset += pageSize;
         // Safety cap per prefix — generous so we can cover dense urban prefixes

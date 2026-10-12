@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { MapContainer, TileLayer, Marker, useMap } from "react-leaflet";
+import { MapContainer, Marker, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import {
@@ -16,7 +16,7 @@ import {
   Bookmark,
   BookmarkCheck,
 } from "lucide-react";
-import { useAccount, useCreateSavedSearch } from "@/lib/account";
+import { useAccount, useCreateSavedSearch, loginHref } from "@/lib/account";
 import { toast as showToast } from "@/hooks/use-toast";
 import { PublicLayout } from "@/components/public-layout";
 import { Button } from "@/components/ui/button";
@@ -40,9 +40,7 @@ import type {
 import { Link } from "wouter";
 import { mlsPropertyPath } from "@shared/mls-url";
 import {
-  RIVERS_TILE_ATTRIBUTION,
-  RIVERS_TILE_SUBDOMAINS,
-  RIVERS_TILE_URL,
+  RiversBasemap,
 } from "@/components/rivers-map";
 
 const PAGE_SIZE = 50;
@@ -116,6 +114,7 @@ interface Filters {
   condoFeeMax: string;
   keywords: string;
   statuses: string; // multi (csv)
+  soldDays: string; // "Sold" window in days (30 | 90 | 180 | 365)
   sort: string;
 }
 
@@ -163,6 +162,7 @@ const DEFAULT_FILTERS: Filters = {
   condoFeeMax: "",
   keywords: "",
   statuses: "Active",
+  soldDays: "90",
   sort: "newest",
 };
 
@@ -382,7 +382,7 @@ function parseQuery(qs: string): Partial<Filters> {
     "basements", "basementDevelopments", "parkingFeatures", "lotFeatures",
     "laundryFeatures", "appliances", "levels", "structureTypes",
     "architecturalStyles", "accessibilityFeatures", "associationAmenities",
-    "views", "subdivisions", "districts", "neighbourhood", "condoFeeMax", "keywords", "statuses", "sort",
+    "views", "subdivisions", "districts", "neighbourhood", "condoFeeMax", "keywords", "statuses", "soldDays", "sort",
   ];
   for (const k of map) {
     const v = params.get(k);
@@ -402,10 +402,12 @@ function priceShort(price: number): string {
 }
 
 // Build a price pill divIcon for a single listing marker
-function buildPriceIcon(price: number, selected = false) {
+function buildPriceIcon(price: number, selected = false, sold = false) {
   const label = priceShort(price);
-  const bg = selected ? "#23412d" : "#ffffff";
-  const fg = selected ? "#ffffff" : "#0a0a0a";
+  // Sold homes read as black pills (RIVERS_MAP_COLORS.pillSoldBg); selected
+  // stays forest green either way.
+  const bg = selected ? "#23412d" : sold ? "#0a0a0a" : "#ffffff";
+  const fg = selected || sold ? "#ffffff" : "#0a0a0a";
   return L.divIcon({
     className: "rivers-price-pill",
     html: `<div style="
@@ -518,12 +520,38 @@ function ZoomTracker({ onZoom }: { onZoom: (z: number) => void }) {
   return null;
 }
 
-function FitBoundsOnce({ points }: { points: Array<[number, number]> }) {
+function FitBoundsOnce({
+  points,
+  keepDefaultView,
+}: {
+  points: Array<[number, number]>;
+  keepDefaultView: boolean;
+}) {
   const map = useMap();
   const fittedRef = useRef(false);
+  // On mobile the map mounts hidden behind the list view (0×0), where
+  // fitBounds computes a nonsense zoom. Re-run once it has a real size.
+  const [sized, setSized] = useState(() => map.getSize().x > 0);
+  useEffect(() => {
+    if (sized) return;
+    const onResize = () => {
+      if (map.getSize().x > 0) setSized(true);
+    };
+    map.on("resize", onResize);
+    return () => {
+      map.off("resize", onResize);
+    };
+  }, [map, sized]);
   useEffect(() => {
     if (fittedRef.current) return;
+    if (!sized) return;
     if (points.length === 0) return;
+    // City-wide search (the default): stay on the MapContainer's central
+    // Calgary view instead of zooming out to fit a few outlying listings.
+    if (keepDefaultView) {
+      fittedRef.current = true;
+      return;
+    }
     // Default-state heuristic: when the unfiltered result set is huge
     // (thousands of listings spread across Calgary metro + outlying towns),
     // auto-fitting zooms out to a non-useful "all of Southern Alberta" view.
@@ -542,7 +570,7 @@ function FitBoundsOnce({ points }: { points: Array<[number, number]> }) {
     const bounds = L.latLngBounds(points);
     map.fitBounds(bounds, { padding: [60, 60], maxZoom: 13 });
     fittedRef.current = true;
-  }, [map, points]);
+  }, [map, points, sized, keepDefaultView]);
   return null;
 }
 
@@ -586,7 +614,7 @@ export default function MlsSearchPage() {
   }
   function handleSaveSearch() {
     if (!portalMe) {
-      window.location.href = "/account/login";
+      window.location.href = loginHref();
       return;
     }
     createSearch.mutate(
@@ -630,6 +658,7 @@ export default function MlsSearchPage() {
       if (!v) return;
       if (v === "any") return;
       if (k === "statuses" && v === "Active") return;
+      if (k === "soldDays" && (v === "90" || !/sold/i.test(filters.statuses))) return;
       if (k === "sort" && v === "newest") return;
       params.set(k, v);
     });
@@ -683,14 +712,18 @@ export default function MlsSearchPage() {
     if (filters.condoFeeMax) p.set("condoFeeMax", filters.condoFeeMax);
     if (filters.keywords) p.set("keywords", filters.keywords);
     if (filters.statuses) p.set("statuses", filters.statuses);
+    if (/sold/i.test(filters.statuses) && filters.soldDays) p.set("soldDays", filters.soldDays);
     if (filters.sort) p.set("sort", filters.sort);
     p.set("limit", String(PAGE_SIZE));
     p.set("offset", String(page * PAGE_SIZE));
+    // Slim rows: just what the result cards and map pins render.
+    p.set("view", "card");
     return p.toString();
   }, [filters, page]);
 
   const { data, isLoading } = useQuery<MlsSearchResult>({
-    queryKey: ["/api/public/mls/search", queryString],
+    // Sign-in state is part of the key: sold prices appear once signed in.
+    queryKey: ["/api/public/mls/search", queryString, portalMe?.email ?? null],
     queryFn: async () => {
       const r = await apiRequest("GET", `/api/public/mls/search?${queryString}`);
       return r.json();
@@ -761,6 +794,18 @@ export default function MlsSearchPage() {
     l.lng as number,
   ]);
   const calgaryCenter: [number, number] = [51.0447, -114.0719];
+  // No location narrower than "Calgary" → keep the default city view.
+  const isCityWideSearch =
+    !filters.q.trim() &&
+    !filters.postalCode.trim() &&
+    !filters.subdivisions.trim() &&
+    !filters.districts.trim() &&
+    !filters.neighbourhood.trim() &&
+    filters.cities
+      .split(",")
+      .map((c) => c.trim().toLowerCase())
+      .filter(Boolean)
+      .every((c) => c === "calgary");
 
   const clusters = useMemo(() => clusterListings(mapItems, zoom), [mapItems, zoom]);
 
@@ -786,13 +831,9 @@ export default function MlsSearchPage() {
               style={{ height: "100%", width: "100%", background: "#f5f5f5" }}
               zoomControl={true}
             >
-              <TileLayer
-                attribution={RIVERS_TILE_ATTRIBUTION}
-                url={RIVERS_TILE_URL}
-                subdomains={RIVERS_TILE_SUBDOMAINS}
-              />
+              <RiversBasemap />
               <ZoomTracker onZoom={setZoom} />
-              <FitBoundsOnce points={mapPoints} />
+              <FitBoundsOnce points={mapPoints} keepDefaultView={isCityWideSearch} />
 
               {clusters.map((c, idx) => {
                 if (c.kind === "single") {
@@ -801,7 +842,11 @@ export default function MlsSearchPage() {
                     <Marker
                       key={`s-${c.listing.id}`}
                       position={[c.lat, c.lng]}
-                      icon={buildPriceIcon(c.listing.listPrice, isSelected)}
+                      icon={
+                        c.listing.status === "Sold"
+                          ? buildPriceIcon(c.listing.soldPrice ?? c.listing.listPrice, isSelected, true)
+                          : buildPriceIcon(c.listing.listPrice, isSelected)
+                      }
                       zIndexOffset={isSelected ? 1000 : 0}
                       eventHandlers={{
                         click: () => {
@@ -1402,6 +1447,21 @@ export default function MlsSearchPage() {
                         cols={3}
                       />
                     </FilterRow>
+                    {/sold/i.test(filters.statuses) && (
+                      <FilterRow label="Sold within">
+                        <select
+                          value={filters.soldDays || "90"}
+                          onChange={(e) => updateFilter("soldDays", e.target.value)}
+                          className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                          data-testid="select-sold-days"
+                        >
+                          <option value="30">Last 30 days</option>
+                          <option value="90">Last 90 days</option>
+                          <option value="180">Last 6 months</option>
+                          <option value="365">Last 12 months</option>
+                        </select>
+                      </FilterRow>
+                    )}
                   </FilterSection>
 
                   <div className="pt-4 flex items-center gap-3">
@@ -1443,10 +1503,15 @@ export default function MlsSearchPage() {
                 Properties
               </h1>
               <div className="text-[13px] text-muted-foreground mt-0.5" style={{ fontFamily: "Manrope, sans-serif" }}>
-                {isLoading ? "Searching…" : (
+                {isLoading ? "Searching…" : data?.soldLocked && total === 0 ? (
+                  <>{(data.soldTotal ?? 0).toLocaleString()} sold homes · sign in to view</>
+                ) : (
                   <>
                     Showing {Math.min(items.length, total).toLocaleString()} of{" "}
                     <span data-testid="text-result-count">{total.toLocaleString()}</span> properties
+                    {data?.soldLocked && (data.soldTotal ?? 0) > 0 && (
+                      <> · {(data.soldTotal ?? 0).toLocaleString()} sold (sign in)</>
+                    )}
                   </>
                 )}
               </div>
@@ -1455,6 +1520,9 @@ export default function MlsSearchPage() {
 
           {/* List body */}
           <div className="flex-1 overflow-y-auto" style={{ overscrollBehavior: "contain" }}>
+            {data?.soldLocked && (
+              <SoldSignInPrompt count={data.soldTotal ?? 0} days={filters.soldDays || "90"} />
+            )}
             {isLoading ? (
               <div className="p-5 space-y-4">
                 {Array.from({ length: 6 }).map((_, i) => (
@@ -1469,7 +1537,7 @@ export default function MlsSearchPage() {
                 ))}
               </div>
             ) : items.length === 0 ? (
-              <EmptyState onReset={resetFilters} />
+              data?.soldLocked ? null : <EmptyState onReset={resetFilters} />
             ) : (
               <div>
                 <div className="divide-y divide-border/60">
@@ -1768,6 +1836,14 @@ function ResultCard({
             </div>
           )}
           {/* Status badge top-right */}
+          {listing.status === "Sold" && (
+            <span
+              className="absolute top-2 right-2 px-2 py-0.5 rounded-sm text-white text-[9.5px] tracking-[0.1em] font-semibold uppercase"
+              style={{ background: "rgba(10,10,10,0.92)" }}
+            >
+              Sold
+            </span>
+          )}
           {listing.status === "Active" && (
             <span
               className="absolute top-2 right-2 px-2 py-0.5 rounded-sm text-white text-[9.5px] tracking-[0.1em] font-semibold uppercase"
@@ -1791,8 +1867,15 @@ function ResultCard({
             className="text-[20px] tabular-nums text-foreground"
             style={{ fontWeight: 800, letterSpacing: "-0.02em", lineHeight: 1.1 }}
           >
-            ${listing.listPrice.toLocaleString()}
+            ${(listing.status === "Sold" && listing.soldPrice != null ? listing.soldPrice : listing.listPrice).toLocaleString()}
           </div>
+          {listing.status === "Sold" && (
+            <div className="text-[11.5px] text-muted-foreground mt-0.5 tabular-nums">
+              {listing.soldDate ? `Sold ${formatSoldDate(listing.soldDate)}` : "Sold"}
+              {listing.soldPrice != null && listing.listPrice ? ` · listed $${listing.listPrice.toLocaleString()}` : ""}
+              {listing.daysOnMarket != null ? ` · ${listing.daysOnMarket} days` : ""}
+            </div>
+          )}
           <div className="text-[13.5px] text-foreground mt-1.5 flex items-start gap-1.5 leading-snug">
             <MapPin className="w-3.5 h-3.5 shrink-0 mt-0.5 text-muted-foreground" strokeWidth={1.7} />
             <span className="line-clamp-2">{listing.fullAddress}</span>
@@ -1823,6 +1906,37 @@ function ResultCard({
         </div>
       
     </Link>
+  );
+}
+
+function formatSoldDate(d: string): string {
+  const [y, m, day] = d.split("-").map(Number);
+  if (!y || !m || !day) return d;
+  return new Date(y, m - 1, day).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" });
+}
+
+// VOW: sold prices are for signed-in clients. Signed out, a "Sold" search
+// says how many homes sold and asks them to sign in (free, magic link).
+function SoldSignInPrompt({ count, days }: { count: number; days: string }) {
+  const window = days === "365" ? "12 months" : days === "180" ? "6 months" : `${days} days`;
+  return (
+    <div className="m-5 border border-border border-l-4 border-l-[#0a0a0a] p-5 bg-secondary/40" data-testid="sold-signin-prompt">
+      <div className="font-display text-[10px] tracking-[0.22em] text-muted-foreground">SOLD HOMES</div>
+      <div className="mt-2 font-serif text-xl leading-snug">
+        {count.toLocaleString()} {count === 1 ? "home" : "homes"} sold in the last {window}
+      </div>
+      <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
+        Sold prices, dates and days on market are available to registered clients. Sign in
+        with your email to see them. It's free and takes a few seconds.
+      </p>
+      <a
+        href={loginHref()}
+        className="mt-4 inline-flex h-10 items-center rounded-sm bg-foreground px-5 font-display text-[11px] tracking-[0.22em] text-background"
+        data-testid="link-sold-signin"
+      >
+        SIGN IN TO SEE SOLD PRICES
+      </a>
+    </div>
   );
 }
 

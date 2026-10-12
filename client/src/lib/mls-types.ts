@@ -7,6 +7,10 @@ export interface PublicMlsListing {
   status: string;
   listPrice: number;
   soldPrice: number | null;
+  /** YYYY-MM-DD close date — sold results for signed-in clients only. */
+  soldDate?: string | null;
+  /** True when the listing sold but the viewer isn't signed in (VOW). */
+  soldLocked?: boolean;
   fullAddress: string;
   neighbourhood: string | null;
   subdivision: string | null;
@@ -118,6 +122,9 @@ export interface PublicStats {
 export interface MlsSearchResult {
   items: PublicMlsListing[];
   total: number;
+  /** Present when "Sold" was requested: signed out, sold rows are withheld. */
+  soldLocked?: boolean;
+  soldTotal?: number;
 }
 
 // Helper for parsing JSON-encoded array fields on neighbourhoods.
