@@ -124,18 +124,18 @@ function residentialPurchaseContract(): FormTemplateField[] {
   const md = { dataType: "date" as const, format: "month-day" };
   const yy = { dataType: "date" as const, format: "yy", align: "center" as const };
 
+  // Buyer's side, like the condo contract: no seller signature, initials or
+  // conveyancing boxes. Seller names are typed (listing.sellerName*, never
+  // signers); the seller's brokerage comes from the MLS listing.
   for (let p = 1; p <= 6; p++) b.blank(p, 478, 574, 748.3, "document.number", { h: 12, align: "center" });
-  // Footer initials on pages 1–5: two sellers, two buyers.
+  // Footer initials on pages 1–5: two buyers.
   for (let p = 1; p <= 5; p++) {
-    b.sign(p, 191, 235, 52, 12, "seller", 0, "initials")
-      .sign(p, 244, 287, 52, 12, "seller", 1, "initials")
-      .sign(p, 372, 415, 52, 12, "buyer", 0, "initials")
-      .sign(p, 424, 468, 52, 12, "buyer", 1, "initials");
+    b.sign(p, 372, 415, 52, 12, "buyer", 0, "initials").sign(p, 424, 468, 52, 12, "buyer", 1, "initials");
   }
 
-  // Page 1 — parties and the property.
-  b.blank(1, 66, 292, 668.4, "seller.1.name")
-    .blank(1, 66, 292, 649.9, "seller.2.name")
+  // Page 1 — sellers (names only), buyers and the property.
+  b.blank(1, 66, 292, 668.4, "listing.sellerName1")
+    .blank(1, 66, 292, 649.9, "listing.sellerName2")
     .blank(1, 347, 574, 668.4, "buyer.1.name")
     .blank(1, 347, 574, 649.9, "buyer.2.name")
     .blank(1, 168, 573, 589.3, "property.street")
@@ -189,7 +189,7 @@ function residentialPurchaseContract(): FormTemplateField[] {
   // exported from WEBForms already carries the agent's standard clauses.)
   b.blank(4, 106, 573, 623.5, "offer.otherAttachment");
 
-  // Page 5 — brokerages and the confirmation initials.
+  // Page 5 — both brokerages (the seller's from the MLS listing) and the confirmation initials.
   b.blank(5, 89, 306, 443, "listing.brokerage")
     .blank(5, 105, 306, 426.7, "listing.brokerageAddress")
     .blank(5, 89, 306, 377.6, "listing.agent")
@@ -200,8 +200,6 @@ function residentialPurchaseContract(): FormTemplateField[] {
     .blank(5, 352, 573, 377.6, "agent.name")
     .blank(5, 354, 573, 361.2, "agent.phone")
     .blank(5, 356, 573, 328.5, "agent.email")
-    .sign(5, 132, 192, 123, 12, "seller", 0, "initials")
-    .sign(5, 199, 259, 123, 12, "seller", 1, "initials")
     .sign(5, 442, 504, 123, 12, "buyer", 0, "initials")
     .sign(5, 510, 573, 123, 12, "buyer", 1, "initials");
 
@@ -211,25 +209,144 @@ function residentialPurchaseContract(): FormTemplateField[] {
     .signedAndDated(6, 653, "buyer", 0, SIGNED_AT)
     .sign(6, 36, 205, 635, SIG_H, "buyer", 0, "signature")
     .signedAndDated(6, 605.7, "buyer", 1, SIGNED_AT)
-    .sign(6, 36, 205, 588, SIG_H, "buyer", 1, "signature")
-    .signedAndDated(6, 523.7, "seller", 0, SIGNED_AT)
-    .sign(6, 36, 205, 506, SIG_H, "seller", 0, "signature")
-    .signedAndDated(6, 474.5, "seller", 1, SIGNED_AT)
-    .sign(6, 36, 205, 457, SIG_H, "seller", 1, "signature")
-    .blank(6, 75, 295, 207.9, "seller.1.address")
-    .blank(6, 66, 159, 175.2, "seller.1.phone")
-    .blank(6, 94, 295, 158.9, "conveyancing.sellerLawyer")
-    .blank(6, 79, 295, 142.5, "conveyancing.sellerLawyerFirm")
-    .blank(6, 93, 295, 126.1, "conveyancing.sellerLawyerAddress")
-    .blank(6, 81, 164, 93.5, "conveyancing.sellerLawyerPhone")
-    .blank(6, 83, 295, 77.1, "conveyancing.sellerLawyerEmail")
-    .blank(6, 352, 573, 207.9, "buyer.1.address")
-    .blank(6, 343, 445, 175.2, "buyer.1.phone")
-    .blank(6, 371, 573, 158.9, "conveyancing.buyerLawyer")
-    .blank(6, 356, 573, 142.5, "conveyancing.buyerLawyerFirm")
-    .blank(6, 370, 573, 126.1, "conveyancing.buyerLawyerAddress")
-    .blank(6, 358, 446, 93.5, "conveyancing.buyerLawyerPhone")
-    .blank(6, 361, 573, 77.1, "conveyancing.buyerLawyerEmail");
+    .sign(6, 36, 205, 588, SIG_H, "buyer", 1, "signature");
+  // The conveyancing information below is left for the lawyers.
+
+  return b.out;
+}
+
+// ---- 157: Residential Resale Condominium Property Purchase Contract ---------------------
+
+function condoPurchaseContract(): FormTemplateField[] {
+  const b = new Builder();
+  const money = { dataType: "money" as const, format: "plain", align: "left" as const };
+  const md = { dataType: "date" as const, format: "month-day" };
+  const yy = { dataType: "date" as const, format: "yy", align: "center" as const };
+  const time = { align: "center" as const };
+  // Typed on the review screen; no deal data behind them.
+  const typed = (label: string) => ({ label });
+
+  // Buyer's side: Spencer writes the offer for the buyer and the sellers
+  // sign through the listing agent, so no seller signature or initials
+  // boxes. Seller names are typed (listing.sellerName*, which never become
+  // signers); the seller's brokerage and representative come from the MLS
+  // listing. Conveyancing information is left for the lawyers.
+  for (let p = 1; p <= 8; p++) b.blank(p, 476, 576, 748.3, "document.number", { h: 12, align: "center" });
+  // Footer initials on pages 1–6: two buyers.
+  for (let p = 1; p <= 6; p++) {
+    b.sign(p, 372, 415, 52, 12, "buyer", 0, "initials").sign(p, 424, 468, 52, 12, "buyer", 1, "initials");
+  }
+
+  // Page 1 — sellers (names only), buyers, the unit, goods, price.
+  b.blank(1, 66, 292, 668.4, "listing.sellerName1")
+    .blank(1, 66, 292, 649.9, "listing.sellerName2")
+    .blank(1, 347, 574, 668.4, "buyer.1.name")
+    .blank(1, 347, 574, 649.9, "buyer.2.name")
+    .blank(1, 166, 575, 589.3, "property.street")
+    .blank(1, 83, 424, 569, "property.city")
+    .blank(1, 466, 575, 569, "property.postal")
+    .blank(1, 144, 575, 544.6, "property.projectName")
+    // Legal description of titled units: residential, parking, storage.
+    .blank(1, 235, 351, 513.5, "property.legalPlan")
+    .blank(1, 378, 459, 513.5, "property.legalUnit")
+    .blank(1, 517, 573, 513.5, "property.unitFactor")
+    .blank(1, 235, 351, 498.5, "custom.parking-plan", typed("Parking unit — condominium plan"))
+    .blank(1, 388, 459, 498.5, "custom.parking-units", typed("Parking unit(s)"))
+    .blank(1, 521, 573, 498.5, "custom.parking-unit-factor", typed("Parking unit factor(s)"))
+    .blank(1, 235, 351, 483.5, "custom.storage-plan", typed("Storage unit — condominium plan"))
+    .blank(1, 388, 459, 483.5, "custom.storage-units", typed("Storage unit(s)"))
+    .blank(1, 521, 573, 483.5, "custom.storage-unit-factor", typed("Storage unit factor(s)"))
+    // Non-titled, assigned or leased areas.
+    .blank(1, 189, 288, 452, "custom.stalls-assigned", typed("Parking stalls assigned"))
+    .blank(1, 353, 436, 452, "custom.stalls-leased", typed("Parking stalls leased"))
+    .blank(1, 503, 573, 452, "custom.stall-numbers", typed("Stall numbers"))
+    .blank(1, 197, 288, 436.5, "custom.storage-assigned", typed("Storage spaces assigned"))
+    .blank(1, 359, 436, 436.5, "custom.storage-leased", typed("Storage spaces leased"))
+    .blank(1, 511, 573, 436.5, "custom.storage-numbers", typed("Storage space numbers"))
+    .para(1, 86, 575, 403.4, 370.8, "offer.unattachedGoods")
+    .para(1, 208, 575, 354.5, 338, "offer.attachedGoods")
+    .blank(1, 168, 569, 311.3, "offer.price", money)
+    .blank(1, 63, 447, 272.3, "offer.completionDay", md)
+    .blank(1, 462, 497, 272.3, "offer.completionDay", yy);
+
+  // Page 2 — who sends the contract to the lawyers, deposits.
+  b.blank(2, 96, 327, 440.5, "offer.contractProvidedBy", { align: "center" })
+    .blank(2, 186, 433, 386, "offer.depositHolder")
+    .blank(2, 195, 369, 371.6, "offer.deposit", money)
+    .blank(2, 109, 300, 357.4, "offer.depositMethod")
+    .blank(2, 358, 398, 357.4, "offer.depositDueTime", time)
+    .blank(2, 424, 527, 357.4, "offer.depositDueDate", md)
+    .blank(2, 544, 573, 357.4, "offer.depositDueDate", yy)
+    .blank(2, 243, 358, 337.9, "offer.additionalDeposit", money)
+    .blank(2, 109, 300, 323.6, "offer.additionalDepositMethod")
+    .blank(2, 358, 398, 323.6, "offer.additionalDepositDueTime", time)
+    .blank(2, 424, 527, 323.6, "offer.additionalDepositDueDate", md)
+    .blank(2, 544, 573, 323.6, "offer.additionalDepositDueDate", yy);
+
+  // Page 3 — dower, condominium documents.
+  b.blank(3, 112, 161, 409.4, "offer.dowerTime", time)
+    .blank(3, 187, 346, 409.4, "offer.dowerDate", md)
+    .blank(3, 363, 402, 409.4, "offer.dowerDate", yy)
+    .blank(3, 460, 497, 253.6, "offer.condoDocsConditionTime", time)
+    .blank(3, 109, 237, 243.2, "offer.condoDocsConditionDay", md)
+    .blank(3, 252, 287, 243.2, "offer.condoDocsConditionDay", yy)
+    .blank(3, 531, 567, 220.3, "offer.condoDocsDeliveryTime", time)
+    .blank(3, 119, 249, 210, "offer.condoDocsDeliveryDay", md)
+    .blank(3, 264, 299, 210, "offer.condoDocsDeliveryDay", yy)
+    .blank(3, 382, 420, 164, "custom.condo-docs-extended-time", { ...time, label: "Condo documents late — Condition Day extends to (time)" })
+    .blank(3, 444, 568, 164, "custom.condo-docs-extended-day", { label: "Condo documents late — Condition Day extends to (date)" })
+    .blank(3, 109, 144, 153.7, "custom.condo-docs-extended-yy", { align: "center", label: "Condo documents late — year (two digits)" });
+
+  // Page 4 — other documents, financing, inspection, sale of buyer's property, buyer's conditions.
+  b.para(4, 144, 575, 359.4, 335.6, "custom.condo-docs-other", typed("Other condominium documents requested"))
+    .blank(4, 499, 541, 311.1, "offer.downPaymentPercent", time)
+    .blank(4, 484, 521, 298.8, "offer.financingConditionTime", time)
+    .blank(4, 83, 191, 286.4, "offer.financingConditionDay", md)
+    .blank(4, 205, 238, 286.4, "offer.financingConditionDay", yy)
+    .blank(4, 112, 151, 235.1, "offer.inspectionConditionTime", time)
+    .blank(4, 177, 316, 235.1, "offer.inspectionConditionDay", md)
+    .blank(4, 331, 365, 235.1, "offer.inspectionConditionDay", yy)
+    .blank(4, 357, 395, 196.1, "offer.saleConditionTime", time)
+    .blank(4, 420, 571, 196.1, "offer.saleConditionDay", md)
+    .blank(4, 92, 125, 183.7, "offer.saleConditionDay", yy)
+    .para(4, 86, 575, 156.9, 118.8, "offer.buyerConditions")
+    .blank(4, 113, 153, 93.2, "offer.buyerConditionsTime", time)
+    .blank(4, 179, 353, 93.2, "offer.buyerConditionsDay", md)
+    .blank(4, 368, 402, 93.2, "offer.buyerConditionsDay", yy);
+
+  // Page 5 — seller's conditions, attachments, condo fees, other terms.
+  b.para(5, 66, 575, 697.9, 697.9, "offer.sellerConditions")
+    .blank(5, 94, 133, 682.1, "offer.sellerConditionsTime", time)
+    .blank(5, 160, 333, 682.1, "offer.sellerConditionsDay", md)
+    .blank(5, 348, 383, 682.1, "offer.sellerConditionsDay", yy)
+    .blank(5, 104, 575, 513, "offer.otherAttachment")
+    .blank(5, 384, 575, 472, "property.condoFee", money)
+    .blank(5, 397, 575, 455.6, "custom.non-titled-fee", typed("Monthly fee for non-titled, assigned or leased areas"))
+    .para(5, 66, 575, 425.4, 393.6, "offer.additionalTerms");
+
+  // Pages 6–7 — authorization: the seller's brokerage and representative
+  // from the MLS listing, the buyer's (Spencer's) from the agent profile.
+  b.blank(6, 87, 307, 133.8, "listing.brokerage")
+    .blank(6, 103, 307, 117.5, "listing.brokerageAddress")
+    .blank(6, 350, 575, 133.8, "agent.brokerage")
+    .blank(6, 364, 575, 117.5, "agent.address", { fontSize: 8 });
+  b.blank(7, 87, 307, 704.4, "listing.agent")
+    .blank(7, 94, 307, 688, "listing.agentPhone")
+    .blank(7, 93, 307, 655.3, "listing.agentEmail")
+    .blank(7, 350, 575, 704.4, "agent.name")
+    .blank(7, 352, 575, 688, "agent.phone")
+    .blank(7, 354, 575, 655.3, "agent.email")
+    .sign(7, 440, 506, 433, 12, "buyer", 0, "initials")
+    .sign(7, 508, 575, 433, 12, "buyer", 1, "initials")
+    // 17.2 "open for written acceptance until ____ ____. m. on ____, 20__."
+    .blank(7, 527, 564, 360, "offer.openUntilTime", time)
+    .blank(7, 75, 521, 345.4, "offer.openUntilDate", md)
+    .blank(7, 536, 571, 345.4, "offer.openUntilDate", yy)
+    .signedAndDated(7, 319.1, "buyer", 0, SIGNED_AT)
+    .sign(7, 36, 205, 301, SIG_H, "buyer", 0, "signature")
+    .signedAndDated(7, 271.8, "buyer", 1, SIGNED_AT)
+    .sign(7, 36, 205, 254, SIG_H, "buyer", 1, "signature");
+  // Page 8's conveyancing information is left for the lawyers.
 
   return b.out;
 }
@@ -341,8 +458,17 @@ export const AREA_LAYOUTS: AreaLayout[] = [
     kind: "purchase",
     measuredOn: "AREA©158CLDA_JAN2026",
     pageCount: 6,
-    description: "Parties, property, price, deposits, conditions, brokerages and conveyancing filled from the deal; signature, date and initials boxes for two buyers and two sellers.",
+    description: "Buyer's side: buyers, property, price, deposits, conditions and both brokerages (the seller's from MLS) filled from the deal; seller names typed; signature, date and initials boxes for two buyers.",
     fields: residentialPurchaseContract,
+  },
+  {
+    id: "157",
+    name: "Residential Resale Condominium Property Purchase Contract",
+    kind: "purchase",
+    measuredOn: "AREA©157CLDA_MAR2026",
+    pageCount: 8,
+    description: "Buyer's side: buyers, the unit and its legal description, condo fee, price, deposits, conditions and both brokerages (the seller's from MLS) filled from the deal; seller names typed; signature, date and initials boxes for two buyers.",
+    fields: condoPurchaseContract,
   },
   {
     id: "160",

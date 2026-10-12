@@ -128,6 +128,11 @@ export type InsertMessage = z.infer<typeof insertMessageSchema>;
 export type Message = typeof messages.$inferSelect;
 
 // ---- Tours ----------------------------------------------------------------
+// A showing. listingId is an MLS number for anything created from the admin
+// showing form or the client portal, or a managed-listing id for older rows.
+// Client details are snapshotted onto the row so an invite still reaches the
+// right person after a CRM contact is edited or a lead is deleted; leadId and
+// contactFubId only link back.
 export const tours = sqliteTable("tours", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   listingId: text("listing_id").notNull(),
@@ -135,6 +140,25 @@ export const tours = sqliteTable("tours", {
   scheduledFor: text("scheduled_for").notNull(),
   status: text("status").notNull().default("requested"),
   notes: text("notes"),
+  durationMinutes: integer("duration_minutes").notNull().default(60),
+  clientName: text("client_name"),
+  clientEmail: text("client_email"),
+  clientPhone: text("client_phone"),
+  contactFubId: text("contact_fub_id"),
+  // Whether the client gets calendar invites (and updates) for this showing.
+  notifyClient: integer("notify_client", { mode: "boolean" }).notNull().default(true),
+  // Spencer's own Google Calendar copy. Also the client's invite when
+  // inviteChannel is "google" (they're an attendee on it).
+  googleEventId: text("google_event_id"),
+  // How the client was invited — sticky, so updates and cancellations reach
+  // them the same way: "google" (attendee, Google emails) | "email" (.ics).
+  inviteChannel: text("invite_channel"),
+  inviteSequence: integer("invite_sequence").notNull().default(0),
+  invitedAt: text("invited_at"),
+  inviteError: text("invite_error"),
+  // Morning-of text reminder (server/showing-reminders.ts).
+  reminderSentAt: text("reminder_sent_at"),
+  reminderError: text("reminder_error"),
   createdAt: text("created_at")
     .notNull()
     .$defaultFn(() => new Date().toISOString()),
@@ -1134,6 +1158,10 @@ export const deals = sqliteTable("deals", {
   // page. When set, a completed signing posts a note on the FUB person.
   crmContactFubId: text("crm_contact_fub_id"),
   crmDealFubId: text("crm_deal_fub_id"),
+  // The other buyers or sellers on the deal (co-buyer, spouse…), as a JSON
+  // array of crm_contacts fub ids in party order. Forms fill buyer 2, 3…
+  // from these after the main contact.
+  coContactFubIds: text("co_contact_fub_ids"),
   // Short unguessable id in the deal's inbound address
   // (<mailbox>+deal-<token>@<domain>): forms emailed there from WEBForms are
   // imported as draft documents by server/deal-inbox.ts.
@@ -1147,6 +1175,49 @@ export const deals = sqliteTable("deals", {
 });
 export type Deal = typeof deals.$inferSelect;
 export type InsertDeal = typeof deals.$inferInsert;
+
+// An envelope: several of a deal's documents sent for signature together.
+// Each person gets one email and one signing session for all of them, and
+// one email with every signed copy at the end. Each document still keeps its
+// own signers, fields, signing order, signed PDF and audit certificate, so
+// every document stands on its own as a signed record.
+export const dealEnvelopes = sqliteTable("deal_envelopes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  dealId: integer("deal_id").notNull(),
+  title: text("title").notNull(),
+  message: text("message"),
+  // 'sent' | 'completed' | 'declined' | 'voided'
+  status: text("status").notNull().default("sent"),
+  sentAt: text("sent_at"),
+  completedAt: text("completed_at"),
+  voidedAt: text("voided_at"),
+  voidReason: text("void_reason"),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+  updatedAt: text("updated_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+});
+export type DealEnvelope = typeof dealEnvelopes.$inferSelect;
+
+// One row per person in an envelope, matched to their signer row on each
+// document by email. Their token opens the whole envelope.
+export const dealEnvelopeRecipients = sqliteTable("deal_envelope_recipients", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  envelopeId: integer("envelope_id").notNull(),
+  name: text("name").notNull(),
+  email: text("email").notNull(),
+  token: text("token").notNull().unique(),
+  // 'pending' | 'sent' | 'viewed' | 'signed' | 'declined'
+  status: text("status").notNull().default("pending"),
+  consentAt: text("consent_at"),
+  lastEmailAt: text("last_email_at"),
+  createdAt: text("created_at")
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+});
+export type DealEnvelopeRecipient = typeof dealEnvelopeRecipients.$inferSelect;
 
 export const dealDocuments = sqliteTable("deal_documents", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -1174,6 +1245,9 @@ export const dealDocuments = sqliteTable("deal_documents", {
   // 'parallel' — everyone is emailed at once. 'sequential' — one at a time,
   // in signer order, each notified when the previous one signs.
   signingOrder: text("signing_order").notNull().default("parallel"),
+  // Set when the document was sent as part of an envelope (deal_envelopes):
+  // its signers are emailed, sign, and receive their copy through it.
+  envelopeId: integer("envelope_id"),
   message: text("message"),
   sentAt: text("sent_at"),
   completedAt: text("completed_at"),
@@ -1274,6 +1348,7 @@ export const createDealSchema = z.object({
   notes: z.string().max(5000).nullable().optional(),
   crmContactFubId: z.string().trim().max(32).nullable().optional(),
   crmDealFubId: z.string().trim().max(32).nullable().optional(),
+  coContactFubIds: z.array(z.string().trim().min(1).max(32)).max(3).optional(),
 });
 export type CreateDealInput = z.infer<typeof createDealSchema>;
 
@@ -1285,9 +1360,13 @@ export const signerInputSchema = z.object({
 });
 export type SignerInput = z.infer<typeof signerInputSchema>;
 
+// signerId 0 = a box the agent fills in before sending ("Me"). Only text and
+// checkbox boxes can be agent-filled; the value is printed as typed.
+export const AGENT_SIGNER_ID = 0;
+
 export const fieldInputSchema = z.object({
   id: z.number().int().positive().optional(),
-  signerId: z.number().int().positive(),
+  signerId: z.number().int().min(0),
   type: z.enum(FIELD_TYPES),
   page: z.number().int().min(1),
   x: z.number().min(0).max(1),
@@ -1297,6 +1376,7 @@ export const fieldInputSchema = z.object({
   required: z.boolean().optional(),
   label: z.string().trim().max(80).nullable().optional(),
   format: z.string().trim().max(20).nullable().optional(),
+  value: z.string().max(2000).nullable().optional(),
 });
 export type FieldInput = z.infer<typeof fieldInputSchema>;
 
@@ -1319,8 +1399,10 @@ export const dealFieldTemplates = sqliteTable("deal_field_templates", {
 });
 export type DealFieldTemplate = typeof dealFieldTemplates.$inferSelect;
 
+// role "self" = an agent-filled box (signerId 0); its value is not saved,
+// since what Spencer types is specific to the deal.
 export const templateFieldSchema = z.object({
-  role: z.enum(SIGNER_ROLES),
+  role: z.enum([...SIGNER_ROLES, "self"] as const),
   roleIndex: z.number().int().min(0).max(11),
   type: z.enum(FIELD_TYPES),
   page: z.number().int().min(1),

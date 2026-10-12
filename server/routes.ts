@@ -43,7 +43,7 @@ const execFileAsync = promisify(execFile);
 // we fall back to a local folder under client/public/ so the dev server
 // can serve them too.
 import { UPLOADS_ROOT, ensureUploadsDir } from "./uploads";
-import { heroImageGenerationEnabled, queueHeroImage, keepGeneratedHero } from "./hero-image";
+import { heroImageGenerationEnabled, queueHeroImage, keepGeneratedHero, regenerateHeroImage } from "./hero-image";
 
 function parseJsonArr(s: string | null | undefined): any[] {
   if (!s) return [];
@@ -557,8 +557,28 @@ export async function registerRoutes(
   // CRM mirror — /api/admin/crm/*, backing the /admin/crm page. Admin-only:
   // this is the whole Follow Up Boss contact database.
   try {
+    // Contacts the app owns (created for every new lead, or by hand), and the
+    // hook that creates them. See server/contacts.ts.
+    const { registerContactRoutes } = await import("./contact-routes");
+    registerContactRoutes(app, { requireAuth });
+
     const { registerCrmRoutes } = await import("./crm-routes");
     registerCrmRoutes(app, { requireAuth });
+
+    // Showings — /api/admin/showings/* and the read-only FUB appointment
+    // layer on /admin/calendar. See server/showings.ts.
+    const { registerShowingRoutes } = await import("./showing-routes");
+    registerShowingRoutes(app, { requireAuth });
+
+    // The business phone line (Twilio): text relay, call forwarding,
+    // voicemail, and the admin setup endpoints. See server/sms.ts.
+    const { registerTwilioRoutes } = await import("./twilio-routes");
+    registerTwilioRoutes(app, { requireAuth });
+
+    // The Inbox — emails (from Gmail), texts, calls and notes per contact,
+    // with their activity alongside. See server/inbox.ts.
+    const { registerInboxRoutes } = await import("./inbox-routes");
+    registerInboxRoutes(app, { requireAuth });
 
     const { registerMarketRoutes } = await import("./market-routes");
     registerMarketRoutes(app, { requireAuth });
@@ -1631,60 +1651,43 @@ export async function registerRoutes(
   });
 
   // ---------- TOURS ----------
+  // Kept for the calendar's status select and older callers; showings proper
+  // (create with client invite, reschedule, resend) live in
+  // server/showing-routes.ts. Both go through server/showings.ts.
   app.get("/api/tours", requireAuth, (_req, res) => {
     res.json(storage.listTours());
   });
 
   app.post("/api/tours", requireAuth, async (req, res) => {
     try {
-      const tour = storage.createTour(req.body) as any;
-      const userId = (req as any).authUserId as number;
-      // Mirror to Google Calendar if user has connected.
-      try {
-        const { syncTourToGoogle } = await import("./google-calendar");
-        const listing = tour.listingId ? storage.getListingById(tour.listingId) : undefined;
-        const lead = tour.leadId ? storage.getLead(tour.leadId) : undefined;
-        const r = await syncTourToGoogle(userId, tour, listing as any, lead as any);
-        if (r.ok && r.eventId) {
-          storage.updateTourGoogleEventId(tour.id, r.eventId);
-          tour.googleEventId = r.eventId;
-        }
-      } catch (e: any) {
-        console.warn("[google-cal] tour sync (create) failed:", e?.message);
-      }
-      res.json(tour);
+      const tour = storage.createTour(req.body);
+      const { syncShowing } = await import("./showings");
+      const delivery = await syncShowing((req as any).authUserId, tour.id).catch((e: any) => {
+        console.warn("[showings] sync (create) failed:", e?.message);
+        return null;
+      });
+      res.json({ ...storage.getTour(tour.id), delivery });
     } catch (e: any) {
       res.status(400).json({ message: e.message ?? "Invalid tour data" });
     }
   });
 
   app.patch("/api/tours/:id", requireAuth, async (req, res) => {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(String(req.params.id), 10);
     if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid id" });
     const status = (req.body ?? {}).status;
     if (!status || typeof status !== "string") {
       return res.status(400).json({ message: "Status required" });
     }
-    const updated = storage.updateTourStatus(id, status) as any;
+    const updated = storage.updateTourStatus(id, status);
     if (!updated) return res.status(404).json({ message: "Tour not found" });
-    const userId = (req as any).authUserId as number;
-    try {
-      const { syncTourToGoogle, deleteTourFromGoogle } = await import("./google-calendar");
-      if (status === "cancelled") {
-        await deleteTourFromGoogle(userId, updated);
-        storage.updateTourGoogleEventId(updated.id, null);
-      } else {
-        const listing = updated.listingId ? storage.getListingById(updated.listingId) : undefined;
-        const lead = updated.leadId ? storage.getLead(updated.leadId) : undefined;
-        const r = await syncTourToGoogle(userId, updated, listing as any, lead as any);
-        if (r.ok && r.eventId && r.eventId !== updated.googleEventId) {
-          storage.updateTourGoogleEventId(updated.id, r.eventId);
-        }
-      }
-    } catch (e: any) {
-      console.warn("[google-cal] tour sync (patch) failed:", e?.message);
-    }
-    res.json(updated);
+    // Confirming a client's portal request is what sends them their invite.
+    const { syncShowing } = await import("./showings");
+    const delivery = await syncShowing((req as any).authUserId, id).catch((e: any) => {
+      console.warn("[showings] sync (status) failed:", e?.message);
+      return null;
+    });
+    res.json({ ...storage.getTour(id), delivery });
   });
 
   // ---------- PUBLIC INQUIRY ----------
@@ -2810,6 +2813,26 @@ export async function registerRoutes(
 
   // POST — create a new post. Defaults to status="draft" unless explicitly
   // overridden. Used by the BOFU auto-blog pipeline.
+  // POST /api/admin/blog/:slug/generate-hero — regenerate a post's hero now
+  // (20–60s) and save it. Optional body { focus } steers the subject. Takes the
+  // bearer token too, so a scheduled task can backfill older posts.
+  app.post("/api/admin/blog/:slug/generate-hero", requireAdminOrToken, async (req, res) => {
+    const slug = String(req.params.slug ?? "");
+    if (!storage.getBlogBySlug(slug)) return res.status(404).json({ message: "Post not found" });
+    if (!heroImageGenerationEnabled()) {
+      return res.status(503).json({ message: "Hero generation is off (OPENAI_API_KEY unset or BLOG_HERO_AI=off)" });
+    }
+    try {
+      const focus = typeof req.body?.focus === "string" ? req.body.focus.slice(0, 300) : null;
+      const heroImage = await regenerateHeroImage(slug, focus);
+      res.json({ heroImage });
+    } catch (err: any) {
+      const message = String(err?.message ?? err);
+      console.error(`[hero-image] "${slug}": regenerate failed:`, message);
+      res.status(/already being generated/.test(message) ? 409 : 502).json({ message });
+    }
+  });
+
   app.post("/api/admin/blog", requireAdminOrToken, async (req, res) => {
     const body = req.body || {};
     if (!body.slug || typeof body.slug !== "string" || !/^[a-z0-9-]+$/i.test(body.slug)) {
@@ -3001,6 +3024,32 @@ export async function registerRoutes(
     try {
       const { probeSoldListings } = await import("./rets-sold-probe");
       res.json(await probeSoldListings());
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message ?? "Probe failed" });
+    }
+  });
+
+  // GET /api/admin/mls-sync/field-probe (auth) — which fields the feed defines
+  // that forms could use (legal description, title, inclusions, listing
+  // contacts), with sample values from a few active listings. Read-only.
+  app.get("/api/admin/mls-sync/field-probe", requireAuth, async (_req, res) => {
+    if (!process.env.RETS_LOGIN_URL) return res.status(503).json({ message: "RETS credentials are not set on this deploy." });
+    try {
+      const { RetsClient } = await import("./rets-client");
+      const { probePropertyFields } = await import("./rets-fields");
+      const c = new RetsClient({
+        loginUrl: process.env.RETS_LOGIN_URL!,
+        username: process.env.RETS_USERNAME!,
+        password: process.env.RETS_PASSWORD!,
+        userAgent: process.env.RETS_USER_AGENT ?? "RiversRealEstate/1.0",
+        uaPassword: process.env.RETS_UA_PASSWORD || undefined,
+      });
+      await c.login();
+      try {
+        res.json(await probePropertyFields(c));
+      } finally {
+        try { await c.logout(); } catch {}
+      }
     } catch (err: any) {
       res.status(500).json({ message: err?.message ?? "Probe failed" });
     }

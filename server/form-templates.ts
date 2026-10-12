@@ -13,8 +13,9 @@
 // Nothing here knows about HTTP; server/form-template-routes.ts does.
 
 import { eq, desc, asc } from "drizzle-orm";
-import { PDFDocument, StandardFonts, type PDFFont, type PDFPage } from "pdf-lib";
+import { PDFArray, PDFCheckBox, PDFDict, PDFDocument, PDFName, PDFTextField, StandardFonts, type PDFFont, type PDFPage } from "pdf-lib";
 import { db, storage } from "./storage";
+import { getListingDetails } from "./listing-details";
 import {
   deals,
   dealDocuments,
@@ -22,6 +23,7 @@ import {
   dealFields,
   formTemplates,
   mlsListings,
+  crmDeals,
   formTemplateFieldSchema,
   type Deal,
   type DealDocument,
@@ -30,6 +32,7 @@ import {
   type FormFillField,
   type FormSignField,
   type MlsListing,
+  type CrmContact,
 } from "@shared/schema";
 import { z } from "zod";
 import {
@@ -179,6 +182,42 @@ export async function importFormTemplate(input: ImportTemplateInput): Promise<Im
   return { template: getTemplate(id)!, matched, detected };
 }
 
+/**
+ * Replace a template's boxes with the built-in AREA layout its footer code
+ * names. For a form uploaded before its layout existed. Returns null when the
+ * blank isn't a form with a layout (or has a different page count).
+ */
+export async function applyAreaLayout(t: FormTemplate): Promise<ImportTemplateResult["matched"]> {
+  const text = await extractText(readDocument(t.storageKey));
+  const code = areaFormCode(text);
+  const layout = code ? findAreaLayout(code.id) : undefined;
+  if (!layout || layout.pageCount !== t.pageCount) return null;
+  const fields = layout.fields().filter((f) => f.page <= t.pageCount);
+  db.update(formTemplates)
+    .set({ fields: JSON.stringify(fields), kind: t.kind === "other" ? layout.kind : t.kind, updatedAt: nowIso() })
+    .where(eq(formTemplates.id, t.id))
+    .run();
+  return { id: layout.id, name: layout.name, code: code!.code, measuredOn: layout.measuredOn, sameRevision: code!.code === layout.measuredOn, boxes: fields.length };
+}
+
+/**
+ * Templates whose boxes are only the auto-detected blanks (every box a
+ * custom.* text box: nothing mapped or added by hand) get the built-in layout
+ * once one exists for their form. Runs at boot; touches nothing else.
+ */
+export async function upgradeDetectedTemplates(): Promise<void> {
+  for (const t of listTemplates()) {
+    const fields = templateFields(t);
+    if (!fields.length || !fields.every((f) => f.kind === "fill" && f.name.startsWith("custom."))) continue;
+    try {
+      const m = await applyAreaLayout(t);
+      if (m) console.log(`[forms] "${t.name}" now uses the built-in AREA ${m.name} layout (${m.boxes} boxes)`);
+    } catch (e: any) {
+      console.warn(`[forms] couldn't check "${t.name}" for a built-in layout:`, e?.message ?? e);
+    }
+  }
+}
+
 export function deleteTemplate(t: FormTemplate): void {
   db.delete(formTemplates).where(eq(formTemplates.id, t.id)).run();
   try {
@@ -236,9 +275,58 @@ export function contactAddress(contact: { raw: string } | undefined): string | n
   return line || null;
 }
 
+/** The co-buyers / co-sellers saved on the deal, as fub ids in party order. */
+export function coContactIds(deal: Pick<Deal, "coContactFubIds">): string[] {
+  try {
+    const ids = JSON.parse(deal.coContactFubIds || "[]");
+    return Array.isArray(ids) ? ids.map(String).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Everyone on the client side of the deal, in party order: the main contact,
+ * then the co-buyers/co-sellers added on the deal page, then anyone else on
+ * the linked Follow Up Boss deal. One entry per person (by id and by email).
+ */
+export function dealClients(deal: Deal): CrmContact[] {
+  const ids = [deal.crmContactFubId, ...coContactIds(deal)].filter((x): x is string => !!x);
+  if (deal.crmDealFubId) {
+    const row = db.select().from(crmDeals).where(eq(crmDeals.fubId, deal.crmDealFubId)).get();
+    try {
+      const people: any[] = JSON.parse(row?.raw || "{}")?.people ?? [];
+      for (const p of people) if (p?.id != null) ids.push(String(p.id));
+    } catch {}
+  }
+  const out: CrmContact[] = [];
+  const seenEmail = new Set<string>();
+  for (const id of Array.from(new Set(ids))) {
+    const c = storage.getCrmContact(id);
+    if (!c) continue;
+    const email = (c.email ?? "").trim().toLowerCase();
+    if (email && seenEmail.has(email)) continue;
+    if (email) seenEmail.add(email);
+    out.push(c);
+  }
+  return out;
+}
+
 function streetOf(l: MlsListing): string {
-  const num = [l.unit ? `${l.unit} -` : "", l.streetNumber ?? "", l.streetName ?? ""].filter(Boolean).join(" ").trim();
-  return num || l.fullAddress.split(",")[0].trim();
+  // Pillar 9 puts a condo's unit first in the address ("252, 66 Glamis
+  // Green SW") rather than in a field of its own.
+  let unit = l.unit;
+  const m = /^\s*#?([A-Za-z0-9-]+),\s*(\S+)/.exec(l.fullAddress);
+  if (!unit && m && l.streetNumber && m[2] === l.streetNumber) unit = m[1];
+  const num = [l.streetNumber ?? "", l.streetName ?? ""].filter(Boolean).join(" ").trim();
+  if (num) return unit ? `#${unit}, ${num}` : num;
+  return l.fullAddress.split(",")[0].trim();
+}
+
+/** An MLS inclusions/exclusions entry, or null when it's a placeholder like "N/A". */
+export function listedGoods(v: string | null | undefined): string | null {
+  const s = (v ?? "").trim();
+  return !s || /^(n\/?a|none|nil|no|-+|\.+)$/i.test(s) ? null : s;
 }
 
 const PROVINCE_NAMES: Record<string, string> = { AB: "Alberta", BC: "British Columbia", SK: "Saskatchewan", MB: "Manitoba", ON: "Ontario" };
@@ -301,6 +389,30 @@ export function prefillForDeal(deal: Deal, template: FormTemplate): Prefill {
     set("listing.brokerage", listing.listOffice, "listing");
     set("listing.agent", listing.listAgentName, "listing");
     set("listing.agentPhone", listing.listAgentPhone, "listing");
+    if (!values["property.condoFee"] && listing.condoFee) set("property.condoFee", String(listing.condoFee), "listing");
+    // What the listing says goes with the house, as a starting point. Typed
+    // on an earlier form for this deal wins: it's what was actually agreed.
+    // AREA contract: unattached goods are excluded unless listed as included,
+    // attached goods included unless listed as excluded.
+    if (!values["offer.unattachedGoods"]) set("offer.unattachedGoods", listedGoods(listing.inclusions), "listing");
+    if (!values["offer.attachedGoods"]) set("offer.attachedGoods", listedGoods(listing.exclusions), "listing");
+    // Legal description and listing contacts (form-only, listing-details.ts).
+    // Like the goods above, a value typed on an earlier form wins.
+    const d = getListingDetails(listing.id);
+    if (d) {
+      const keep = (key: string, v: string | null | undefined) => {
+        if (!values[key]) set(key, v, "listing");
+      };
+      // "1610979;24;5" when the parts aren't sent separately: plan first.
+      const parts = (d.legalDescription ?? "").split(";").map((x) => x.trim());
+      keep("property.legalPlan", d.legalPlan || parts[0]);
+      keep("property.legalBlock", d.legalBlock);
+      keep("property.legalLot", d.legalLot);
+      keep("property.legalOther", d.legalUnit ? `Unit ${d.legalUnit}` : null);
+      keep("property.legalUnit", d.legalUnit);
+      keep("property.linc", d.parcelNumber);
+      keep("listing.agentEmail", d.listAgentEmail);
+    }
   } else if (deal.address) {
     // "123 Elbow Dr SW, Calgary, AB T2S 2A1" → street / city.
     const parts = deal.address.split(",").map((s) => s.trim()).filter(Boolean);
@@ -324,20 +436,27 @@ export function prefillForDeal(deal: Deal, template: FormTemplate): Prefill {
   set("document.date", today, "auto");
   set("document.year", today.slice(2, 4), "auto");
 
-  // 3. The client, when nobody was carried forward into the first slot.
+  // 3. The clients on the deal fill the empty buyer (or seller) slots in
+  //    order, skipping anyone already on the form from the previous one.
   const clientRole: PartyRole = deal.kind === "listing" ? "seller" : "buyer";
+  const clients = dealClients(deal);
   const contact = deal.crmContactFubId ? storage.getCrmContact(deal.crmContactFubId) : undefined;
-  if (slots[clientRole] > 0 && !values[partyKey(clientRole, 1, "name")] && !values[partyKey(clientRole, 1, "email")]) {
-    const lead = deal.leadId ? storage.getLead(deal.leadId) : undefined;
-    const name = contact?.name || lead?.name;
-    const email = contact?.email || lead?.email;
-    const phone = contact?.phone || lead?.phone;
-    if (name || email) {
-      set(partyKey(clientRole, 1, "name"), name, "contact");
-      set(partyKey(clientRole, 1, "email"), email, "contact");
-      set(partyKey(clientRole, 1, "phone"), phone, "contact");
-      set(partyKey(clientRole, 1, "address"), contactAddress(contact), "contact");
-    }
+  const emailIn = (i: number) => (values[partyKey(clientRole, i, "email")] ?? "").trim().toLowerCase();
+  const onForm = new Set(Array.from({ length: slots[clientRole] }, (_, i) => emailIn(i + 1)).filter(Boolean));
+  const queue: Array<{ name?: string | null; email?: string | null; phone?: string | null; address?: string | null }> = clients
+    .filter((c) => !c.email || !onForm.has(c.email.trim().toLowerCase()))
+    .map((c) => ({ name: c.name, email: c.email, phone: c.phone, address: contactAddress(c) }));
+  if (!clients.length && deal.leadId) {
+    const lead = storage.getLead(deal.leadId);
+    if (lead && !onForm.has((lead.email ?? "").trim().toLowerCase())) queue.push({ name: lead.name, email: lead.email, phone: lead.phone });
+  }
+  for (let i = 1; i <= slots[clientRole] && queue.length; i++) {
+    if (values[partyKey(clientRole, i, "name")] || values[partyKey(clientRole, i, "email")]) continue;
+    const p = queue.shift()!;
+    set(partyKey(clientRole, i, "name"), p.name, "contact");
+    set(partyKey(clientRole, i, "email"), p.email, "contact");
+    set(partyKey(clientRole, i, "phone"), p.phone, "contact");
+    set(partyKey(clientRole, i, "address"), p.address, "contact");
   }
   // The mailing address from Follow Up Boss, whenever the first slot is that
   // person and the address is still blank (a previous form may predate it).
@@ -389,9 +508,39 @@ function drawFill(page: PDFPage, font: PDFFont, f: FormFillField, raw: string | 
   }
 }
 
+/** Drop every form-field widget and the form itself, leaving the page content. */
+function stripFormFields(pdf: PDFDocument) {
+  for (const page of pdf.getPages()) {
+    const annots = page.node.lookup(PDFName.of("Annots"));
+    if (!(annots instanceof PDFArray)) continue;
+    const keep = annots.asArray().filter((ref) => {
+      const a = pdf.context.lookup(ref);
+      return !(a instanceof PDFDict && a.get(PDFName.of("Subtype")) === PDFName.of("Widget"));
+    });
+    if (keep.length) page.node.set(PDFName.of("Annots"), pdf.context.obj(keep));
+    else page.node.delete(PDFName.of("Annots"));
+  }
+  pdf.catalog.delete(PDFName.of("AcroForm"));
+}
+
 /** The blank with every fill box printed. Sign boxes are left for the signers. */
 export async function renderFormPdf(blank: Uint8Array, fields: FormTemplateField[], values: Record<string, string>, meta: { title: string }): Promise<Uint8Array> {
   const pdf = await PDFDocument.load(blank, { ignoreEncryption: true, updateMetadata: false });
+  // A WEBForms export is a fillable PDF. Its form fields sit above the page
+  // content, so an empty one with a white background hides whatever is
+  // printed under it (the condo contract's goods and terms areas). Flatten
+  // them into the page first — anything WEBForms pre-filled stays — then
+  // print on top.
+  try {
+    const filled = pdf.getForm().getFields().some((field) =>
+      field instanceof PDFTextField ? !!(field.getText() ?? "").trim() : field instanceof PDFCheckBox ? field.isChecked() : true,
+    );
+    if (filled) pdf.getForm().flatten({ updateFieldAppearances: false });
+    else stripFormFields(pdf);
+  } catch (e: any) {
+    console.warn("[forms] couldn't flatten the blank's form fields, removing them:", e?.message ?? e);
+    stripFormFields(pdf);
+  }
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const pages = pdf.getPages();
   for (const f of fields) {

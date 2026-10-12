@@ -12,17 +12,23 @@
 //   HERO_IMAGE_MODEL      default gpt-image-1
 //   HERO_IMAGE_QUALITY    low | medium | high (default medium, ~$0.04/image)
 //   OPENAI_BASE_URL       optional API base (default https://api.openai.com/v1)
+//   BLOG_HERO_AI=off      turn generation off without removing the key
+//
+// POST /api/admin/blog/:slug/generate-hero (routes.ts) regenerates one post's
+// hero on demand — for an image that came out wrong, or an older post that
+// predates this module.
 
 import fs from "node:fs";
 import path from "node:path";
 import { ensureUploadsDir } from "./uploads";
 import { storage } from "./storage";
+import { invalidateSsrCache } from "./ssr";
 
 const SUBDIR = "blog-heroes";
 const TIMEOUT_MS = 180_000;
 
 export function heroImageGenerationEnabled(): boolean {
-  return !!process.env.OPENAI_API_KEY;
+  return !!process.env.OPENAI_API_KEY && !/^(off|false|0|no)$/i.test(process.env.BLOG_HERO_AI ?? "");
 }
 
 // Same look as the condo heroes (script/generate-condo-images.ts): editorial
@@ -124,10 +130,41 @@ export function queueHeroImage(slug: string, placeholder: string): void {
       }
       storage.upsertBlogPost({ ...current, heroImage: url } as any);
       replaced.set(slug, { placeholder, generated: url });
+      // Rendered pages (the post, the blog index, the homepage's journal
+      // block) are cached for minutes; without this the placeholder lingers.
+      invalidateSsrCache();
       console.log(`[hero-image] "${slug}": generated in ${Math.round((Date.now() - started) / 1000)}s → ${url}`);
     })
     .catch((err) => {
       console.error(`[hero-image] "${slug}": generation failed, keeping placeholder:`, err?.message ?? err);
     })
     .finally(() => inFlight.delete(slug));
+}
+
+/**
+ * Regenerate one post's hero now and save it, replacing whatever it has.
+ * `focus`, when given, steers the subject (it stands in for the alt text in
+ * the prompt). Throws when generation is off, the post is missing, or a
+ * generation for it is already running.
+ */
+export async function regenerateHeroImage(slug: string, focus?: string | null): Promise<string> {
+  if (!heroImageGenerationEnabled()) throw new Error("Hero generation is off (OPENAI_API_KEY unset or BLOG_HERO_AI=off)");
+  const post = storage.getBlogBySlug(slug);
+  if (!post) throw new Error("Post not found");
+  if (inFlight.has(slug)) throw new Error("A hero is already being generated for this post");
+  inFlight.add(slug);
+  try {
+    const previous = post.heroImage || "";
+    const url = await generateHeroImage(slug, { ...post, heroImageAlt: focus?.trim() || post.heroImageAlt });
+    const current = storage.getBlogBySlug(slug);
+    if (!current) throw new Error("Post was deleted during generation");
+    storage.upsertBlogPost({ ...current, heroImage: url } as any);
+    // Same guard as the background path: an editor tab still holding the old
+    // hero shouldn't put it back on its next save.
+    replaced.set(slug, { placeholder: previous, generated: url });
+    invalidateSsrCache();
+    return url;
+  } finally {
+    inFlight.delete(slug);
+  }
 }

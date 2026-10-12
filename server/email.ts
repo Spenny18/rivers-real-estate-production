@@ -17,7 +17,7 @@ export interface SendEmailInput {
   cc?: string;
   replyTo?: string;
   /** Resend attachments: base64 content. Keep the total under a few MB. */
-  attachments?: Array<{ filename: string; content: string }>;
+  attachments?: Array<{ filename: string; content: string; contentType?: string }>;
   /**
    * Track opens and clicks for this send (see server/tracking.ts). Only for
    * mail to a lead or client — never for auth links or mail to Spencer.
@@ -71,7 +71,13 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
   if (input.text) body.text = input.text;
   if (cc && cc !== input.to) body.cc = [cc];
   if (input.replyTo) body.reply_to = input.replyTo;
-  if (input.attachments?.length) body.attachments = input.attachments;
+  if (input.attachments?.length) {
+    body.attachments = input.attachments.map((a) => ({
+      filename: a.filename,
+      content: a.content,
+      ...(a.contentType ? { content_type: a.contentType } : {}),
+    }));
+  }
 
   try {
     const r = await fetch("https://api.resend.com/emails", {
@@ -659,6 +665,76 @@ export function buildBookingRescheduleHtml(
   });
 }
 
+// ---- Showing invites (server/showings.ts) -----------------------------------
+//
+// Only used when Google Calendar can't send the invite itself. The .ics file
+// attached to the same email is what puts the showing in the client's
+// calendar; this is the human-readable side of it.
+
+export interface ShowingEmailData {
+  kind: "invite" | "update" | "cancel";
+  clientName: string;
+  /** Already formatted, e.g. "Thursday, October 9, 2026 at 2:00 PM MDT" */
+  whenLabel: string;
+  durationMinutes: number;
+  address: string;
+  /** "$1.85M · 4 bd · 3.5 ba", or null */
+  summary: string | null;
+  mlsNumber: string | null;
+  listingUrl: string | null;
+  photoUrl: string | null;
+  mapUrl: string;
+  note: string | null;
+  origin: string;
+}
+
+export function buildShowingEmailHtml(d: ShowingEmailData): string {
+  const firstName = d.clientName.trim().split(/\s+/)[0] || "there";
+  const cancelled = d.kind === "cancel";
+  const accent = cancelled ? BRAND.mute : BRAND.forest;
+  const row = (label: string, value: string) =>
+    `<tr><td style="padding:7px 16px 7px 0;color:${BRAND.mute};font-size:12px;letter-spacing:0.08em;text-transform:uppercase;width:110px;vertical-align:top;">${label}</td><td style="padding:7px 0;font-size:14px;color:${BRAND.black};line-height:1.5;">${value}</td></tr>`;
+  const photo =
+    d.photoUrl && !cancelled
+      ? `<tr><td style="padding:20px 36px 0;"><img src="${escapeAttr(d.photoUrl)}" alt="${escapeAttr(d.address)}" width="528" style="display:block;width:100%;max-width:528px;height:auto;border:0;" /></td></tr>`
+      : "";
+  return bookingShell({
+    eyebrow: cancelled ? "SHOWING CANCELLED" : d.kind === "update" ? "SHOWING UPDATED" : "SHOWING CONFIRMED",
+    heading: cancelled
+      ? "This showing is cancelled."
+      : d.kind === "update"
+        ? "Your showing has changed."
+        : `See you there, ${escapeAttr(firstName)}.`,
+    intro: cancelled
+      ? `The showing at ${escapeAttr(d.address)} won't go ahead as planned. I'll be in touch about another time.`
+      : `The calendar invitation attached to this email will add it to your calendar${d.kind === "update" ? " and replace the old time" : ""}. Questions before then? Just reply.`,
+    accent,
+    origin: d.origin,
+    body: `
+      ${photo}
+      <tr><td style="padding:20px 36px 0;">
+        <div style="border:1px solid ${BRAND.border};border-left:4px solid ${accent};padding:18px 22px;background:#fafafa;">
+          <table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;">
+            ${row("When", escapeAttr(d.whenLabel))}
+            ${row("Length", `${d.durationMinutes} minutes`)}
+            ${row("Where", `<a href="${escapeAttr(d.mapUrl)}" style="color:${BRAND.forest};">${escapeAttr(d.address)}</a>`)}
+            ${d.summary ? row("Home", escapeAttr(d.summary)) : ""}
+            ${d.mlsNumber ? row("MLS®", escapeAttr(d.mlsNumber)) : ""}
+            ${d.note ? row("Note", escapeAttr(d.note).replace(/\n/g, "<br />")) : ""}
+          </table>
+        </div>
+      </td></tr>
+      ${
+        d.listingUrl && !cancelled
+          ? `<tr><td style="padding:22px 36px 0;">
+              <a href="${escapeAttr(d.listingUrl)}" style="display:inline-block;background:${BRAND.black};color:#fff;text-decoration:none;font-size:12px;letter-spacing:0.16em;padding:14px 26px;text-transform:uppercase;">View the listing</a>
+            </td></tr>`
+          : ""
+      }
+      <tr><td style="padding:16px 36px 8px;"></td></tr>`,
+  });
+}
+
 // ---- E-signature emails (server/deal-routes.ts) ------------------------------
 
 export interface SignEmailData {
@@ -727,6 +803,81 @@ export function buildSignedCopyHtml(d: SignEmailData & { sha256: string; attache
       ${signButton(d.signUrl, "Download signed copy")}
       <tr><td style="padding:18px 36px 0;">
         <p style="font-size:11px;color:${BRAND.mute};line-height:1.6;margin:0;">Signed file SHA-256: <span style="font-family:Menlo,Consolas,monospace;word-break:break-all;">${escapeAttr(d.sha256)}</span><br />A copy whose hash matches this value is unaltered.</p>
+      </td></tr>`,
+  });
+}
+
+// ---- Envelope emails (several documents, one email) ------------------------------
+
+export interface EnvelopeEmailData {
+  recipientName: string;
+  envelopeTitle: string;
+  documents: Array<{ title: string; sha256?: string | null }>;
+  dealTitle: string;
+  address?: string | null;
+  message?: string | null;
+  /** The recipient's private link to the whole envelope. */
+  signUrl: string;
+  origin: string;
+}
+
+function documentList(docs: Array<{ title: string; sha256?: string | null }>, accent: string, withHashes = false): string {
+  return `
+    <tr><td style="padding:20px 36px 0;">
+      <div style="border:1px solid ${BRAND.border};border-left:4px solid ${accent};padding:14px 22px;background:#fafafa;">
+        <div style="color:${BRAND.mute};font-size:12px;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:6px;">${docs.length} document${docs.length === 1 ? "" : "s"}</div>
+        ${docs
+          .map(
+            (d, i) =>
+              `<div style="font-size:14px;color:${BRAND.black};line-height:1.5;padding:4px 0;${i ? `border-top:1px solid ${BRAND.border};` : ""}">${i + 1}. ${escapeAttr(d.title)}${
+                withHashes && d.sha256
+                  ? `<div style="font-size:10.5px;color:${BRAND.mute};font-family:Menlo,Consolas,monospace;word-break:break-all;">SHA-256 ${escapeAttr(d.sha256)}</div>`
+                  : ""
+              }</div>`,
+          )
+          .join("")}
+      </div>
+    </td></tr>`;
+}
+
+/** "Please sign these": one email for every document in the envelope. */
+export function buildEnvelopeSignRequestHtml(d: EnvelopeEmailData & { reminder?: boolean }): string {
+  const firstName = d.recipientName.trim().split(/\s+/)[0] || "there";
+  const n = d.documents.length;
+  return bookingShell({
+    eyebrow: d.reminder ? "REMINDER · SIGNATURES REQUESTED" : "SIGNATURES REQUESTED",
+    heading: `${escapeAttr(firstName)}, ${n === 1 ? "a document is" : `${n} documents are`} ready for your signature.`,
+    intro: `Spencer Rivers has sent you <strong style="color:${BRAND.black};">${escapeAttr(d.envelopeTitle)}</strong> to review and sign electronically${
+      n > 1 ? ", all in one sitting: you sign once and it's applied to each document" : ""
+    }. The link below is yours alone — please don't forward it.`,
+    accent: BRAND.gold,
+    origin: d.origin,
+    body: `
+      ${signDetailRows({ documentTitle: d.envelopeTitle, dealTitle: d.dealTitle, address: d.address, message: d.message }, BRAND.gold)}
+      ${documentList(d.documents, BRAND.gold)}
+      ${signButton(d.signUrl, n > 1 ? "Review & sign all" : "Review & sign")}
+      <tr><td style="padding:18px 36px 0;">
+        <p style="font-size:12px;color:${BRAND.mute};line-height:1.6;margin:0;">You'll be asked to confirm that you agree to sign electronically before anything is recorded. Questions? Reply to this email or call (403) 966-9237.</p>
+      </td></tr>`,
+  });
+}
+
+/** "Everything is signed": every signed copy, in one email. */
+export function buildEnvelopeSignedCopyHtml(d: EnvelopeEmailData & { attached: boolean }): string {
+  const firstName = d.recipientName.trim().split(/\s+/)[0] || "there";
+  return bookingShell({
+    eyebrow: "DOCUMENTS COMPLETED",
+    heading: `${escapeAttr(firstName)}, all parties have signed.`,
+    intro: `Everything in <strong style="color:${BRAND.black};">${escapeAttr(d.envelopeTitle)}</strong> is complete. ${
+      d.attached ? "The signed copies are attached, and you can" : "You can"
+    } download them any time from your private link.`,
+    accent: BRAND.forest,
+    origin: d.origin,
+    body: `
+      ${documentList(d.documents, BRAND.forest, true)}
+      ${signButton(d.signUrl, "Download signed copies")}
+      <tr><td style="padding:18px 36px 0;">
+        <p style="font-size:11px;color:${BRAND.mute};line-height:1.6;margin:0;">A copy whose SHA-256 hash matches the value above is unaltered. Each document carries its own signing certificate.</p>
       </td></tr>`,
   });
 }

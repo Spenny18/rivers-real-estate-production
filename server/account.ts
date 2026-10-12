@@ -34,6 +34,7 @@ import {
   type AccountUser,
 } from "@shared/schema";
 import { sendEmail } from "./email";
+import { syncShowingInBackground } from "./showings";
 import { storage } from "./storage";
 
 import { publicOrigin, publicOriginConfigured } from "./origin";
@@ -94,6 +95,8 @@ function ensureLeadForEmail(email: string): number {
     } as any)
     .returning()
     .get();
+  // A portal sign-up is a lead like any other: give it a CRM contact.
+  storage.onLeadCreated?.(row);
   return row.id;
 }
 
@@ -625,9 +628,15 @@ export function registerAccountRoutes(app: Express) {
         scheduledFor: preferredAt,
         status: "requested",
         notes: notes || null,
+        // Snapshot who asked, so the invite reaches them when Spencer confirms.
+        clientName: req.accountUser!.name || null,
+        clientEmail: req.accountUser!.email,
+        clientPhone: (req.accountUser as any).phone || null,
       } as any)
       .returning()
       .get();
+    // Onto Spencer's calendar as a request; the client is invited on confirm.
+    syncShowingInBackground(row.id);
 
     // Notify Spencer. Best-effort — don't fail the request if mail fails.
     try {
@@ -687,6 +696,8 @@ export function registerAccountRoutes(app: Express) {
         .set({ status: "cancelled" })
         .where(eq(tours.id, id))
         .run();
+      // Off Spencer's calendar, and closes out the client's invite if any.
+      syncShowingInBackground(id);
       res.json({ ok: true });
     },
   );

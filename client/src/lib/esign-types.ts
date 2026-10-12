@@ -58,6 +58,8 @@ export interface DocumentSummary {
   id: number;
   dealId: number;
   title: string;
+  /** Set when the document was sent in an envelope. */
+  envelopeId?: number | null;
   originalFilename: string | null;
   source: "upload" | "email" | "template";
   formTemplateId: number | null;
@@ -91,6 +93,7 @@ export interface DocumentDetail extends DocumentSummary {
 }
 
 export interface DealView {
+  envelopes?: EnvelopeView[];
   id: number;
   title: string;
   address: string | null;
@@ -105,7 +108,13 @@ export interface DealView {
   crmContactFubId: string | null;
   crmContact: { fubId: string; name: string | null; email: string | null; phone: string | null; address: string | null; stage: string | null; url: string } | null;
   crmDealFubId: string | null;
+  /** The linked MLS® listing forms fill from, if any. */
+  listing: { source: "mls"; mlsNumber: string | null; address: string; summary: string | null; price: number | null; url: string | null; photoUrl: string | null; status: string | null } | null;
   crmDeal: { fubId: string; name: string | null; stageName: string | null; value: number | null; status: string | null } | null;
+  /** Co-buyers / co-sellers added on the deal page, in party order. */
+  coContacts: Array<{ fubId: string; name: string | null; email: string | null; phone: string | null; address: string | null; stage: string | null; url: string }>;
+  /** Who forms fill as buyer 1, 2… (or sellers): main contact, co-contacts, then people on the FUB deal. */
+  clients: Array<{ fubId: string; name: string | null; email: string | null }>;
   inboxAddress: string | null;
   inbound: InboundMessage[];
   createdAt: string;
@@ -369,4 +378,40 @@ export interface FormPrefill {
   carriedFrom: { id: number; title: string; createdAt: string } | null;
   listing: { id: string; mlsNumber: string; address: string } | null;
   slots: { buyer: number; seller: number };
+}
+
+// ---- Envelopes (several documents sent together) -------------------------------
+
+export interface EnvelopeView {
+  id: number;
+  title: string;
+  message: string | null;
+  status: "sent" | "completed" | "declined" | "voided";
+  sentAt: string | null;
+  completedAt: string | null;
+  voidedAt: string | null;
+  voidReason: string | null;
+  documents: Array<{ id: number; title: string; status: DocumentSummary["status"]; signingOrder: string }>;
+  recipients: Array<{
+    id: number;
+    name: string;
+    email: string;
+    status: "pending" | "sent" | "viewed" | "signed" | "declined";
+    lastEmailAt: string | null;
+    total: number;
+    signed: number;
+    canSignNow: number;
+    waiting: number;
+    signUrl: string;
+  }>;
+  warning?: string;
+}
+
+/** What /api/sign/e/:token returns: one person's view of their envelope. */
+export interface EnvelopeSignerPage {
+  envelope: { id: number; title: string; message: string | null; status: EnvelopeView["status"]; completedAt: string | null };
+  deal: { title: string; address: string | null };
+  agent: SignerPage["agent"];
+  recipient: { name: string; email: string; status: string; consentAt: string | null };
+  documents: SignerPage[];
 }

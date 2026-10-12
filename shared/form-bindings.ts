@@ -85,7 +85,12 @@ export const BINDINGS: Binding[] = [
   { key: "property.legalBlock", label: "Legal description — block", group: "property", type: "text", source: "manual" },
   { key: "property.legalLot", label: "Legal description — lot", group: "property", type: "text", source: "manual" },
   { key: "property.legalOther", label: "Legal description — other (unit / condo plan)", group: "property", type: "text", source: "manual" },
+  { key: "property.legalUnit", label: "Legal description — unit number", group: "property", type: "text", source: "manual" },
+  { key: "property.unitFactor", label: "Unit factor", group: "property", type: "text", source: "manual" },
+  { key: "property.projectName", label: "Condominium project name", group: "property", type: "text", source: "manual" },
+  { key: "property.condoFee", label: "Monthly condo contribution", group: "property", type: "money", source: "manual" },
   { key: "property.title", label: "Title number", group: "property", type: "text", source: "manual" },
+  { key: "property.linc", label: "LINC number", group: "property", type: "text", source: "manual" },
 
   ...partyBindings("buyer"),
   ...partyBindings("seller"),
@@ -107,8 +112,14 @@ export const BINDINGS: Binding[] = [
   { key: "offer.dowerTime", label: "Dower consent due — time", group: "offer", type: "text", source: "manual", hint: "e.g. 11:59 p" },
   { key: "offer.dowerDate", label: "Dower consent due — date", group: "offer", type: "date", source: "manual" },
   { key: "offer.downPaymentPercent", label: "Financing — down payment (%)", group: "offer", type: "text", source: "manual", hint: "Just the number, e.g. 20" },
+  { key: "offer.financingConditionTime", label: "Financing condition — time", group: "offer", type: "text", source: "manual", hint: "e.g. 11:59 p" },
   { key: "offer.financingConditionDay", label: "Financing condition day", group: "offer", type: "date", source: "manual" },
+  { key: "offer.inspectionConditionTime", label: "Property inspection condition — time", group: "offer", type: "text", source: "manual", hint: "e.g. 11:59 p" },
   { key: "offer.inspectionConditionDay", label: "Property inspection condition day", group: "offer", type: "date", source: "manual" },
+  { key: "offer.condoDocsConditionTime", label: "Condo documents review — time", group: "offer", type: "text", source: "manual", hint: "e.g. 11:59 p" },
+  { key: "offer.condoDocsConditionDay", label: "Condo documents review — condition day", group: "offer", type: "date", source: "manual" },
+  { key: "offer.condoDocsDeliveryTime", label: "Condo documents delivered by — time", group: "offer", type: "text", source: "manual", hint: "e.g. 11:59 p" },
+  { key: "offer.condoDocsDeliveryDay", label: "Condo documents delivered by — day", group: "offer", type: "date", source: "manual" },
   { key: "offer.saleConditionTime", label: "Sale of buyer's property — time", group: "offer", type: "text", source: "manual", hint: "e.g. 11:59 p" },
   { key: "offer.saleConditionDay", label: "Sale of buyer's property — condition day", group: "offer", type: "date", source: "manual" },
   { key: "offer.buyerConditions", label: "Additional buyer's conditions", group: "offer", type: "multiline", source: "manual" },
@@ -151,6 +162,10 @@ export const BINDINGS: Binding[] = [
   { key: "agreement.retainer", label: "Retainer", group: "agreement", type: "money", source: "manual" },
 
   // Listing brokerage, from the MLS mirror.
+  // The sellers' names on a buyer-side offer: printed only. Unlike the
+  // seller.N party keys these never make the sellers signers.
+  { key: "listing.sellerName1", label: "Seller's name", group: "listing", type: "text", source: "manual" },
+  { key: "listing.sellerName2", label: "Second seller's name", group: "listing", type: "text", source: "manual" },
   { key: "listing.brokerage", label: "Listing brokerage", group: "listing", type: "text", source: "listing" },
   { key: "listing.brokerageAddress", label: "Listing brokerage — address", group: "listing", type: "text", source: "manual" },
   { key: "listing.agent", label: "Listing agent", group: "listing", type: "text", source: "listing" },
@@ -180,7 +195,7 @@ export const BINDING_GROUP_LABELS: Record<BindingGroup, string> = {
   conveyancing: "Conveyancing",
   amendment: "Amendment / notice",
   agreement: "Representation agreement",
-  listing: "Listing brokerage",
+  listing: "Seller's side",
   agent: "Agent",
   document: "Document",
 };

@@ -15,6 +15,7 @@
 
 import { PDFDocument, PDFFont, PDFImage, PDFPage, StandardFonts, rgb, degrees } from "pdf-lib";
 import type { DealDocument, DealEvent, DealField, DealSigner, Deal } from "@shared/schema";
+import { AGENT_SIGNER_ID } from "@shared/schema";
 import { AGENT } from "./brand";
 import { signatureCaption } from "@shared/esign-format";
 
@@ -213,9 +214,15 @@ export async function buildSignedPdf(input: SignedPdfInput): Promise<Uint8Array>
   for (const f of input.fields) {
     const page = pages[f.page - 1];
     if (!page) continue;
+    const r = fieldRect(page, f);
+    if (f.signerId === AGENT_SIGNER_ID) {
+      // Filled in by the agent before sending.
+      if (f.type === "checkbox" && f.value === "true") drawCheck(page, r);
+      else if (f.type === "text" && f.value) drawTextInBox(page, ctx, f.value, r);
+      continue;
+    }
     const signer = signerById.get(f.signerId);
     if (!signer) continue;
-    const r = fieldRect(page, f);
     switch (f.type) {
       case "signature":
       case "initials": {

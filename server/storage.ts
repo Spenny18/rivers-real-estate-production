@@ -880,6 +880,7 @@ sqlite.exec(`
     notes TEXT,
     crm_contact_fub_id TEXT,
     crm_deal_fub_id TEXT,
+    co_contact_fub_ids TEXT,
     inbox_token TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -1036,6 +1037,7 @@ try {
   if (dealCols.size > 0) {
     if (!dealCols.has("crm_contact_fub_id")) sqlite.exec("ALTER TABLE deals ADD COLUMN crm_contact_fub_id TEXT");
     if (!dealCols.has("crm_deal_fub_id")) sqlite.exec("ALTER TABLE deals ADD COLUMN crm_deal_fub_id TEXT");
+    if (!dealCols.has("co_contact_fub_ids")) sqlite.exec("ALTER TABLE deals ADD COLUMN co_contact_fub_ids TEXT");
     if (!dealCols.has("inbox_token")) {
       sqlite.exec("ALTER TABLE deals ADD COLUMN inbox_token TEXT");
       console.log("[migration] added crm/inbox columns to deals");
@@ -1064,6 +1066,45 @@ try {
   }
 } catch (e) {
   console.error("[migration] deals phase two:", e);
+}
+
+// Envelopes: several documents sent for signature together.
+try {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS deal_envelopes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      deal_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      message TEXT,
+      status TEXT NOT NULL DEFAULT 'sent',
+      sent_at TEXT,
+      completed_at TEXT,
+      voided_at TEXT,
+      void_reason TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_deal_envelopes_deal ON deal_envelopes(deal_id);
+    CREATE TABLE IF NOT EXISTS deal_envelope_recipients (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      envelope_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL,
+      token TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'pending',
+      consent_at TEXT,
+      last_email_at TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_deal_envelope_recipients_env ON deal_envelope_recipients(envelope_id);
+  `);
+  const docCols = new Set((sqlite.prepare("PRAGMA table_info(deal_documents)").all() as Array<{ name: string }>).map((c) => c.name));
+  if (docCols.size > 0 && !docCols.has("envelope_id")) {
+    sqlite.exec("ALTER TABLE deal_documents ADD COLUMN envelope_id INTEGER");
+    console.log("[migration] added envelope_id to deal_documents");
+  }
+} catch (e) {
+  console.error("[migration] envelopes:", e);
 }
 
 // Migration: add account_user_id to saved_searches so portal users own
@@ -1302,6 +1343,24 @@ try {
     if (!existing.has("google_event_id")) {
       sqlite.exec("ALTER TABLE tours ADD COLUMN google_event_id TEXT");
       console.log("[migration] added google_event_id to tours");
+    }
+    // Showings: client snapshot + invite tracking (see tours in shared/schema.ts).
+    const add: Array<[string, string]> = [
+      ["duration_minutes", "INTEGER NOT NULL DEFAULT 60"],
+      ["client_name", "TEXT"],
+      ["client_email", "TEXT"],
+      ["client_phone", "TEXT"],
+      ["contact_fub_id", "TEXT"],
+      ["notify_client", "INTEGER NOT NULL DEFAULT 1"],
+      ["invite_channel", "TEXT"],
+      ["invite_sequence", "INTEGER NOT NULL DEFAULT 0"],
+      ["invited_at", "TEXT"],
+      ["invite_error", "TEXT"],
+      ["reminder_sent_at", "TEXT"],
+      ["reminder_error", "TEXT"],
+    ];
+    for (const [name, type] of add) {
+      if (!existing.has(name)) sqlite.exec(`ALTER TABLE tours ADD COLUMN ${name} ${type}`);
     }
   }
 } catch (err) {
@@ -1549,6 +1608,8 @@ export interface IStorage {
   // Tours
   listTours(): Tour[];
   createTour(data: InsertTour): Tour;
+  getTour(id: number): Tour | undefined;
+  updateTour(id: number, patch: Partial<Omit<Tour, "id" | "createdAt">>): Tour | undefined;
   updateTourStatus(id: number, status: string): Tour | undefined;
 }
 
@@ -1795,8 +1856,14 @@ export class DatabaseStorage implements IStorage {
   getLead(id: number) {
     return db.select().from(leads).where(eq(leads.id, id)).get();
   }
+  /**
+   * Set by server/contacts.ts: makes sure every new lead has a CRM contact.
+   * A hook rather than an import so the data layer doesn't depend on it.
+   */
+  onLeadCreated: ((lead: Lead) => void) | null = null;
+
   createLead(data: InsertLead) {
-    return db
+    const lead = db
       .insert(leads)
       .values({
         listingId: data.listingId ?? null,
@@ -1809,6 +1876,8 @@ export class DatabaseStorage implements IStorage {
       })
       .returning()
       .get();
+    this.onLeadCreated?.(lead);
+    return lead;
   }
   updateLeadStatus(id: number, status: string) {
     return db
@@ -3727,6 +3796,9 @@ export class DatabaseStorage implements IStorage {
   listTours() {
     return db.select().from(tours).orderBy(desc(tours.scheduledFor)).all();
   }
+  getTour(id: number): Tour | undefined {
+    return db.select().from(tours).where(eq(tours.id, id)).get();
+  }
   createTour(data: InsertTour) {
     return db
       .insert(tours)
@@ -3736,9 +3808,18 @@ export class DatabaseStorage implements IStorage {
         scheduledFor: data.scheduledFor,
         status: data.status ?? "requested",
         notes: data.notes ?? null,
+        durationMinutes: data.durationMinutes ?? 60,
+        clientName: data.clientName ?? null,
+        clientEmail: data.clientEmail ?? null,
+        clientPhone: data.clientPhone ?? null,
+        contactFubId: data.contactFubId ?? null,
+        notifyClient: data.notifyClient ?? true,
       })
       .returning()
       .get();
+  }
+  updateTour(id: number, patch: Partial<Omit<Tour, "id" | "createdAt">>): Tour | undefined {
+    return db.update(tours).set(patch).where(eq(tours.id, id)).returning().get();
   }
   updateTourStatus(id: number, status: string) {
     return db

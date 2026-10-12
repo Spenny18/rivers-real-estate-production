@@ -45,6 +45,8 @@ function qs(req: Request, name: string): string | undefined {
 function dtoContact(c: any) {
   return {
     fubId: c.fubId,
+    // "app": created here (server/contacts.ts), editable; "fub": mirrored.
+    origin: String(c.fubId).startsWith("app-") ? "app" : "fub",
     name: c.name,
     firstName: c.firstName,
     lastName: c.lastName,

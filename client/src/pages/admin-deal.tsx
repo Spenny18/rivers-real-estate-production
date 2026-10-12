@@ -17,7 +17,8 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, CheckCircle2, Clock, Copy, ExternalLink, FilePlus2, FileStack, FileText, Inbox, Loader2, Mail, Plus, RefreshCw, Save, Search, Trash2, Upload, X, XCircle } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Clock, Copy, ExternalLink, FilePlus2, FileStack, FileText, Inbox, Loader2, Mail, Plus, RefreshCw, Save, Search, Send, Trash2, Upload, X, XCircle } from "lucide-react";
+import { EnvelopeCard, SendTogetherDialog } from "@/components/envelopes";
 import { apiErrorMessage, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -33,6 +34,7 @@ import {
   FORM_KIND_LABELS,
 } from "@/lib/esign-types";
 import type { Lead } from "@shared/schema";
+import { ListingCard, ListingSearch } from "@/components/listing-picker";
 
 export const DOC_STATUS_STYLES: Record<DocumentSummary["status"], string> = {
   draft: "bg-secondary text-secondary-foreground border-border",
@@ -76,6 +78,7 @@ export default function AdminDealPage() {
 
   const [edit, setEdit] = useState<Partial<DealView> | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [sendingTogether, setSendingTogether] = useState(false);
   const [pickingForm, setPickingForm] = useState(false);
   const { data: forms = [] } = useQuery<FormTemplateSummary[]>({ queryKey: ["/api/admin/form-templates"] });
   const [file, setFile] = useState<File | null>(null);
@@ -92,6 +95,18 @@ export default function AdminDealPage() {
       qc.invalidateQueries({ queryKey: ["/api/admin/deals"] });
       setEdit(null);
       toast({ title: "Deal saved" });
+    },
+    onError: (e) => toast({ title: "Didn't save", description: apiErrorMessage(e), variant: "destructive" }),
+  });
+
+  // Linking or unlinking the listing saves at once (and keeps any unsaved edits).
+  const linkListing = useMutation({
+    mutationFn: async (mlsNumber: string | null) => (await apiRequest("PATCH", `/api/admin/deals/${id}`, { mlsNumber })).json() as Promise<DealView>,
+    onSuccess: (d) => {
+      qc.setQueryData(key, d);
+      qc.invalidateQueries({ queryKey: ["/api/admin/deals"] });
+      if (edit) setEdit({ ...edit, mlsNumber: d.mlsNumber, listingId: d.listingId, address: edit.address || d.address });
+      toast({ title: d.listing ? "Listing linked" : "Listing unlinked", description: d.listing ? "Forms for this deal now fill from it." : undefined });
     },
     onError: (e) => toast({ title: "Didn't save", description: apiErrorMessage(e), variant: "destructive" }),
   });
@@ -163,12 +178,26 @@ export default function AdminDealPage() {
           <Button size="sm" onClick={() => setPickingForm(true)} data-testid="button-new-from-form">
             <FilePlus2 className="h-4 w-4 mr-1" /> New from form
           </Button>
+          {deal.documents.some((d) => d.status === "draft" && !d.envelopeId) ? (
+            <Button size="sm" variant="outline" onClick={() => setSendingTogether(true)} data-testid="button-send-together">
+              <Send className="h-4 w-4 mr-1" /> Send together
+            </Button>
+          ) : null}
         </div>
       }
     >
+      <SendTogetherDialog deal={deal} open={sendingTogether} onOpenChange={setSendingTogether} />
       <div className="p-6 grid gap-6 lg:grid-cols-[1fr_340px] max-w-6xl">
         {/* Documents */}
         <div className="space-y-3">
+          {deal.envelopes?.length ? (
+            <>
+              <div className="font-display text-[10px] tracking-[0.2em] text-muted-foreground">ENVELOPES</div>
+              {deal.envelopes.map((env) => (
+                <EnvelopeCard key={env.id} dealId={deal.id} env={env} />
+              ))}
+            </>
+          ) : null}
           <div className="font-display text-[10px] tracking-[0.2em] text-muted-foreground">DOCUMENTS</div>
           {deal.documents.length === 0 ? (
             <Card>
@@ -204,6 +233,7 @@ export default function AdminDealPage() {
                       {d.signerCount ? ` · ${d.signedCount}/${d.signerCount} signed` : " · no signers yet"}
                       {d.status === "sent" && d.sentAt ? ` · sent ${fmtDateTime(d.sentAt)}` : ""}
                       {d.status === "completed" && d.completedAt ? ` · completed ${fmtDateTime(d.completedAt)}` : ""}
+                      {d.envelopeId ? ` · in envelope "${deal.envelopes?.find((e) => e.id === d.envelopeId)?.title ?? ""}"` : ""}
                     </div>
                   </div>
                   <Badge variant="outline" className={`text-[10px] ${DOC_STATUS_STYLES[d.status]}`}>
@@ -277,8 +307,17 @@ export default function AdminDealPage() {
                 </div>
               </div>
               <div className="space-y-1.5">
-                <Label>MLS® number</Label>
-                <Input value={form.mlsNumber ?? ""} onChange={(e) => setEdit({ ...form, mlsNumber: e.target.value })} />
+                <Label>MLS® listing</Label>
+                {deal.listing ? (
+                  <ListingCard listing={deal.listing} onClear={() => linkListing.mutate(null)} />
+                ) : (
+                  <>
+                    {deal.mlsNumber ? (
+                      <div className="text-[11px] text-amber-700">MLS® {deal.mlsNumber} isn't in the listing mirror, so forms can't fill from it. Search for the property instead.</div>
+                    ) : null}
+                    <ListingSearch onPick={(l) => l.mlsNumber && linkListing.mutate(l.mlsNumber)} />
+                  </>
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label>Notes</Label>
@@ -507,6 +546,13 @@ function ClientCard({ deal, onSaved }: { deal: DealView; onSaved: (d: DealView) 
   const [q, setQ] = useState("");
   const [leadQ, setLeadQ] = useState("");
   const [pickingLead, setPickingLead] = useState(false);
+  const [coQ, setCoQ] = useState("");
+  const { data: coMatches = [] } = useQuery<CrmContactLite[]>({
+    queryKey: [`/api/admin/crm/contacts?q=${encodeURIComponent(coQ.trim())}&limit=8`],
+    enabled: coQ.trim().length >= 2,
+  });
+  const party = deal.kind === "listing" ? "seller" : "buyer";
+  const coIds = deal.coContacts.map((c) => c.fubId);
   const { data: matches = [] } = useQuery<CrmContactLite[]>({
     queryKey: [`/api/admin/crm/contacts?q=${encodeURIComponent(q.trim())}&limit=8`],
     enabled: q.trim().length >= 2,
@@ -518,11 +564,12 @@ function ClientCard({ deal, onSaved }: { deal: DealView; onSaved: (d: DealView) 
   const { data: leads = [] } = useQuery<Lead[]>({ queryKey: ["/api/leads"], enabled: pickingLead });
 
   const link = useMutation({
-    mutationFn: async (patch: { crmContactFubId?: string | null; crmDealFubId?: string | null; leadId?: number | null }) =>
+    mutationFn: async (patch: { crmContactFubId?: string | null; crmDealFubId?: string | null; leadId?: number | null; coContactFubIds?: string[] }) =>
       (await apiRequest("PATCH", `/api/admin/deals/${deal.id}`, patch)).json() as Promise<DealView>,
     onSuccess: (d) => {
       onSaved(d);
       setQ("");
+      setCoQ("");
       setPickingLead(false);
     },
     onError: (e) => toast({ title: "Didn't save", description: apiErrorMessage(e), variant: "destructive" }),
@@ -610,6 +657,59 @@ function ClientCard({ deal, onSaved }: { deal: DealView; onSaved: (d: DealView) 
                 </div>
               ) : null}
               <div className="text-[11px] text-muted-foreground">Completed and declined signings post a note on this person in FUB.</div>
+            </div>
+          ) : null}
+
+          {/* Co-buyers / co-sellers */}
+          {deal.crmContact ? (
+            <div className="space-y-1.5">
+              <Label className="text-[11px]">Other {party}s on this deal</Label>
+              {deal.coContacts.map((c) => (
+                <div key={c.fubId} className="flex items-center gap-2 text-[12px]">
+                  <span className="flex-1 min-w-0 truncate">
+                    {c.name || c.email} <span className="text-muted-foreground">{c.email}</span>
+                  </span>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7"
+                    title="Remove"
+                    onClick={() => link.mutate({ coContactFubIds: coIds.filter((x) => x !== c.fubId) })}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ))}
+              {coIds.length < 3 ? (
+                <div className="relative">
+                  <Search className="h-3.5 w-3.5 absolute left-2 top-2.5 text-muted-foreground" />
+                  <Input value={coQ} onChange={(e) => setCoQ(e.target.value)} placeholder={`Add a co-${party}: name, email or phone`} className="h-8 pl-7 text-[12px]" data-testid="input-co-contact" />
+                </div>
+              ) : null}
+              {coQ.trim().length >= 2 ? (
+                <div className="border border-border rounded-sm divide-y divide-border">
+                  {coMatches.filter((c) => c.fubId !== deal.crmContactFubId && !coIds.includes(c.fubId)).length === 0 ? (
+                    <div className="text-[11px] text-muted-foreground p-2">No matches in the CRM mirror.</div>
+                  ) : null}
+                  {coMatches
+                    .filter((c) => c.fubId !== deal.crmContactFubId && !coIds.includes(c.fubId))
+                    .map((c) => (
+                      <button key={c.fubId} className="w-full text-left p-2 hover:bg-secondary text-[12px]" onClick={() => link.mutate({ coContactFubIds: [...coIds, c.fubId] })}>
+                        <div className="font-medium">{c.name || c.email}</div>
+                        <div className="text-[11px] text-muted-foreground">
+                          {c.email}
+                          {c.phone ? ` · ${c.phone}` : ""}
+                        </div>
+                      </button>
+                    ))}
+                </div>
+              ) : null}
+              {deal.clients.length ? (
+                <div className="text-[11px] text-muted-foreground">
+                  Forms fill {deal.clients.map((c, i) => `${party} ${i + 1}: ${c.name || c.email}`).join(" · ")}
+                  {deal.clients.length > 1 + deal.coContacts.length ? " (includes people on the Follow Up Boss deal)" : ""}.
+                </div>
+              ) : null}
             </div>
           ) : null}
 

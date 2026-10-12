@@ -6,7 +6,7 @@
 // live preview, and creates the document: a draft with the signers and their
 // boxes already in place, ready to send.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
@@ -18,6 +18,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { ArrowLeft, FilePlus2, Loader2, RefreshCw } from "lucide-react";
 import { apiErrorMessage, apiRequest, apiUrl, getAuthToken } from "@/lib/queryClient";
+import { mergePrefill } from "@/lib/merge-prefill";
 import { useToast } from "@/hooks/use-toast";
 import { PdfPages } from "@/components/pdf-pages";
 import { fmtDateTime, type DealView, type DocumentDetail, type FormFillBox, type FormPrefill, type PrefillSource } from "@/lib/esign-types";
@@ -65,9 +66,14 @@ export default function AdminDealFormPage() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const { data: deal } = useQuery<DealView>({ queryKey: [`/api/admin/deals/${dealId}`], enabled: Number.isFinite(dealId) });
+  // Keyed on the deal's updatedAt so editing the deal (adding its MLS number,
+  // say) fetches a fresh pre-fill. Without it the first pre-fill was kept for
+  // good, and a deal given its MLS number afterwards read as "not in the
+  // listing mirror" against a stale empty lookup.
   const { data: prefill, isLoading, error } = useQuery<FormPrefill>({
-    queryKey: [`/api/admin/deals/${dealId}/form-prefill?templateId=${templateId}`],
-    enabled: Number.isFinite(dealId) && Number.isFinite(templateId),
+    queryKey: [`/api/admin/deals/${dealId}/form-prefill?templateId=${templateId}`, deal?.updatedAt],
+    queryFn: async () => (await apiRequest("GET", `/api/admin/deals/${dealId}/form-prefill?templateId=${templateId}`)).json(),
+    enabled: Number.isFinite(dealId) && Number.isFinite(templateId) && !!deal,
     staleTime: Infinity,
   });
 
@@ -76,11 +82,23 @@ export default function AdminDealFormPage() {
   const [previewVersion, setPreviewVersion] = useState(0);
   const [previewValues, setPreviewValues] = useState<Record<string, string>>({});
 
+  // What the last pre-fill said, to tell a field the user typed in from one
+  // that's still exactly what was pre-filled.
+  const prefilledRef = useRef<Record<string, string> | null>(null);
   useEffect(() => {
-    if (!prefill || values) return;
-    setValues(prefill.values);
-    setPreviewValues(prefill.values);
-    setTitle(prefill.template.name);
+    if (!prefill) return;
+    if (!values) {
+      setValues(prefill.values);
+      setPreviewValues(prefill.values);
+      setTitle(prefill.template.name);
+      prefilledRef.current = prefill.values;
+      return;
+    }
+    // A fresh pre-fill after the deal changed: untouched fields take the new
+    // value, anything the user has edited stays as they left it.
+    const merged = mergePrefill(prefilledRef.current ?? {}, prefill.values, values);
+    prefilledRef.current = prefill.values;
+    setValues(merged);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill]);
 
