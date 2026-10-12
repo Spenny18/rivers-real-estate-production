@@ -44,6 +44,17 @@ export default function BlogIndexPage() {
           Calgary luxury real estate, from someone who actually works it.
         </h1>
         <p className="mt-5 max-w-2xl text-muted-foreground text-[15px] leading-relaxed">
+          Written by Spencer Rivers, REALTOR®, CLHMS — a Calgary luxury real
+          estate specialist with Rivers Real Estate and Synterra Realty, 12
+          years in Calgary's luxury market, top 1% in Canada and more than
+          $200M in career sales. New here? Start with{" "}
+          <Link href="/blog/how-to-choose-a-luxury-real-estate-agent-in-calgary">
+            how to choose the best luxury real estate agent in Calgary
+          </Link>
+          , then browse the market notes, neighbourhood deep-dives and condo
+          building guides below.
+        </p>
+        <p className="mt-5 max-w-2xl text-muted-foreground text-[15px] leading-relaxed">
           Start here:{" "}
           <Link href="/blog/how-to-choose-a-luxury-real-estate-agent-in-calgary">
             how to choose a luxury real estate agent in Calgary
