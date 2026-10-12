@@ -26,6 +26,16 @@ const NEIGHBOURHOOD_GROUPS = [
   { label: "Downtown East Village", slug: "beltline" },
 ];
 
+const CONDO_GUIDES = [
+  { text: "Calgary's top luxury condo districts compared", href: "/blog/calgarys-top-luxury-condo-districts-mission-eau-claire-and-east-village-compared" },
+  { text: "Eau Claire luxury condos: buildings, views and price per square foot", href: "/blog/eau-claire-luxury-condos-buildings-views-and-price-per-square-foot" },
+  { text: "East Village luxury condos and the true cost of ownership", href: "/blog/east-village-luxury-condos-modern-towers-and-the-true-cost-of-ownership" },
+  { text: "The best condo buildings in Calgary", href: "/blog/the-9-best-luxury-condos-in-calgary" },
+  { text: "Calgary new construction condos", href: "/blog/calgary-new-construction-guide" },
+  { text: "Calgary luxury penthouses", href: "/blog/calgary-luxury-penthouses" },
+  { text: "Calgary condo assignment sales", href: "/assignments" },
+];
+
 export default function CondosIndexPage() {
   const { data: buildings = [], isLoading } = useQuery<CondoBuilding[]>({
     queryKey: ["/api/public/condos"],
@@ -49,14 +59,13 @@ export default function CondosIndexPage() {
             className="font-serif text-4xl lg:text-6xl text-background"
             style={{ letterSpacing: "-0.015em" }}
           >
-            Calgary's Condo Buildings.
+            Calgary Luxury Condos
           </h1>
           <p className="mt-5 max-w-[680px] text-background/80 leading-relaxed">
-            From the historic Eau Claire riverfront to the tallest residential
-            towers in the Beltline, Calgary's downtown condo market offers
-            unparalleled walkability, amenity, and view. This guide covers the
-            buildings I work in most often — the ones with strong fundamentals,
-            consistent resale, and amenity packages that hold up over time.
+            Calgary luxury condos, building by building: 32 downtown and
+            inner-city addresses with pricing, condo fees and resale history for
+            each. Spencer Rivers is a Certified Condo Specialist, and listings
+            on this site can appear up to 48 hours before Realtor.ca.
           </p>
         </div>
       </section>
@@ -118,6 +127,25 @@ export default function CondosIndexPage() {
             </div>
           ))
         )}
+      </section>
+
+      {/* Guides */}
+      <section className="max-w-[1400px] mx-auto px-6 lg:px-10 pb-16 lg:pb-20">
+        <h2 className="font-serif text-2xl lg:text-3xl" style={{ letterSpacing: "-0.01em" }}>
+          Condo buying guides
+        </h2>
+        <p className="mt-3 text-muted-foreground max-w-[680px] leading-relaxed">
+          Start with the district comparison, then go deeper on the buildings, the costs and the new-build pipeline.
+        </p>
+        <ul className="mt-6 space-y-2">
+          {CONDO_GUIDES.map((g) => (
+            <li key={g.href}>
+              <Link href={g.href} className="text-foreground underline underline-offset-4 hover:text-muted-foreground transition-colors">
+                {g.text}
+              </Link>
+            </li>
+          ))}
+        </ul>
       </section>
 
       {/* CTA */}
