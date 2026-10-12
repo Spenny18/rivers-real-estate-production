@@ -76,9 +76,10 @@ function unreadFloor(): string {
   return stateGet("inbox_launched_at") ?? new Date().toISOString();
 }
 
-export function listConversations(opts: { filter?: "all" | "unread" | "text" | "email"; q?: string; limit?: number } = {}): ConversationRow[] {
+export function listConversations(opts: { filter?: "all" | "unread" | "text" | "email" | "call"; q?: string; limit?: number } = {}): ConversationRow[] {
   const limit = Math.min(opts.limit ?? 100, 300);
-  const kindFilter = opts.filter === "text" ? `WHERE kind = 'text'` : opts.filter === "email" ? `WHERE kind = 'email'` : "";
+  const kindFilter =
+    opts.filter === "text" ? `WHERE kind = 'text'` : opts.filter === "email" ? `WHERE kind = 'email'` : opts.filter === "call" ? `WHERE kind = 'call'` : "";
   const q = opts.q?.trim().toLowerCase();
   const rows = sqlite
     .prepare(
@@ -190,10 +191,26 @@ export function threadFor(contactFubId: string, limit = 400): ThreadItem[] {
         at: a.occurred_at,
         subject: a.kind === "email" || a.kind === "appointment" ? a.title : null,
         body: a.body,
-        meta: { outcome: a.outcome, durationSeconds: a.duration_seconds, via: (a.uid as string).startsWith("text:twilio:") ? "business line" : undefined },
+        meta: {
+          outcome: a.outcome,
+          durationSeconds: a.duration_seconds,
+          via: (a.uid as string).startsWith("text:twilio:") || (a.uid as string).startsWith("call:twilio:") ? "business line" : undefined,
+          // Business-line calls: the call_log id, for its recording (see server/calls.ts).
+          ...callMeta(a),
+        },
       })),
   ];
   return items.sort((a, b) => a.at.localeCompare(b.at)).slice(-limit);
+}
+
+function callMeta(a: { kind: string; uid: string; raw: string | null }): { callLogId?: number; hasRecording?: boolean } {
+  if (a.kind !== "call" || !a.uid.startsWith("call:twilio:")) return {};
+  try {
+    const r = JSON.parse(a.raw ?? "{}");
+    return { callLogId: Number(r.callLogId) || undefined, hasRecording: !!r.recording };
+  } catch {
+    return {};
+  }
 }
 
 /** The most recent email in the conversation, for threading a reply onto it. */

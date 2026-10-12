@@ -4,7 +4,23 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarCheck, Clock, Loader2, Mail, MapPin, MessageSquare, Phone, RotateCw, Send, User, X } from "lucide-react";
+import {
+  CalendarCheck,
+  Clock,
+  Loader2,
+  Mail,
+  MapPin,
+  MessageSquare,
+  Phone,
+  PhoneIncoming,
+  PhoneMissed,
+  PhoneOutgoing,
+  RotateCw,
+  Send,
+  User,
+  Voicemail,
+  X,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -705,6 +721,7 @@ interface SmsStatus {
 export function BusinessLineCard() {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
+  const [showActivity, setShowActivity] = useState(false);
   const { data } = useQuery<SmsStatus>({ queryKey: ["/api/admin/sms/status"] });
   const test = useMutation({
     mutationFn: async () => (await apiRequest("POST", "/api/admin/sms/test")).json(),
@@ -736,6 +753,15 @@ export function BusinessLineCard() {
               Send test text
             </Button>
           )}
+          {data.ok && (
+            <button
+              onClick={() => setShowActivity(!showActivity)}
+              className="text-[12px] underline underline-offset-2 text-muted-foreground hover:text-foreground"
+              data-testid="business-line-activity-toggle"
+            >
+              {showActivity ? "Hide activity" : "Calls & texts"}
+            </button>
+          )}
           <button onClick={() => setOpen(!open)} className="text-[12px] underline underline-offset-2 text-muted-foreground hover:text-foreground">
             {open ? "Hide setup" : "Setup"}
           </button>
@@ -755,8 +781,106 @@ export function BusinessLineCard() {
           <p>
             Fly secrets: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER (the business line), AGENT_CELL_NUMBER (your cell).
           </p>
+          <p>
+            To call out from your cell, call the business line from it: enter the number and press #, or * then # to call whoever last called or
+            texted. Calls are recorded; the other person hears a short notice first.
+          </p>
         </div>
       )}
+      {showActivity && <BusinessLineActivity />}
     </div>
+  );
+}
+
+interface LineActivity {
+  kind: "call" | "text";
+  id: string;
+  callId?: number;
+  at: string;
+  direction: "inbound" | "outbound";
+  number: string;
+  contactFubId: string | null;
+  name: string | null;
+  status: string | null;
+  durationSeconds?: number | null;
+  voicemail?: boolean;
+  hasRecording?: boolean;
+  body?: string;
+  error?: string | null;
+}
+
+const CALL_STATUS: Record<string, string> = {
+  ringing: "ringing",
+  answered: "answered",
+  missed: "missed",
+  voicemail: "voicemail",
+  "no-answer": "no answer",
+  busy: "busy",
+  failed: "failed",
+  canceled: "not connected",
+};
+
+/** Every call and text on the business line, newest first — unknown numbers included. */
+function BusinessLineActivity() {
+  const { toast } = useToast();
+  const { data, isLoading } = useQuery<LineActivity[]>({ queryKey: ["/api/admin/business-line/activity"], refetchInterval: 15_000 });
+  const callBack = useMutation({
+    mutationFn: async (x: LineActivity) => (await apiRequest("POST", "/api/admin/calls", x.contactFubId ? { contactFubId: x.contactFubId } : { phone: x.number })).json(),
+    onSuccess: () => toast({ title: "Calling your cell…", description: "Answer, then press 1 to be connected." }),
+    onError: (e: any) => toast({ title: "Couldn't start the call", description: String(e?.message ?? "").replace(/^\d+:\s*/, ""), variant: "destructive" }),
+  });
+  if (isLoading) return <div className="mt-3 text-[12px] text-muted-foreground">Loading…</div>;
+  if (!data?.length) return <div className="mt-3 text-[12px] text-muted-foreground">No calls or texts on the business line yet.</div>;
+  return (
+    <ul className="mt-3 divide-y divide-border border-t border-border" data-testid="business-line-activity">
+      {data.map((x) => {
+        const Icon =
+          x.kind === "text"
+            ? MessageSquare
+            : x.voicemail
+              ? Voicemail
+              : x.status === "missed" || x.status === "no-answer" || x.status === "failed"
+                ? PhoneMissed
+                : x.direction === "inbound"
+                  ? PhoneIncoming
+                  : PhoneOutgoing;
+        const who = x.name ?? x.number;
+        const detail =
+          x.kind === "call"
+            ? [
+                x.direction === "inbound" ? "Incoming call" : "Outgoing call",
+                x.voicemail ? "voicemail" : CALL_STATUS[x.status ?? ""] ?? x.status,
+                x.durationSeconds ? `${Math.max(1, Math.round(x.durationSeconds / 60))} min` : null,
+                x.hasRecording ? "recorded" : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")
+            : `${x.direction === "inbound" ? "Text in" : "Text out"}: ${(x.body ?? "").slice(0, 90)}${x.error ? ` (${x.error})` : ""}`;
+        return (
+          <li key={x.id} className="py-2 flex items-center gap-3 text-[12.5px]">
+            <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" strokeWidth={1.6} />
+            <div className="min-w-0 flex-1">
+              <div className="truncate">
+                {x.contactFubId ? (
+                  <a href={`/admin/inbox?contact=${encodeURIComponent(x.contactFubId)}`} className="font-medium hover:underline">
+                    {who}
+                  </a>
+                ) : (
+                  <span className="font-medium">{who}</span>
+                )}
+                {x.name && <span className="text-muted-foreground"> · {x.number}</span>}
+              </div>
+              <div className="text-muted-foreground truncate">{detail}</div>
+            </div>
+            <span className="text-[11px] text-muted-foreground whitespace-nowrap">
+              {new Date(x.at).toLocaleString("en-CA", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+            </span>
+            <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px]" disabled={callBack.isPending} onClick={() => callBack.mutate(x)} title="Call back from the business line">
+              <PhoneOutgoing className="h-3 w-3 mr-1" /> Call
+            </Button>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

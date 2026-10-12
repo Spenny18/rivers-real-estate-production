@@ -61,7 +61,7 @@ export function registerInboxRoutes(app: Express, deps: { requireAuth: Middlewar
 
   app.get("/api/admin/inbox/conversations", requireAuth, (req, res) => {
     const f = String(req.query.filter ?? "all");
-    const filter = (["all", "unread", "text", "email"].includes(f) ? f : "all") as "all" | "unread" | "text" | "email";
+    const filter = (["all", "unread", "text", "email", "call"].includes(f) ? f : "all") as "all" | "unread" | "text" | "email" | "call";
     const q = typeof req.query.q === "string" ? req.query.q.slice(0, 80) : undefined;
     res.json(listConversations({ filter, q, limit: 150 }));
   });
