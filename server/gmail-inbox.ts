@@ -62,7 +62,7 @@ export function stateSet(key: string, value: string) {
 
 // ---- Parsing Gmail's message JSON -------------------------------------------------
 
-interface GmailPart {
+export interface GmailPart {
   mimeType?: string;
   filename?: string;
   headers?: Array<{ name: string; value: string }>;
@@ -81,14 +81,14 @@ function header(msg: GmailMessage, name: string): string {
   return msg.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
 }
 
-function walk(part: GmailPart | undefined, out: GmailPart[] = []): GmailPart[] {
+export function walk(part: GmailPart | undefined, out: GmailPart[] = []): GmailPart[] {
   if (!part) return out;
   out.push(part);
   for (const p of part.parts ?? []) walk(p, out);
   return out;
 }
 
-function decode(data: string): string {
+export function decode(data: string): string {
   return Buffer.from(data.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
 }
 
@@ -196,12 +196,12 @@ export function classify(
 
 // ---- Polling --------------------------------------------------------------------------
 
-function agentUserId(): number | null {
+export function agentUserId(): number | null {
   const u = storage.getUserByEmail(AGENT.email) ?? storage.getUserById(1);
   return u?.id ?? null;
 }
 
-async function gmailGet(token: string, path: string): Promise<any> {
+export async function gmailGet(token: string, path: string): Promise<any> {
   const r = await fetch(`${GMAIL_API}${path}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) });
   if (!r.ok) throw new Error(`Gmail ${r.status}: ${(await r.text().catch(() => "")).slice(0, 200)}`);
   return r.json();
