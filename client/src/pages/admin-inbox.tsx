@@ -20,6 +20,7 @@ import {
   Phone,
   PhoneOutgoing,
   Play,
+  Image as ImageIcon,
   Search,
   Send,
   StickyNote,
@@ -33,6 +34,8 @@ import { Badge } from "@/components/ui/badge";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { showingStreetLine } from "@shared/showing-address";
+import { formatEmailText } from "@/lib/email-text";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 // ---- Types (mirror server/inbox.ts) ------------------------------------------------
 
@@ -421,9 +424,123 @@ function Message({ item }: { item: ThreadItem }) {
           {item.meta.hasAttachments && " · attachment"}
         </div>
         {item.kind === "email" && item.subject && <div className="text-[13px] font-medium mb-1">{item.subject}</div>}
-        <div className="text-[13.5px] whitespace-pre-wrap break-words leading-relaxed">{item.body}</div>
+        <FormattedBody item={item} out={out} />
       </div>
     </div>
+  );
+}
+
+/**
+ * The plain-text body made readable: links clickable, Gmail's "[Image]"
+ * placeholders dropped (and counted), and for emails a way to see the
+ * formatted original. See client/src/lib/email-text.ts.
+ */
+function FormattedBody({ item, out }: { item: ThreadItem; out: boolean }) {
+  const [showOriginal, setShowOriginal] = useState(false);
+  const { segments, hiddenImages } = useMemo(() => formatEmailText(item.body), [item.body]);
+  const gmailId = item.kind === "email" && typeof item.meta.gmailId === "string" ? item.meta.gmailId : null;
+  const linkClass = out ? "underline underline-offset-2 text-background" : "underline underline-offset-2 text-foreground";
+  return (
+    <>
+      <div className="text-[13.5px] whitespace-pre-wrap break-words leading-relaxed">
+        {segments.map((sg, i) =>
+          sg.type === "link" ? (
+            <a key={i} href={sg.href} target={sg.href.startsWith("http") ? "_blank" : undefined} rel="noopener noreferrer" className={linkClass}>
+              {sg.text}
+            </a>
+          ) : (
+            <span key={i}>{sg.text}</span>
+          ),
+        )}
+      </div>
+      {(gmailId || hiddenImages > 0) && (
+        <div className={`mt-1.5 text-[11px] flex items-center gap-2 ${out ? "text-background/70" : "text-muted-foreground"}`}>
+          {hiddenImages > 0 && (
+            <span className="inline-flex items-center gap-1">
+              <ImageIcon className="h-3 w-3" strokeWidth={1.6} />
+              {hiddenImages} image{hiddenImages === 1 ? "" : "s"}
+            </span>
+          )}
+          {gmailId && (
+            <button type="button" className="underline underline-offset-2 hover:opacity-80" onClick={() => setShowOriginal(true)} data-testid={`show-original-${gmailId}`}>
+              Show original
+            </button>
+          )}
+        </div>
+      )}
+      {gmailId && showOriginal && <OriginalEmailDialog gmailId={gmailId} subject={item.subject} onClose={() => setShowOriginal(false)} />}
+    </>
+  );
+}
+
+interface OriginalEmail {
+  html: string;
+  remoteImages: number;
+  inlineImages: number;
+  plainOnly: boolean;
+}
+
+/**
+ * The email as sent, fetched from Gmail on demand and shown in a sandboxed
+ * frame: no scripts can run, and its Content-Security-Policy blocks every
+ * outside request — remote images stay off until "Load images" (they can be
+ * open-tracking pixels). Server: server/email-original.ts.
+ */
+function OriginalEmailDialog({ gmailId, subject, onClose }: { gmailId: string; subject: string | null; onClose: () => void }) {
+  const [images, setImages] = useState(false);
+  const frame = useRef<HTMLIFrameElement>(null);
+  const [height, setHeight] = useState(400);
+  const { data, isLoading, error } = useQuery<OriginalEmail>({
+    queryKey: [`/api/admin/inbox/email/${gmailId}/original`, images],
+    queryFn: async () => (await apiRequest("GET", `/api/admin/inbox/email/${encodeURIComponent(gmailId)}/original${images ? "?images=1" : ""}`)).json(),
+    staleTime: 5 * 60_000,
+  });
+  const fit = () => {
+    const doc = frame.current?.contentDocument;
+    if (doc?.body) setHeight(Math.min(Math.max(doc.documentElement.scrollHeight, 200), 4000));
+  };
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-3xl w-[95vw] max-h-[90vh] overflow-y-auto p-0 gap-0">
+        <DialogHeader className="px-4 py-3 border-b border-border">
+          <DialogTitle className="text-[15px] font-medium pr-6">{subject || "Email"}</DialogTitle>
+          {data && (data.remoteImages > 0 || data.plainOnly) && (
+            <div className="text-[12px] text-muted-foreground flex items-center gap-2 flex-wrap">
+              {data.plainOnly && <span>This email was sent as plain text.</span>}
+              {data.remoteImages > 0 && !images && (
+                <>
+                  <span>
+                    {data.remoteImages} image{data.remoteImages === 1 ? " is" : "s are"} hidden — loading them can tell the sender you opened it.
+                  </span>
+                  <button type="button" className="underline underline-offset-2 text-foreground" onClick={() => setImages(true)} data-testid="load-remote-images">
+                    Load images
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </DialogHeader>
+        {isLoading && (
+          <div className="flex items-center justify-center py-16 text-[13px] text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin mr-2" /> Fetching from Gmail…
+          </div>
+        )}
+        {error && <div className="px-4 py-6 text-[13px] text-destructive">{String((error as Error).message).replace(/^\d+:\s*/, "")}</div>}
+        {data && (
+          <iframe
+            ref={frame}
+            title="Original email"
+            // No allow-scripts: nothing in the email can run. allow-same-origin
+            // only lets this page measure the content's height.
+            sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+            srcDoc={data.html}
+            onLoad={fit}
+            style={{ width: "100%", height, border: 0, display: "block", background: "#fff" }}
+            data-testid="original-email-frame"
+          />
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 

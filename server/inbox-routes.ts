@@ -8,7 +8,7 @@
 //   POST /api/admin/inbox/sync                       read new Gmail now
 
 import type { Express, Request, Response, NextFunction } from "express";
-import { storage } from "./storage";
+import { sqlite, storage } from "./storage";
 import { contactPanel, lastEmailOf, listConversations, markRead, threadFor, unreadCount } from "./inbox";
 import { lastInboxSync, storeEmail, syncInboxEmails } from "./gmail-inbox";
 import { inboxReadiness } from "./deal-inbox";
@@ -81,6 +81,22 @@ export function registerInboxRoutes(app: Express, deps: { requireAuth: Middlewar
 
   app.post("/api/admin/inbox/sync", requireAuth, async (_req, res) => {
     res.json(await syncInboxEmails());
+  });
+
+  // The formatted version of one email, fetched from Gmail on demand. Only for
+  // mail already in the Inbox — this can't be used to read the rest of the
+  // mailbox. ?images=1 lets remote pictures load (they can be tracking pixels).
+  app.get("/api/admin/inbox/email/:gmailId/original", requireAuth, async (req, res) => {
+    const gmailId = String((req.params as any).gmailId ?? "");
+    const known = sqlite.prepare(`SELECT 1 FROM inbox_emails WHERE gmail_id = ?`).get(gmailId);
+    if (!known) return res.status(404).json({ message: "That email isn't in the Inbox." });
+    try {
+      const { originalEmail } = await import("./email-original");
+      res.set("Cache-Control", "private, no-store");
+      res.json(await originalEmail(gmailId, { images: req.query.images === "1" }));
+    } catch (e: any) {
+      res.status(502).json({ message: e?.message ?? "Couldn't fetch the original from Gmail" });
+    }
   });
 
   app.get("/api/admin/inbox/contact/:fubId", requireAuth, async (req, res) => {
