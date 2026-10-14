@@ -35,6 +35,7 @@ import {
   updateAutomation,
   validateSteps,
   type Step,
+  type Trigger,
 } from "./automations";
 import { LEAD_SOURCES } from "./lead-intake";
 import { smsConfigured } from "./sms";
@@ -65,7 +66,11 @@ const stepSchema: z.ZodType<Step> = z.lazy(() =>
 );
 
 const triggerSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("new_lead"), sources: z.array(z.string().max(120)).max(30).optional() }),
+  z.object({
+    type: z.literal("new_lead"),
+    sources: z.array(z.string().max(120)).max(30).optional(),
+    leadType: z.enum(["buyer", "seller"]).optional(),
+  }),
   z.object({ type: z.literal("tag_added"), tag: z.string().trim().min(1, "Pick a tag").max(60) }),
   z.object({ type: z.literal("manual") }),
 ]);
@@ -118,6 +123,61 @@ function buyerNewLeadTemplate(): Step[] {
   ];
 }
 
+/** A starting point for seller leads: valuation, then a listing consultation. */
+function sellerNewLeadTemplate(): Step[] {
+  const id = newStepId;
+  return [
+    {
+      id: id(),
+      type: "send_text",
+      body: "Hi {first_name}, it's {agent_first_name} with Rivers Real Estate. Thanks for reaching out about selling. I'd be glad to put together a no-obligation price opinion for your home. When's a good time for a quick call?",
+    },
+    {
+      id: id(),
+      type: "send_email",
+      subject: "What your home could sell for",
+      body:
+        "Hi {first_name},\n\nThanks for getting in touch. I'll prepare a pricing analysis based on recent sales near you, what's competing on the market right now, and how quickly comparable homes are selling.\n\nA short visit lets me account for updates and finishes that online estimates miss. Would sometime this week work?\n\n{agent_name}\n{agent_phone}",
+    },
+    { id: id(), type: "create_task", title: "Call {name} about selling", note: "Seller lead from {source}", dueInHours: 1 },
+    { id: id(), type: "wait", amount: 2, unit: "days" },
+    {
+      id: id(),
+      type: "condition",
+      check: "replied",
+      yes: [{ id: id(), type: "add_tag", tag: "Seller engaged" }],
+      no: [
+        { id: id(), type: "send_text", body: "Hi {first_name}, just following up on your home's value. Happy to send the numbers by email if that's easier." },
+        { id: id(), type: "wait", amount: 5, unit: "days" },
+        {
+          id: id(),
+          type: "send_email",
+          subject: "Thinking of selling this year?",
+          body:
+            "Hi {first_name},\n\nWhether you're planning to list soon or just want to know where you stand, I'm happy to walk you through what's selling in your area and what buyers are paying for.\n\nNo pressure either way. Just reply whenever the timing suits.\n\n{agent_name}",
+        },
+        { id: id(), type: "wait", amount: 14, unit: "days" },
+        { id: id(), type: "create_task", title: "Check in with {name} about selling", note: "No reply to the seller plan after 3 weeks", dueInHours: 0 },
+      ],
+    },
+  ];
+}
+
+const TEMPLATES: Record<string, { name: string; description: string; trigger: Trigger; steps: () => Step[] }> = {
+  buyer_new_lead: {
+    name: "Buyer New Lead",
+    description: "Replaces Follow Up Boss's Buyer New Lead plan.",
+    trigger: { type: "new_lead", leadType: "buyer" },
+    steps: buyerNewLeadTemplate,
+  },
+  seller_new_lead: {
+    name: "Seller New Lead",
+    description: "Valuation offer, then a listing consultation.",
+    trigger: { type: "new_lead", leadType: "seller" },
+    steps: sellerNewLeadTemplate,
+  },
+};
+
 export function registerAutomationRoutes(app: Express, deps: { requireAuth: Middleware }) {
   const { requireAuth } = deps;
 
@@ -163,13 +223,13 @@ export function registerAutomationRoutes(app: Express, deps: { requireAuth: Midd
   });
 
   app.post("/api/admin/automations", requireAuth, (req, res) => {
-    const name = String(req.body?.name ?? "").trim() || "New action plan";
-    const template = req.body?.template === "buyer_new_lead";
+    const t = TEMPLATES[String(req.body?.template ?? "")];
+    const name = String(req.body?.name ?? "").trim() || t?.name || "New action plan";
     const a = createAutomation({
       name,
-      description: template ? "Replaces Follow Up Boss's Buyer New Lead plan." : null,
-      trigger: template ? { type: "new_lead" } : { type: "manual" },
-      steps: template ? buyerNewLeadTemplate() : [],
+      description: t?.description ?? null,
+      trigger: t?.trigger ?? { type: "manual" },
+      steps: t ? t.steps() : [],
     });
     res.json(a);
   });

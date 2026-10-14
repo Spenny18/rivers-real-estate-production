@@ -229,3 +229,32 @@ test("sending everything waiting for a plan clears its queue and carries each pe
     assert.deepEqual(auto.appTags(c), ["Released"]);
   }
 });
+
+test("lead type comes from what the lead said, then from the source", () => {
+  assert.equal(auto.leadTypeFor("Contact page · selling"), "seller");
+  assert.equal(auto.leadTypeFor("Contact page · valuation"), "seller");
+  assert.equal(auto.leadTypeFor("Home valuation widget"), "seller");
+  assert.equal(auto.leadTypeFor("home_eval"), "seller");
+  assert.equal(auto.leadTypeFor("Community report request"), "seller");
+  assert.equal(auto.leadTypeFor("Contact page · buying"), "buyer");
+  assert.equal(auto.leadTypeFor("listing_unlock"), "buyer");
+  assert.equal(auto.leadTypeFor("REW.ca"), "buyer");
+  // A lead email says outright, whatever the source.
+  assert.equal(auto.leadTypeFor("REW.ca", "About: 1 Main St\n\n(seller lead via REW.ca)"), "seller");
+  assert.equal(auto.leadTypeFor("Realtor.ca", "(renter lead via Realtor.ca)"), "renter");
+});
+
+test("buyer and seller plans each get only their own leads; 'any' gets both", async () => {
+  const buyers = auto.createAutomation({ name: "Buyers", trigger: { type: "new_lead", leadType: "buyer" }, steps: [{ id: "t", type: "add_tag", tag: "B" }] });
+  const sellers = auto.createAutomation({ name: "Sellers", trigger: { type: "new_lead", leadType: "seller" }, steps: [{ id: "t", type: "add_tag", tag: "S" }] });
+  const any = auto.createAutomation({ name: "Any", trigger: { type: "new_lead" }, steps: [{ id: "t", type: "add_tag", tag: "A" }] });
+  for (const a of [buyers, sellers, any]) auto.updateAutomation(a.id, { mode: "auto" });
+  storage.createLead({ name: "Sally Seller", email: "sally@example.com", phone: null, message: "", source: "Home valuation widget", listingId: null, status: "new" });
+  storage.createLead({ name: "Bob Buyer", email: "bob@example.com", phone: null, message: "About: 9 Elm St", source: "listing_unlock", listingId: null, status: "new" });
+  storage.createLead({ name: "Rita Renter", email: "rita@example.com", phone: null, message: "(renter lead via Realtor.ca)", source: "Realtor.ca", listingId: null, status: "new" });
+  await settle();
+  const tags = (email: string) => auto.appTags(contacts.findContact(email, null)!).filter((t) => ["A", "B", "S"].includes(t)).sort();
+  assert.deepEqual(tags("sally@example.com"), ["A", "S"]);
+  assert.deepEqual(tags("bob@example.com"), ["A", "B"]);
+  assert.deepEqual(tags("rita@example.com"), ["A"]);
+});
