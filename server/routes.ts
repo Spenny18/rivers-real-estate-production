@@ -580,6 +580,11 @@ export async function registerRoutes(
     const { registerInboxRoutes } = await import("./inbox-routes");
     registerInboxRoutes(app, { requireAuth });
 
+    // Leads read from lead-source emails (REW.ca, Zillow, …) in Gmail.
+    // See server/lead-intake.ts.
+    const { registerLeadIntakeRoutes } = await import("./lead-intake-routes");
+    registerLeadIntakeRoutes(app, { requireAuth });
+
     const { registerMarketRoutes } = await import("./market-routes");
     registerMarketRoutes(app, { requireAuth });
   } catch (e) {

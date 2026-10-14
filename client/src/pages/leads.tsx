@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
+import { LeadIntakePanel } from "@/components/lead-intake-panel";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -114,7 +115,7 @@ export default function LeadsPage() {
               Enquiries
             </h1>
             <p className="text-sm text-muted-foreground mt-1">
-              Inbound leads from the public site, plus any manually-added prospects.
+              Inbound leads from the public site and lead-source emails, plus any manually-added prospects.
             </p>
           </div>
           <NewLeadButton />
@@ -142,6 +143,8 @@ export default function LeadsPage() {
             );
           })}
         </div>
+
+        <LeadIntakePanel />
 
         {/* Two-pane inbox */}
         <Card className="overflow-hidden">
