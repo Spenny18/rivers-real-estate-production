@@ -22,6 +22,7 @@
 import { randomBytes } from "node:crypto";
 import { sqlite, storage } from "./storage";
 import type { Lead } from "@shared/schema";
+import { onNewLead } from "./automations";
 
 export const NATIVE_PREFIX = "app-";
 
@@ -169,6 +170,9 @@ const CONTACT_REFERENCES: Array<[table: string, column: string]> = [
   ["inbox_emails", "contact_fub_id"],
   ["tracked_emails", "contact_fub_id"],
   ["sms_messages", "contact_fub_id"],
+  ["automation_runs", "contact_fub_id"],
+  ["automation_fired", "contact_fub_id"],
+  ["contact_tags", "contact_fub_id"],
 ];
 
 function tableExists(name: string): boolean {
@@ -180,7 +184,11 @@ export function mergeContactInto(fromId: string, toId: string) {
   if (fromId === toId) return;
   const tx = sqlite.transaction(() => {
     for (const [table, column] of CONTACT_REFERENCES) {
-      if (tableExists(table)) sqlite.prepare(`UPDATE ${table} SET ${column} = ? WHERE ${column} = ?`).run(toId, fromId);
+      if (!tableExists(table)) continue;
+      // OR IGNORE: where both already have the row (a tag, a fired trigger),
+      // the target's copy stands and the leftover is cleared below.
+      sqlite.prepare(`UPDATE OR IGNORE ${table} SET ${column} = ? WHERE ${column} = ?`).run(toId, fromId);
+      sqlite.prepare(`DELETE FROM ${table} WHERE ${column} = ?`).run(fromId);
     }
     if (tableExists("inbox_read")) {
       // Keep whichever read time is later.
@@ -229,11 +237,19 @@ export function reconcileNativeContacts(): number {
   return merged;
 }
 
-// Every lead the app creates gets a contact. See storage.createLead.
+// Every lead the app creates gets a contact, and starts any new-lead
+// automations (server/automations.ts). See storage.createLead.
 storage.onLeadCreated = (lead) => {
+  let contact: { id: string } | null = null;
   try {
-    ensureContactForLead(lead);
+    contact = ensureContactForLead(lead);
   } catch (e: any) {
     console.error("[contacts] couldn't create a contact for lead", lead.id, e?.message ?? e);
+  }
+  if (!contact) return;
+  try {
+    onNewLead(lead, contact.id);
+  } catch (e: any) {
+    console.error("[automations] couldn't start plans for lead", lead.id, e?.message ?? e);
   }
 };

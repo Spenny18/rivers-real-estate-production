@@ -585,6 +585,11 @@ export async function registerRoutes(
     const { registerLeadIntakeRoutes } = await import("./lead-intake-routes");
     registerLeadIntakeRoutes(app, { requireAuth });
 
+    // Automations / action plans: builder, approvals, tasks.
+    // See server/automations.ts.
+    const { registerAutomationRoutes } = await import("./automation-routes");
+    registerAutomationRoutes(app, { requireAuth });
+
     const { registerMarketRoutes } = await import("./market-routes");
     registerMarketRoutes(app, { requireAuth });
   } catch (e) {
