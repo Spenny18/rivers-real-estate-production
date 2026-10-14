@@ -185,6 +185,12 @@ app.use((req, res, next) => {
     console.error("[reminders] failed to start cron:", err);
   }
   try {
+    const { startAutomationsCron } = await import("./automations");
+    startAutomationsCron();
+  } catch (err) {
+    console.error("[automations] failed to start:", err);
+  }
+  try {
     const { startInboxEmailCron } = await import("./gmail-inbox");
     startInboxEmailCron();
   } catch (err) {

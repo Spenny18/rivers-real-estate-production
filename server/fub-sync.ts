@@ -708,6 +708,11 @@ export async function syncResource(
     if (spec.resource === "people") {
       const { reconcileNativeContacts } = await import("./contacts");
       reconcileNativeContacts();
+      // New people FUB brought in (leads that never touched the app) start
+      // any new-lead automations. After the fold, so the app's own leads
+      // aren't started twice.
+      const { onContactsSynced } = await import("./automations");
+      onContactsSynced();
     }
   }
 
