@@ -33,7 +33,7 @@ sqlite.exec(`
     subject TEXT,
     body_text TEXT,
     received_at TEXT NOT NULL,
-    -- imported | duplicate | needs_review | not_a_lead | dismissed | sample
+    -- imported | duplicate | follow_up | needs_review | not_a_lead | dismissed | sample
     status TEXT NOT NULL,
     reason TEXT,
     extracted TEXT,
@@ -119,6 +119,8 @@ function htmlWithLinks(html: string): string {
 
 export interface Extracted {
   isLead: boolean;
+  /** A reminder or nudge about a lead the service sent before, not a new inquiry. */
+  isFollowUp: boolean;
   confident: boolean;
   name: string | null;
   email: string | null;
@@ -138,9 +140,10 @@ export interface Extracted {
 const EXTRACT_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["isLead", "confident", "name", "email", "phone", "message", "property", "intent", "link", "note"],
+  required: ["isLead", "isFollowUp", "confident", "name", "email", "phone", "message", "property", "intent", "link", "note"],
   properties: {
     isLead: { type: "boolean" },
+    isFollowUp: { type: "boolean" },
     confident: { type: "boolean" },
     name: { type: ["string", "null"] },
     email: { type: ["string", "null"] },
@@ -156,6 +159,8 @@ const EXTRACT_SCHEMA = {
 const SYSTEM = `You read emails that real estate lead services (REW.ca, Realtor.ca, Zillow, ReferralExchange and similar) send to Spencer Rivers, a Calgary REALTOR®, and pull out the lead.
 
 A lead is a specific person who contacted Spencer or was assigned/referred to him: an inquiry about a listing, a request to sell, a showing request, a referral, a "homeseeker" he claimed. Newsletters, invoices, account and billing notices, marketing, review reminders and summaries of many people are not leads.
+
+Some emails are about a lead the service already sent: a reminder that the person is waiting, a request for a progress report, a status update, an "accepted" confirmation. Those are still about a lead (isLead true) but set isFollowUp true. A new inquiry or a newly offered referral is isFollowUp false.
 
 Rules:
 - Only report details that appear in the email. Never invent or guess an email address, phone number or name. Spencer's own details (Spencer Rivers, spencer@riversrealestate.ca, his brokerage) are never the lead's.
@@ -206,6 +211,7 @@ function fakeExtract(body: string): Extracted {
   const name = body.match(/Name:\s*([^\n]+)/i)?.[1]?.trim() ?? null;
   return {
     isLead: !!(email || phone),
+    isFollowUp: /reminder|progress report/i.test(body),
     confident: !!(name && (email || phone)),
     name,
     email,
@@ -419,6 +425,12 @@ export async function readIntake(id: number, mode: "live" | "sample" = "live"): 
 
   if (!data.isLead) return updateIntake(id, { status: "not_a_lead", reason: data.note, extracted: data, model });
   if (mode === "sample") return updateIntake(id, { status: "sample", reason: data.note, extracted: data, model });
+  if (data.isFollowUp) {
+    // Not a new lead: attach it to the person it's about, or ask.
+    const contactId = findContact(data.email, data.phone);
+    if (contactId) return updateIntake(id, { status: "follow_up", reason: data.note, extracted: data, contactFubId: contactId, model });
+    return updateIntake(id, { status: "needs_review", reason: `Reminder about someone not in your contacts. ${data.note}`, extracted: data, model });
+  }
   if (!data.confident || !data.name || (!data.email && !data.phone)) {
     const missing = !data.email && !data.phone ? "No email or phone in the email. " : "";
     return updateIntake(id, { status: "needs_review", reason: `${missing}${data.note}`.trim(), extracted: data, model });
