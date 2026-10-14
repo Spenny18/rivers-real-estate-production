@@ -9,7 +9,8 @@
 // Privacy by construction: a message is fetched in full and stored only when
 // its other party is a CRM contact. Everything else is recorded as "seen" by
 // id alone, so it isn't fetched again — the app never keeps a copy of mail
-// that has nothing to do with a client.
+// that has nothing to do with a client. The one exception is mail from a lead
+// source (REW.ca, Zillow, …), which lead-intake.ts reads for new leads.
 //
 // Read-only: nothing is labelled, moved, archived or marked read in Gmail.
 
@@ -276,6 +277,8 @@ async function doSync(): Promise<InboxSyncResult> {
   const token = userId ? await getValidAccessToken(userId) : null;
   if (!userId || !token) return (lastResult = { ok: false, checked: 0, stored: 0, error: "Google connection expired. Reconnect it on the Scheduling page.", at });
 
+  // Imported here, not at the top: lead-intake.ts uses this file's parsers.
+  const intake = await import("./lead-intake");
   const own = ownAddresses(userId);
   const contacts = contactsByEmail();
   const since = stateGet("gmail_synced_through");
@@ -304,6 +307,24 @@ async function doSync(): Promise<InboxSyncResult> {
         checked += 1;
         const who = classify({ from: header(meta, "From"), to: header(meta, "To"), cc: header(meta, "Cc") }, own, contacts);
         if (!who) {
+          // Not a contact's mail — but it may be a lead from a lead source.
+          const source = intake.sourceForSender(header(meta, "From"));
+          if (source && !intake.intakeSeen(id)) {
+            try {
+              const full: GmailMessage = await gmailGet(token, `/messages/${id}?format=full`);
+              await intake.processLeadEmail(source, {
+                gmailId: id,
+                from: header(full, "From"),
+                subject: header(full, "Subject") || "(no subject)",
+                body: intake.leadEmailText(full),
+                receivedAt: new Date(Number(full.internalDate ?? Date.now())).toISOString(),
+              });
+            } catch (e: any) {
+              // Leave it unseen so the next poll tries again.
+              console.error("[lead-intake] couldn't process", id, e?.message ?? e);
+              continue;
+            }
+          }
           markSeen.run(id);
           continue;
         }
