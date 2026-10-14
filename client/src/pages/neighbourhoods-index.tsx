@@ -44,6 +44,21 @@ const ZONE_BLURBS: Record<string, string> = {
   "Canmore": "Mountain residences in Canmore, paired with Banff National Park and the Bow Valley.",
 };
 
+const NEIGHBOURHOOD_GUIDES: Array<{ href: string; label: string }> = [
+  { href: "/blog/best-calgary-luxury-neighbourhoods-2026", label: "Calgary's most prestigious neighbourhoods, one winner per category" },
+  { href: "/blog/top-20-best-calgary-neighbourhoods-2026", label: "Top 20 Calgary neighbourhoods to live in 2026" },
+  { href: "/blog/living-in-britannia-the-calgary-luxury-buyers-guide", label: "Living in Britannia" },
+  { href: "/blog/britannia-calgary-neighbourhood-guide-2024", label: "Britannia neighbourhood guide" },
+  { href: "/blog/living-in-aspen-woods-the-calgary-luxury-buyers-guide", label: "Living in Aspen Woods" },
+  { href: "/blog/why-families-love-living-in-aspen-woods-calgary", label: "Aspen Woods for families" },
+  { href: "/blog/living-in-bel-aire-and-mayfair-calgarys-quietest-estate-enclave", label: "Living in Bel-Aire and Mayfair" },
+  { href: "/blog/bel-aire-calgary-neighbourhood-guide-2024", label: "Bel-Aire neighbourhood guide" },
+  { href: "/blog/elbow-park-vs-upper-mount-royal-which-heritage-calgary-neighbourhood-suits-you", label: "Elbow Park vs Upper Mount Royal" },
+  { href: "/blog/rideau-park-ultimate-neighborhood-guide", label: "Rideau Park neighbourhood guide" },
+  { href: "/blog/ultimate-guide-to-living-in-chestermere-lake", label: "Living on Chestermere Lake" },
+  { href: "/blog/canmore-neighborhood-guide-2022", label: "Canmore neighbourhood guide" },
+];
+
 export default function NeighbourhoodsIndexPage() {
   const { data, isLoading } = useQuery<PublicNeighbourhood[]>({
     queryKey: ["/api/public/neighbourhoods"],
@@ -91,9 +106,17 @@ export default function NeighbourhoodsIndexPage() {
             CALGARY · LUXURY COMMUNITIES
           </div>
           <h1 className="mt-5 font-serif text-[44px] lg:text-[72px] leading-[1.02] max-w-[900px]">
-            Communities Spencer knows by street, not statistic.
+            Calgary luxury neighbourhoods Spencer knows by street, not statistic.
           </h1>
           <p className="mt-6 max-w-2xl text-[16px] leading-relaxed text-white/75">
+            This is the full directory of Calgary luxury neighbourhoods Spencer
+            Rivers works in, from the heritage estate districts of Upper Mount
+            Royal, Britannia and Elbow Park to the west side ridge communities of
+            Aspen Woods and Springbank Hill and the southeast lake communities.
+            Each page carries current homes for sale, and listings here can appear
+            up to 48 hours before Realtor.ca.
+          </p>
+          <p className="mt-4 max-w-2xl text-[16px] leading-relaxed text-white/75">
             Calgary's most established luxury enclaves are made of distinct blocks,
             schools, and cul-de-sacs. The right home depends on which community
             fits the way you actually live.
@@ -183,6 +206,30 @@ export default function NeighbourhoodsIndexPage() {
             </div>
           ))
         )}
+      </section>
+
+      {/* Neighbourhood guides: crawlable links down to the blog posts */}
+      <section className="max-w-[1400px] mx-auto px-4 lg:px-8 pb-16 lg:pb-20">
+        <div className="border-t border-border pt-10">
+          <h2
+            className="font-serif text-2xl lg:text-3xl"
+            style={{ letterSpacing: "-0.01em" }}
+          >
+            Neighbourhood guides
+          </h2>
+          <p className="mt-2 text-[14px] text-muted-foreground leading-relaxed">
+            Longer reads on the communities buyers ask about most.
+          </p>
+          <ul className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3 text-[15px]">
+            {NEIGHBOURHOOD_GUIDES.map((g) => (
+              <li key={g.href}>
+                <Link href={g.href} className="underline underline-offset-4 hover:opacity-70">
+                  {g.label}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
       </section>
     </PublicLayout>
   );
