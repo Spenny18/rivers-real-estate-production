@@ -25,8 +25,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import {
   ArrowLeft,
+  ChevronDown,
   CheckSquare,
   Clock,
   Facebook,
@@ -50,7 +52,7 @@ import { timeAgo } from "@/lib/mock-data";
 
 // ---- Types (mirror server/automations.ts) ------------------------------------------------
 
-type Trigger = { type: "new_lead"; sources?: string[] } | { type: "tag_added"; tag: string } | { type: "manual" };
+type Trigger = { type: "new_lead"; sources?: string[]; leadType?: "buyer" | "seller" } | { type: "tag_added"; tag: string } | { type: "manual" };
 type Mode = "off" | "review" | "auto";
 type Step =
   | { id: string; type: "wait"; amount: number; unit: "minutes" | "hours" | "days" }
@@ -207,7 +209,10 @@ function describeCheck(s: Extract<Step, { type: "condition" }>): string {
 }
 
 function triggerText(t: Trigger): string {
-  if (t.type === "new_lead") return t.sources?.length ? `New lead from ${t.sources.join(", ")}` : "Any new lead";
+  if (t.type === "new_lead") {
+    const who = t.leadType === "buyer" ? "New buyer lead" : t.leadType === "seller" ? "New seller lead" : "Any new lead";
+    return t.sources?.length ? `${who} from ${t.sources.join(", ")}` : who;
+  }
   if (t.type === "tag_added") return `Tag "${t.tag}" added`;
   return "Added by hand";
 }
@@ -305,8 +310,7 @@ function Overview() {
   const { data } = useQuery<{ automations: Automation[]; pending: Pending[] }>({ queryKey: ["/api/admin/automations"], refetchInterval: 30_000 });
   const { data: tasks = [] } = useQuery<any[]>({ queryKey: ["/api/admin/automation-tasks"], refetchInterval: 60_000 });
   const create = useMutation({
-    mutationFn: async (template?: string) =>
-      (await apiRequest("POST", "/api/admin/automations", template ? { name: "Buyer New Lead", template } : { name: "New action plan" })).json(),
+    mutationFn: async (template?: string) => (await apiRequest("POST", "/api/admin/automations", template ? { template } : { name: "New action plan" })).json(),
     onSuccess: (a: Automation) => {
       qc.invalidateQueries({ queryKey: ["/api/admin/automations"] });
       navigate(`/admin/automations/${a.id}`);
@@ -326,9 +330,23 @@ function Overview() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" className="rounded-sm" onClick={() => create.mutate("buyer_new_lead")} disabled={create.isPending}>
-            Start from "Buyer New Lead"
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="rounded-sm" disabled={create.isPending}>
+                Start from a template <ChevronDown className="w-4 h-4 ml-1" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-72">
+              <DropdownMenuItem onClick={() => create.mutate("buyer_new_lead")} className="flex-col items-start gap-0.5">
+                <span className="font-medium">Buyer New Lead</span>
+                <span className="text-xs text-muted-foreground">Welcome text and email, call task, follow-ups for buyers.</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => create.mutate("seller_new_lead")} className="flex-col items-start gap-0.5">
+                <span className="font-medium">Seller New Lead</span>
+                <span className="text-xs text-muted-foreground">Price-opinion offer, call task, follow-ups for sellers.</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button className="rounded-sm" onClick={() => create.mutate(undefined)} disabled={create.isPending}>
             <Plus className="w-4 h-4 mr-1" /> New plan
           </Button>
@@ -372,7 +390,7 @@ function Overview() {
             </Link>
           ))}
           {data && data.automations.length === 0 && (
-            <p className="text-sm text-muted-foreground">No plans yet. Start from "Buyer New Lead" to replace Follow Up Boss's plan, or build one from scratch.</p>
+            <p className="text-sm text-muted-foreground">No plans yet. Start from a template (buyer or seller), or build one from scratch.</p>
           )}
         </div>
       )}
@@ -893,7 +911,7 @@ function Inspector(props: {
           <Field label="Start this plan when">
             <Select
               value={t.type}
-              onValueChange={(v) => onTrigger(v === "new_lead" ? { type: "new_lead" } : v === "tag_added" ? { type: "tag_added", tag: "" } : { type: "manual" })}
+              onValueChange={(v) => onTrigger(v === "new_lead" ? { type: "new_lead", leadType: "buyer" } : v === "tag_added" ? { type: "tag_added", tag: "" } : { type: "manual" })}
             >
               <SelectTrigger className="rounded-sm">
                 <SelectValue />
@@ -906,6 +924,26 @@ function Inspector(props: {
             </Select>
           </Field>
           {t.type === "new_lead" && (
+            <Field
+              label="Lead type"
+              hint="Sellers: selling or valuation enquiries, the home-value tools, community reports, and lead emails that say they're selling. Everyone else counts as a buyer; renters match only “Any”."
+            >
+              <Select
+                value={t.leadType ?? "any"}
+                onValueChange={(v) => onTrigger({ ...t, leadType: v === "any" ? undefined : (v as "buyer" | "seller") })}
+              >
+                <SelectTrigger className="rounded-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="buyer">Buyers</SelectItem>
+                  <SelectItem value="seller">Sellers</SelectItem>
+                  <SelectItem value="any">Any lead</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+          )}
+          {t.type === "new_lead" && (
             <Field label="Only from these sources" hint="None ticked means every source.">
               <div className="max-h-64 overflow-auto space-y-1 border border-border rounded-sm p-2">
                 {(meta?.sources ?? []).map((s) => {
@@ -915,7 +953,7 @@ function Inspector(props: {
                       <input
                         type="checkbox"
                         checked={on}
-                        onChange={() => onTrigger({ type: "new_lead", sources: on ? (t.sources ?? []).filter((x) => x !== s) : [...(t.sources ?? []), s] })}
+                        onChange={() => onTrigger({ ...t, sources: on ? (t.sources ?? []).filter((x) => x !== s) : [...(t.sources ?? []), s] })}
                       />
                       {s}
                     </label>

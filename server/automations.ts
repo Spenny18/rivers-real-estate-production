@@ -12,7 +12,8 @@
 // page for one-click approval) or automatic. New plans start in review.
 //
 // Who gets enrolled.
-//   - new_lead: every lead the app creates (forms, bookings, lead emails) —
+//   - new_lead: optionally only buyers or only sellers (leadTypeFor), and
+//     optionally only some sources. Every lead the app creates (forms, bookings, lead emails) —
 //     via onLeadCreated in contacts.ts — and every contact the Follow Up Boss
 //     sync brings in that was created after the plan was switched on, so
 //     leads that only reach FUB (ReferralExchange, the WordPress site) count.
@@ -101,8 +102,10 @@ sqlite.exec(`
 
 // ---- Types ------------------------------------------------------------------------------
 
+export type LeadType = "buyer" | "seller" | "renter";
+
 export type Trigger =
-  | { type: "new_lead"; sources?: string[] }
+  | { type: "new_lead"; sources?: string[]; leadType?: "buyer" | "seller" }
   | { type: "tag_added"; tag: string }
   | { type: "manual" };
 
@@ -323,6 +326,21 @@ export function repliedSince(contactId: string, since: string): boolean {
 export interface RunContext {
   property?: string | null;
   source?: string | null;
+  leadType?: LeadType;
+}
+
+/**
+ * Buyer, seller or renter, from what the lead said and where it came from.
+ * Lead emails say outright (lead-intake.ts writes "(seller lead via REW.ca)"
+ * into the message); otherwise a selling, valuation or home-value source means
+ * a seller. Everything else — listing inquiries, portals, referrals,
+ * general questions — is treated as a buyer, which is what most leads are.
+ */
+export function leadTypeFor(source: string | null | undefined, message?: string | null): LeadType {
+  const said = message?.match(/\((buyer|seller|renter) lead via /i)?.[1]?.toLowerCase();
+  if (said) return said as LeadType;
+  if (/sell|valuation|home[ _-]?eval|home value|community report/i.test(source ?? "")) return "seller";
+  return "buyer";
 }
 
 /** {first_name}, {name}, {property}, {source}, {agent_name}, {agent_phone} in a message. */
@@ -424,7 +442,8 @@ function logStep(runId: number, stepId: string, type: string, status: string, de
 export function onNewLead(lead: { id: number; source: string; message?: string | null }, contactId: string) {
   if (!markFired(contactId)) return;
   const property = lead.message?.match(/^About:\s*(.+)$/m)?.[1]?.trim() ?? null;
-  fireNewLead(contactId, lead.source, { leadId: lead.id, context: { property, source: lead.source } });
+  const leadType = leadTypeFor(lead.source, lead.message);
+  fireNewLead(contactId, lead.source, { leadId: lead.id, context: { property, source: lead.source, leadType } });
 }
 
 /**
@@ -446,7 +465,7 @@ export function onContactsSynced() {
   for (const r of rows) {
     if (!markFired(r.id)) continue;
     const created = (sqlite.prepare(`SELECT fub_created_at AS t FROM crm_contacts WHERE fub_id = ?`).get(r.id) as { t: string }).t;
-    fireNewLead(r.id, r.source ?? "", { context: { source: r.source } }, created);
+    fireNewLead(r.id, r.source ?? "", { context: { source: r.source, leadType: leadTypeFor(r.source) } }, created);
   }
 }
 
@@ -468,7 +487,9 @@ function fireNewLead(contactId: string, source: string, opts: { leadId?: number;
     if (a.mode === "off" || a.trigger.type !== "new_lead") continue;
     if (createdAt && a.enabledAt && createdAt < a.enabledAt) continue;
     if (!sourceMatches(a.trigger.sources, source)) continue;
-    enroll(a, contactId, { ...opts, reason: `new lead${source ? ` from ${source}` : ""}` });
+    const type = opts.context?.leadType;
+    if (a.trigger.leadType && type !== a.trigger.leadType) continue;
+    enroll(a, contactId, { ...opts, reason: `new ${type ?? ""} lead${source ? ` from ${source}` : ""}`.replace(/\s+/g, " ") });
   }
 }
 
