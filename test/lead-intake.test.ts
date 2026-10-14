@@ -93,3 +93,31 @@ test("a lead with only a phone number is still a lead", () => {
   assert.equal(made.duplicate, false);
   assert.equal(storage.getLead(made.leadId)!.phone, "(587) 555-0199");
 });
+
+test("a reminder about someone already in contacts is attached to them, not a new lead", async () => {
+  const before = storage.listLeads().length;
+  const source = intake.sourceForSender("support@referralexchange.com")!;
+  const row = await intake.processLeadEmail(source, {
+    gmailId: "g5",
+    from: "support@referralexchange.com",
+    subject: "Progress report reminder",
+    body: "Progress report reminder for your referral.\nName: Jane Buyer\nEmail: jane@example.com",
+    receivedAt: new Date().toISOString(),
+  });
+  assert.equal(row.status, "follow_up");
+  assert.ok(row.contactFubId);
+  assert.equal(storage.listLeads().length, before);
+});
+
+test("a reminder about someone not in contacts waits for review", async () => {
+  const source = intake.sourceForSender("noreply@yelp.com")!;
+  const row = await intake.processLeadEmail(source, {
+    gmailId: "g6",
+    from: "noreply@yelp.com",
+    subject: "Reminder: Abid is waiting",
+    body: "Reminder: a customer is waiting.\nName: Abid\nPhone: (403) 555-0142",
+    receivedAt: new Date().toISOString(),
+  });
+  assert.equal(row.status, "needs_review");
+  assert.equal(row.leadId, null);
+});

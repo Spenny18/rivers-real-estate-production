@@ -13,6 +13,7 @@ import { apiErrorMessage, apiRequest } from "@/lib/queryClient";
 
 interface Extracted {
   isLead: boolean;
+  isFollowUp?: boolean;
   confident: boolean;
   name: string | null;
   email: string | null;
@@ -48,6 +49,7 @@ interface IntakeResponse {
 const STATUS_LABEL: Record<string, string> = {
   imported: "Added as lead",
   duplicate: "Same lead again",
+  follow_up: "Reminder",
   needs_review: "Needs review",
   not_a_lead: "Not a lead",
   dismissed: "Dismissed",
