@@ -772,6 +772,7 @@ export async function decide(
     if (!ok) {
       setRun(run.id, { status: "active" });
       moveOn(getRun(run.id)!, index, s.step_id);
+      void advanceRun(run.id);
       return { ok: false, error: "Couldn't send it — see the plan's activity. The plan carried on." };
     }
   }
@@ -780,6 +781,21 @@ export async function decide(
   else goTo(getRun(run.id)!, null);
   void advanceRun(run.id);
   return { ok: true };
+}
+
+/** Send every message of one plan that's waiting for approval — used when it switches to automatic. */
+export async function sendAllPending(automationId: number): Promise<{ sent: number; failed: number }> {
+  const ids = listPending()
+    .filter((p) => p.automationId === automationId)
+    .map((p) => p.stepRowId);
+  let sent = 0;
+  let failed = 0;
+  for (const id of ids) {
+    const r = await decide(id, "send");
+    if (r.ok) sent++;
+    else failed++;
+  }
+  return { sent, failed };
 }
 
 // ---- Tasks ---------------------------------------------------------------------------------
