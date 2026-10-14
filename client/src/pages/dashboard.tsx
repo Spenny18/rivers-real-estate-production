@@ -1,6 +1,7 @@
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
+import { RecentActivity } from "@/components/recent-activity";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -181,6 +182,9 @@ export default function DashboardPage() {
             );
           })}
         </div>
+
+        {/* Who's active right now: site visits, email opens and clicks, enquiries */}
+        <RecentActivity />
 
         {/* Charts row */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

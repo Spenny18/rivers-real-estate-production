@@ -590,6 +590,10 @@ export async function registerRoutes(
     const { registerAutomationRoutes } = await import("./automation-routes");
     registerAutomationRoutes(app, { requireAuth });
 
+    // The dashboard's "Recent activity" feed. See server/dashboard-activity.ts.
+    const { registerDashboardActivityRoutes } = await import("./dashboard-activity");
+    registerDashboardActivityRoutes(app, { requireAuth });
+
     const { registerMarketRoutes } = await import("./market-routes");
     registerMarketRoutes(app, { requireAuth });
   } catch (e) {
