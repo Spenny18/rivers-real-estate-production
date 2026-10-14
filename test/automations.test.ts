@@ -202,3 +202,30 @@ test("automatic texts wait for 8 am Calgary time", () => {
   const day = new Date("2026-07-10T20:00:00Z");
   assert.equal(auto.nextTextableTime(day).getTime(), day.getTime());
 });
+
+test("sending everything waiting for a plan clears its queue and carries each person on", async () => {
+  const a = auto.createAutomation({
+    name: "Release",
+    steps: [
+      { id: "s1", type: "send_text", body: "Hi {first_name}" },
+      { id: "t1", type: "add_tag", tag: "Released" },
+    ],
+  });
+  auto.updateAutomation(a.id, { mode: "review" });
+  const c1 = person();
+  const c2 = person();
+  const r1 = auto.enroll(auto.getAutomation(a.id)!, c1)!;
+  const r2 = auto.enroll(auto.getAutomation(a.id)!, c2)!;
+  await settle();
+  assert.equal(auto.listPending().filter((p) => p.automationId === a.id).length, 2);
+  auto.updateAutomation(a.id, { mode: "auto" });
+  // Texting isn't configured in tests, so both sends fail — but nothing is left stuck.
+  const result = await auto.sendAllPending(a.id);
+  assert.deepEqual(result, { sent: 0, failed: 2 });
+  await settle();
+  assert.equal(auto.listPending().filter((p) => p.automationId === a.id).length, 0);
+  for (const [r, c] of [[r1, c1], [r2, c2]] as const) {
+    assert.equal(run(r).status, "completed");
+    assert.deepEqual(auto.appTags(c), ["Released"]);
+  }
+});

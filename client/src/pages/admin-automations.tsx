@@ -16,6 +16,16 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   ArrowLeft,
   CheckSquare,
   Clock,
@@ -476,13 +486,16 @@ function Builder({ id }: { id: number }) {
   const qc = useQueryClient();
   const [, navigate] = useLocation();
   const { data } = useQuery<{ automation: Automation; runs: RunRow[]; problems: string[] }>({ queryKey: [`/api/admin/automations/${id}`] });
-  const { data: list } = useQuery<{ automations: Automation[] }>({ queryKey: ["/api/admin/automations"] });
+  const { data: list } = useQuery<{ automations: Automation[]; pending: Pending[] }>({ queryKey: ["/api/admin/automations"] });
   const { data: meta } = useQuery<Meta>({ queryKey: ["/api/admin/automation-meta"] });
 
   const [draft, setDraft] = useState<Automation | null>(null);
   const [selected, setSelected] = useState<string | "trigger" | null>(null);
   const [view, setView] = useState<"build" | "people">("build");
   const [error, setError] = useState<string | null>(null);
+  // Switching to automatic while messages wait for approval: ask what to do with them.
+  const [releaseAsk, setReleaseAsk] = useState<number | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (data?.automation && (!draft || draft.id !== data.automation.id)) setDraft(data.automation);
@@ -504,6 +517,19 @@ function Builder({ id }: { id: number }) {
     onSuccess: (a: Automation) => {
       setError(null);
       setDraft(a);
+      qc.invalidateQueries({ queryKey: [`/api/admin/automations/${id}`] });
+      qc.invalidateQueries({ queryKey: ["/api/admin/automations"] });
+    },
+    onError: (e) => setError(apiErrorMessage(e)),
+  });
+  const sendPending = useMutation({
+    mutationFn: async () => (await apiRequest("POST", `/api/admin/automations/${id}/send-pending`)).json(),
+    onSuccess: (r: { sent: number; failed: number }) => {
+      setNotice(
+        r.failed
+          ? `Sent ${r.sent}; ${r.failed} couldn't be sent (see People for details).`
+          : `Sent ${r.sent} waiting message${r.sent === 1 ? "" : "s"}.`,
+      );
       qc.invalidateQueries({ queryKey: [`/api/admin/automations/${id}`] });
       qc.invalidateQueries({ queryKey: ["/api/admin/automations"] });
     },
@@ -534,9 +560,15 @@ function Builder({ id }: { id: number }) {
         <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} className="max-w-sm font-serif text-lg h-10" />
         <Select
           value={draft.mode}
-          onValueChange={(mode) => {
+          onValueChange={async (mode) => {
             if (dirty) return setError("Save your changes before switching the plan on or off.");
+            setNotice(null);
             save.mutate({ mode: mode as Mode });
+            if (mode !== "auto") return;
+            // Fresh, not the cached list: someone may have been added since the page loaded.
+            const fresh = await qc.fetchQuery<{ pending: Pending[] }>({ queryKey: ["/api/admin/automations"], staleTime: 0 });
+            const waiting = fresh.pending.filter((p) => p.automationId === id).length;
+            if (waiting > 0) setReleaseAsk(waiting);
           }}
         >
           <SelectTrigger className="w-[220px] rounded-sm">
@@ -568,6 +600,24 @@ function Builder({ id }: { id: number }) {
         </Button>
       </div>
       {error && <p className="text-sm text-destructive">{error}</p>}
+      {notice && <p className="text-sm text-muted-foreground">{notice}</p>}
+      <AlertDialog open={releaseAsk !== null} onOpenChange={(o) => !o && setReleaseAsk(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Send the {releaseAsk} waiting message{releaseAsk === 1 ? "" : "s"} now?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This plan is now automatic, so new messages send on their own. {releaseAsk === 1 ? "One message was" : `${releaseAsk} messages were`} queued
+              while it was in review. Send {releaseAsk === 1 ? "it" : "them"} now, or leave {releaseAsk === 1 ? "it" : "them"} under Waiting for approval to look over first.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Leave for approval</AlertDialogCancel>
+            <AlertDialogAction onClick={() => sendPending.mutate()}>Send now</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {draft.mode !== "off" && meta && (!meta.channels.text.ok || !meta.channels.email.ok) && (
         <p className="text-sm text-amber-700 dark:text-amber-400">
           {!meta.channels.text.ok && `${meta.channels.text.reason}: text steps will fail. `}

@@ -6,6 +6,7 @@
 //   PATCH  /api/admin/automations/:id             { name?, description?, trigger?, steps?, mode?, stopOnReply? }
 //   DELETE /api/admin/automations/:id
 //   POST   /api/admin/automations/:id/enroll      { contactFubId } add someone by hand
+//   POST   /api/admin/automations/:id/send-pending send everything of this plan waiting for approval
 //   POST   /api/admin/automation-runs/:id/stop    stop one person's plan
 //   GET    /api/admin/automation-runs/:id/steps   what one person's plan did
 //   POST   /api/admin/automation-approvals/:id    { decision: send|skip|stop, body?, subject? }
@@ -28,6 +29,7 @@ import {
   listPending,
   newStepId,
   runsFor,
+  sendAllPending,
   stepsForRun,
   stopRun,
   updateAutomation,
@@ -209,6 +211,12 @@ export function registerAutomationRoutes(app: Express, deps: { requireAuth: Midd
     const runId = enroll(a, contactId, { reason: "added by hand" });
     if (!runId) return res.status(409).json({ message: "They're already in this plan." });
     res.json({ runId });
+  });
+
+  app.post("/api/admin/automations/:id/send-pending", requireAuth, async (req, res) => {
+    const a = getAutomation(Number(req.params.id));
+    if (!a) return res.status(404).json({ message: "Not found" });
+    res.json(await sendAllPending(a.id));
   });
 
   app.post("/api/admin/automation-runs/:id/stop", requireAuth, (req, res) => {
