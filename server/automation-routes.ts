@@ -191,6 +191,8 @@ export function registerAutomationRoutes(app: Express, deps: { requireAuth: Midd
         counts: Object.fromEntries(counts.filter((c) => c.id === a.id).map((c) => [c.status, c.n])),
       })),
       pending: listPending(),
+      // Who's been put into plans lately, newest first — the overview's table.
+      recent: runsFor({ limit: 50 }),
     });
   });
 

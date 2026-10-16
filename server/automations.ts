@@ -875,8 +875,11 @@ export function runsFor(opts: { automationId?: number; contactId?: string; limit
   }
   return sqlite
     .prepare(
-      `SELECT r.id, r.automation_id AS automationId, a.name AS automationName, r.contact_fub_id AS contactFubId, c.name AS contactName,
-              r.status, r.step_id AS stepId, r.next_at AS nextAt, r.stopped_reason AS stoppedReason, r.started_at AS startedAt, r.updated_at AS updatedAt
+      `SELECT r.id, r.automation_id AS automationId, COALESCE(a.name, 'Deleted plan') AS automationName, r.contact_fub_id AS contactFubId,
+              c.name AS contactName, c.source AS contactSource,
+              r.status, r.step_id AS stepId, r.next_at AS nextAt, r.stopped_reason AS stoppedReason, r.started_at AS startedAt, r.updated_at AS updatedAt,
+              (SELECT s.detail FROM automation_steps s WHERE s.run_id = r.id AND s.type NOT IN ('start', 'end') ORDER BY s.id DESC LIMIT 1) AS lastDetail,
+              (SELECT s.created_at FROM automation_steps s WHERE s.run_id = r.id AND s.type NOT IN ('start', 'end') ORDER BY s.id DESC LIMIT 1) AS lastAt
        FROM automation_runs r LEFT JOIN automations a ON a.id = r.automation_id LEFT JOIN crm_contacts c ON c.fub_id = r.contact_fub_id
        ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
        ORDER BY r.started_at DESC LIMIT ?`,
