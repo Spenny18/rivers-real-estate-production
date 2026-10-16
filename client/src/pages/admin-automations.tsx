@@ -100,6 +100,14 @@ interface RunRow {
   stoppedReason: string | null;
   startedAt: string;
 }
+/** A lead's time in a plan, as the overview lists it. */
+interface RecentRun extends RunRow {
+  automationId: number;
+  automationName: string;
+  contactSource: string | null;
+  lastDetail: string | null;
+  lastAt: string | null;
+}
 interface Meta {
   sources: string[];
   tags: string[];
@@ -307,7 +315,11 @@ function Overview() {
   const qc = useQueryClient();
   const [, navigate] = useLocation();
   const [tab, setTab] = useState<"plans" | "approvals" | "tasks">("plans");
-  const { data } = useQuery<{ automations: Automation[]; pending: Pending[] }>({ queryKey: ["/api/admin/automations"], refetchInterval: 30_000 });
+  const { data } = useQuery<{ automations: Automation[]; pending: Pending[]; recent: RecentRun[] }>({
+    queryKey: ["/api/admin/automations"],
+    refetchInterval: 30_000,
+  });
+  const recent = data?.recent ?? [];
   const { data: tasks = [] } = useQuery<any[]>({ queryKey: ["/api/admin/automation-tasks"], refetchInterval: 60_000 });
   const create = useMutation({
     mutationFn: async (template?: string) => (await apiRequest("POST", "/api/admin/automations", template ? { template } : { name: "New action plan" })).json(),
@@ -385,6 +397,7 @@ function Overview() {
                   <div className="text-xs text-muted-foreground">
                     {countSteps(a.steps)} steps · {(a.counts?.active ?? 0) + (a.counts?.approval ?? 0)} in progress · {a.counts?.completed ?? 0} finished
                   </div>
+                  <PlanLatest runs={recent.filter((r) => r.automationId === a.id)} />
                 </CardContent>
               </Card>
             </Link>
@@ -394,10 +407,101 @@ function Overview() {
           )}
         </div>
       )}
+      {tab === "plans" && <RecentLeads runs={recent} />}
 
       {tab === "approvals" && <Approvals pending={pending} />}
       {tab === "tasks" && <Tasks tasks={tasks} />}
     </div>
+  );
+}
+
+/** The last few people a plan picked up, on its card. */
+function PlanLatest({ runs }: { runs: RecentRun[] }) {
+  if (runs.length === 0) return <div className="text-xs text-muted-foreground pt-1 border-t border-border">No leads yet</div>;
+  return (
+    <div className="pt-2 border-t border-border space-y-1">
+      <div className="eyebrow text-muted-foreground">Latest leads</div>
+      {runs.slice(0, 3).map((r) => (
+        <div key={r.id} className="flex items-center justify-between gap-2 text-xs">
+          <span className="truncate">{r.contactName ?? "Unknown"}</span>
+          <span className="text-muted-foreground whitespace-nowrap">
+            {RUN_STATUS[r.status] ?? r.status} · {timeAgo(r.startedAt)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Everyone recently put into a plan, newest first, with what the plan last did for them. */
+function RecentLeads({ runs }: { runs: RecentRun[] }) {
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <div className="px-5 py-4 border-b border-border">
+          <h3 className="font-serif text-xl" style={{ letterSpacing: "-0.01em" }}>
+            Recent leads in plans
+          </h3>
+          <p className="text-xs text-muted-foreground mt-1">Who each plan picked up, and the last thing it did for them.</p>
+        </div>
+        {runs.length === 0 ? (
+          <p className="px-5 py-6 text-sm text-muted-foreground">No one has been added to a plan yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-muted-foreground border-b border-border">
+                  <th className="font-medium px-5 py-2.5">Lead</th>
+                  <th className="font-medium px-3 py-2.5">Plan</th>
+                  <th className="font-medium px-3 py-2.5 whitespace-nowrap">Added</th>
+                  <th className="font-medium px-3 py-2.5">Status</th>
+                  <th className="font-medium px-5 py-2.5 hidden md:table-cell">Last step</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {runs.map((r) => {
+                  const live = r.status === "active" || r.status === "approval";
+                  const next = r.status === "active" && r.nextAt && new Date(r.nextAt) > new Date() ? `next step ${new Date(r.nextAt).toLocaleString("en-CA", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`
+                      : null;
+                  return (
+                    <tr key={r.id} className="hover:bg-secondary/40">
+                      <td className="px-5 py-2.5">
+                        <Link href={`/admin/crm?contact=${encodeURIComponent(r.contactFubId)}`} className="hover:underline underline-offset-2">
+                          {r.contactName ?? "Unknown"}
+                        </Link>
+                        {r.contactSource && <div className="text-xs text-muted-foreground">{r.contactSource}</div>}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        {r.automationName === "Deleted plan" ? (
+                          <span className="text-muted-foreground">Deleted plan</span>
+                        ) : (
+                          <Link href={`/admin/automations/${r.automationId}`} className="hover:underline underline-offset-2">
+                            {r.automationName}
+                          </Link>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">{timeAgo(r.startedAt)}</td>
+                      <td className="px-3 py-2.5">
+                        <Badge variant={live ? "default" : "outline"} className="rounded-sm text-[10px]">
+                          {RUN_STATUS[r.status] ?? r.status}
+                        </Badge>
+                        {(r.stoppedReason || next) && <div className="text-xs text-muted-foreground mt-0.5">{r.stoppedReason ?? next}</div>}
+                      </td>
+                      <td className="px-5 py-2.5 hidden md:table-cell text-muted-foreground max-w-[320px]">
+                        <div className="truncate" title={r.lastDetail ?? ""}>
+                          {r.lastDetail ?? "—"}
+                        </div>
+                        {r.lastAt && <div className="text-xs">{timeAgo(r.lastAt)}</div>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

@@ -258,3 +258,18 @@ test("buyer and seller plans each get only their own leads; 'any' gets both", as
   assert.deepEqual(tags("bob@example.com"), ["A", "B"]);
   assert.deepEqual(tags("rita@example.com"), ["A"]);
 });
+
+test("recent runs show the plan's name, the lead, and the last step, even after the plan is deleted", async () => {
+  const a = auto.createAutomation({ name: "Recent list", steps: [{ id: "t", type: "add_tag", tag: "Listed" }] });
+  auto.updateAutomation(a.id, { mode: "auto" });
+  const c = person();
+  const runId = auto.enroll(auto.getAutomation(a.id)!, c)!;
+  await settle();
+  let row = (auto.runsFor({ limit: 500 }) as any[]).find((r) => r.id === runId);
+  assert.equal(row.automationName, "Recent list");
+  assert.equal(row.contactName, storage.getCrmContact(c)!.name);
+  assert.equal(row.lastDetail, 'Added tag "Listed"');
+  auto.deleteAutomation(a.id);
+  row = (auto.runsFor({ limit: 500 }) as any[]).find((r) => r.id === runId);
+  assert.equal(row.automationName, "Deleted plan");
+});
