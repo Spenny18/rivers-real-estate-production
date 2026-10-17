@@ -414,9 +414,10 @@ function Message({ item }: { item: ThreadItem }) {
   return (
     <div className={`flex ${out ? "justify-end" : "justify-start"}`}>
       <div
-        className={`max-w-[80%] rounded-lg px-3.5 py-2.5 ${
-          out ? "bg-foreground text-background" : "bg-background border border-border"
-        }`}
+        className={`${
+          // Emails shown as sent need room: a fixed width the email can fill.
+          item.kind === "email" && typeof item.meta.gmailId === "string" ? "w-[80%] max-w-[760px]" : "max-w-[80%]"
+        } rounded-lg px-3.5 py-2.5 ${out ? "bg-foreground text-background" : "bg-background border border-border"}`}
       >
         <div className={`text-[11px] flex items-center gap-1.5 mb-1 ${out ? "text-background/70" : "text-muted-foreground"}`}>
           <Icon className="h-3 w-3" strokeWidth={1.6} />
@@ -436,9 +437,16 @@ function Message({ item }: { item: ThreadItem }) {
  * formatted original. See client/src/lib/email-text.ts.
  */
 function FormattedBody({ item, out }: { item: ThreadItem; out: boolean }) {
+  const gmailId = item.kind === "email" && typeof item.meta.gmailId === "string" ? item.meta.gmailId : null;
+  // Emails show as sent, images and all; texts (and emails Gmail can't
+  // supply) as formatted text.
+  if (gmailId) return <EmailAsSent item={item} out={out} gmailId={gmailId} />;
+  return <TextBody item={item} out={out} gmailId={null} />;
+}
+
+function TextBody({ item, out, gmailId }: { item: ThreadItem; out: boolean; gmailId: string | null }) {
   const [showOriginal, setShowOriginal] = useState(false);
   const { segments, hiddenImages } = useMemo(() => formatEmailText(item.body), [item.body]);
-  const gmailId = item.kind === "email" && typeof item.meta.gmailId === "string" ? item.meta.gmailId : null;
   const linkClass = out ? "underline underline-offset-2 text-background" : "underline underline-offset-2 text-foreground";
   return (
     <>
@@ -473,6 +481,86 @@ function FormattedBody({ item, out }: { item: ThreadItem; out: boolean }) {
   );
 }
 
+/**
+ * One email in the thread as it was sent, with its pictures, fetched from
+ * Gmail when it scrolls into view. Earlier replies quoted underneath are
+ * hidden (the thread already shows them); "Open full size" shows everything.
+ * Until it arrives, or if Gmail can't be reached, the text version shows.
+ */
+function EmailAsSent({ item, out, gmailId }: { item: ThreadItem; out: boolean; gmailId: string }) {
+  const holder = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLIFrameElement>(null);
+  const [visible, setVisible] = useState(false);
+  const [height, setHeight] = useState(120);
+  const [full, setFull] = useState(false);
+  useEffect(() => {
+    const el = holder.current;
+    if (!el || visible) return;
+    if (typeof IntersectionObserver === "undefined") return setVisible(true);
+    // A working observer reports once straight away. If it never does (some
+    // embedded or background views), load the email anyway rather than leave
+    // it as text.
+    let reported = false;
+    const io = new IntersectionObserver(
+      (entries) => {
+        reported = true;
+        if (entries.some((e) => e.isIntersecting)) setVisible(true);
+      },
+      { rootMargin: "400px" },
+    );
+    io.observe(el);
+    const fallback = setTimeout(() => !reported && setVisible(true), 1500);
+    return () => {
+      io.disconnect();
+      clearTimeout(fallback);
+    };
+  }, [visible]);
+  const { data, isError } = useQuery<OriginalEmail>({
+    queryKey: [`/api/admin/inbox/email/${gmailId}/original`, "inline"],
+    queryFn: async () => (await apiRequest("GET", `/api/admin/inbox/email/${encodeURIComponent(gmailId)}/original?images=1&quoted=0`)).json(),
+    enabled: visible,
+    staleTime: 30 * 60_000,
+    retry: 1,
+  });
+  const fit = () => {
+    const doc = frame.current?.contentDocument;
+    if (doc?.body) setHeight(Math.min(Math.max(doc.documentElement.scrollHeight, 60), 2400));
+  };
+  const showFrame = data && !data.plainOnly && !isError;
+  return (
+    <div ref={holder}>
+      {showFrame ? (
+        <>
+          <iframe
+            ref={frame}
+            title={item.subject || "Email"}
+            // Same sandbox as the full-size view: nothing in the email can run.
+            sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+            srcDoc={data.html}
+            onLoad={() => {
+              fit();
+              // Pictures arrive after the document; measure again once they have.
+              setTimeout(fit, 600);
+              setTimeout(fit, 2000);
+            }}
+            className="rounded-sm"
+            style={{ width: "100%", minWidth: 280, height, border: 0, display: "block", background: "#fff" }}
+            data-testid={`email-as-sent-${gmailId}`}
+          />
+          <div className={`mt-1.5 text-[11px] ${out ? "text-background/70" : "text-muted-foreground"}`}>
+            <button type="button" className="underline underline-offset-2 hover:opacity-80" onClick={() => setFull(true)} data-testid={`show-original-${gmailId}`}>
+              Open full size
+            </button>
+          </div>
+          {full && <OriginalEmailDialog gmailId={gmailId} subject={item.subject} onClose={() => setFull(false)} />}
+        </>
+      ) : (
+        <TextBody item={item} out={out} gmailId={gmailId} />
+      )}
+    </div>
+  );
+}
+
 interface OriginalEmail {
   html: string;
   remoteImages: number;
@@ -483,11 +571,11 @@ interface OriginalEmail {
 /**
  * The email as sent, fetched from Gmail on demand and shown in a sandboxed
  * frame: no scripts can run, and its Content-Security-Policy blocks every
- * outside request — remote images stay off until "Load images" (they can be
- * open-tracking pixels). Server: server/email-original.ts.
+ * outside request except pictures, which load by default (Spencer's choice,
+ * 2026-10-17 — they can be open-tracking pixels). Server: server/email-original.ts.
  */
 function OriginalEmailDialog({ gmailId, subject, onClose }: { gmailId: string; subject: string | null; onClose: () => void }) {
-  const [images, setImages] = useState(false);
+  const [images, setImages] = useState(true);
   const frame = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(400);
   const { data, isLoading, error } = useQuery<OriginalEmail>({

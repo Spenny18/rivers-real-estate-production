@@ -93,7 +93,7 @@ export function registerInboxRoutes(app: Express, deps: { requireAuth: Middlewar
     try {
       const { originalEmail } = await import("./email-original");
       res.set("Cache-Control", "private, no-store");
-      res.json(await originalEmail(gmailId, { images: req.query.images === "1" }));
+      res.json(await originalEmail(gmailId, { images: req.query.images === "1", hideQuoted: req.query.quoted === "0" }));
     } catch (e: any) {
       res.status(502).json({ message: e?.message ?? "Couldn't fetch the original from Gmail" });
     }

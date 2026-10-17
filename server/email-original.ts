@@ -72,7 +72,25 @@ export interface OriginalEmail {
   plainOnly: boolean;
 }
 
-export async function originalEmail(gmailId: string, opts: { images: boolean }): Promise<OriginalEmail> {
+// Emails don't change once sent, and the Inbox now shows each one inline as
+// it scrolls into view — so keep recent results rather than asking Gmail again
+// every time a thread is opened.
+const CACHE_MAX = 300;
+const CACHE_MS = 60 * 60_000;
+const cache = new Map<string, { at: number; value: OriginalEmail }>();
+
+export async function originalEmail(gmailId: string, opts: { images: boolean; hideQuoted?: boolean }): Promise<OriginalEmail> {
+  const key = `${gmailId}|${opts.images ? 1 : 0}|${opts.hideQuoted ? 1 : 0}`;
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
+  const value = await fetchOriginal(gmailId, opts);
+  cache.delete(key);
+  cache.set(key, { at: Date.now(), value });
+  if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!);
+  return value;
+}
+
+async function fetchOriginal(gmailId: string, opts: { images: boolean; hideQuoted?: boolean }): Promise<OriginalEmail> {
   const userId = agentUserId();
   const token = userId ? await getValidAccessToken(userId) : null;
   if (!token) throw new Error("The Google connection has expired. Reconnect it on the Scheduling page.");
@@ -111,7 +129,7 @@ export async function originalEmail(gmailId: string, opts: { images: boolean }):
     body = `<pre style="white-space:pre-wrap;font-family:inherit;margin:0">${escapeHtml(textPart?.body?.data ? decode(textPart.body.data) : msg.snippet ?? "")}</pre>`;
   }
 
-  const { html, remoteImages } = renderEmailDocument(body, inline, opts.images);
+  const { html, remoteImages } = renderEmailDocument(body, inline, opts.images, { hideQuoted: opts.hideQuoted && !plainOnly });
   return { html, remoteImages, inlineImages: inline.size, plainOnly };
 }
 
@@ -119,9 +137,31 @@ export async function originalEmail(gmailId: string, opts: { images: boolean }):
  * Sanitised, self-contained HTML document for the sandboxed frame. Exported
  * for tests. `inline` maps lower-cased Content-IDs to data: URIs.
  */
-export function renderEmailDocument(body: string, inline: Map<string, string>, images: boolean): { html: string; remoteImages: number } {
+/**
+ * Earlier messages quoted under a reply, by mail client: Gmail's gmail_quote,
+ * Apple Mail's <blockquote type="cite">, Outlook's divRplyFwdMsg header (and
+ * everything after it), Yahoo's yahoo_quoted, Thunderbird's moz-cite-prefix.
+ * Ids and the blockquote's type are stripped by the sanitiser, so they're
+ * turned into a class first.
+ */
+const QUOTE_CSS =
+  `.gmail_quote,.gmail_quote_container,.yahoo_quoted,.moz-cite-prefix,blockquote.lhc-quote,` +
+  `.lhc-quote-start,.lhc-quote-start~*{display:none!important}`;
+
+function markQuotes(html: string): string {
+  return html
+    .replace(/<blockquote\b([^>]*)\btype\s*=\s*["']?cite["']?/gi, '<blockquote class="lhc-quote"$1')
+    .replace(/<(div|hr)\b([^>]*)\bid\s*=\s*["']?(divRplyFwdMsg|stopSpelling)["']?/gi, '<$1 class="lhc-quote-start"$2');
+}
+
+export function renderEmailDocument(
+  body: string,
+  inline: Map<string, string>,
+  images: boolean,
+  opts: { hideQuoted?: boolean } = {},
+): { html: string; remoteImages: number } {
   // cid: references -> the embedded image (unknown cids are dropped).
-  const withInline = body.replace(/(["'(])cid:([^"')\s]+)/gi, (_m, q, id) => {
+  const withInline = (opts.hideQuoted ? markQuotes(body) : body).replace(/(["'(])cid:([^"')\s]+)/gi, (_m, q, id) => {
     const uri = inline.get(String(id).toLowerCase());
     return uri ? `${q}${uri}` : `${q}data:,`;
   });
@@ -136,7 +176,7 @@ export function renderEmailDocument(body: string, inline: Map<string, string>, i
     `<!doctype html><html><head><meta charset="utf-8">` +
     `<meta http-equiv="Content-Security-Policy" content="${csp}">` +
     `<base target="_blank">` +
-    `<style>html,body{margin:0;padding:12px;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:#111;background:#fff;word-wrap:break-word}img{max-width:100%;height:auto}table{max-width:100%}</style>` +
+    `<style>html,body{margin:0;padding:12px;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:#111;background:#fff;word-wrap:break-word}img{max-width:100%;height:auto}table{max-width:100%}${opts.hideQuoted ? QUOTE_CSS : ""}</style>` +
     `</head><body>${clean}</body></html>`;
   return { html, remoteImages };
 }
