@@ -72,6 +72,7 @@ export function registerLeadIntakeRoutes(app: Express, deps: { requireAuth: Midd
       email: b.email || null,
       phone: b.phone || null,
       message: b.message || (x ? leadMessage(source, x) : `(via ${source.label})`),
+      property: x?.property ?? null,
     });
     updateIntake(row.id, {
       status: made.duplicate ? "duplicate" : "imported",

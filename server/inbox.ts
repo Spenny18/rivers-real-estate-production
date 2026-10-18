@@ -16,7 +16,7 @@
 
 import { sqlite, storage } from "./storage";
 import { listActivityForEmail, listTrackedEmailsFor, summarizeActivity } from "./tracking";
-import { resolveShowingListing, toShowingView, type ShowingListing } from "./showings";
+import { findListingByAddress, resolveShowingListing, toShowingView, type ShowingListing } from "./showings";
 import { stateGet } from "./gmail-inbox";
 
 sqlite.exec(`
@@ -307,7 +307,13 @@ export function contactPanel(contact: { fubId: string; email: string | null; nam
     views: events.filter((e) => e.kind === "listing_view" && e.mlsNumber).map((e) => ({ mlsNumber: e.mlsNumber!, at: e.occurredAt })),
     showings: showings.map((s: any) => ({ listing: s.listing, at: s.scheduledFor })),
     deals: (appDeals as Array<{ mlsNumber: string | null; updatedAt: string }>).filter((d) => d.mlsNumber).map((d) => ({ mlsNumber: d.mlsNumber!, at: d.updatedAt })),
-    inquiries: (inquiries as Array<{ listingId: string | null; createdAt: string }>).filter((i) => i.listingId).map((i) => ({ listingId: i.listingId!, at: i.createdAt })),
+    inquiries: (inquiries as Array<{ listingId: string | null; message: string | null; createdAt: string }>).map((i) => ({
+      listingId: i.listingId,
+      // Leads from lead-source emails name the property in the message
+      // ("About: 407 Kanell Drive NE, High River…") rather than linking it.
+      about: i.message?.match(/^About:\s*(.+)$/m)?.[1] ?? null,
+      at: i.createdAt,
+    })),
   });
 
   return { engagement, favorites, savedSearches, inquiries, showings, transactions: { fub: fubDeals, app: appDeals }, properties };
@@ -328,7 +334,7 @@ export function contactProperties(input: {
   views: Array<{ mlsNumber: string; at: string }>;
   showings: Array<{ listing: ShowingListing; at: string }>;
   deals: Array<{ mlsNumber: string; at: string }>;
-  inquiries: Array<{ listingId: string; at: string }>;
+  inquiries: Array<{ listingId: string | null; about?: string | null; at: string }>;
 }): ContactProperty[] {
   const byKey = new Map<string, ContactProperty & { views: number; order: string[] }>();
   const add = (l: ShowingListing, reason: string, at: string) => {
@@ -354,7 +360,13 @@ export function contactProperties(input: {
     add(s.listing, `Showing ${when}`, s.at);
   }
   for (const d of input.deals) add(resolve(d.mlsNumber), "Deal", d.at);
-  for (const i of input.inquiries) add(resolve(i.listingId), "Inquired", i.at);
+  for (const i of input.inquiries) {
+    if (i.listingId) add(resolve(i.listingId), "Inquired", i.at);
+    else if (i.about) {
+      const found = findListingByAddress(i.about);
+      if (found) add(found, "Inquired", i.at);
+    }
+  }
   for (const v of input.views) add(resolve(v.mlsNumber), "view", v.at);
   return Array.from(byKey.values())
     .map(({ views, order, ...p }) => ({ ...p, reasons: [...order, ...(views ? [`Viewed${views > 1 ? ` ${views}×` : ""}`] : [])] }))
