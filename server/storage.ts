@@ -4352,11 +4352,17 @@ export class DatabaseStorage implements IStorage {
     if (opts.stage) clauses.push(eq(crmContacts.stage, opts.stage));
     if (opts.q) {
       const like = `%${opts.q.toLowerCase()}%`;
+      // Phone numbers by their digits, so "4033994330", "403-399-4330" and
+      // "(403) 399 4330" all find a number stored as "403 399 4330".
+      const digits = opts.q.replace(/\D/g, "");
       clauses.push(
         or(
           sql`lower(${crmContacts.name}) LIKE ${like}`,
           sql`lower(${crmContacts.email}) LIKE ${like}`,
           sql`${crmContacts.phone} LIKE ${like}`,
+          ...(digits.length >= 3
+            ? [sql`replace(replace(replace(replace(replace(replace(${crmContacts.phone}, ' ', ''), '-', ''), '(', ''), ')', ''), '.', ''), '+', '') LIKE ${`%${digits}%`}`]
+            : []),
         )!,
       );
     }
