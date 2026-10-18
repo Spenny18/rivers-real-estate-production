@@ -34,6 +34,7 @@
 import { randomBytes } from "node:crypto";
 import { sqlite, storage } from "./storage";
 import { AGENT } from "./brand";
+import { renderMerge, unknownFields } from "./merge-fields";
 
 sqlite.exec(`
   CREATE TABLE IF NOT EXISTS automations (
@@ -258,6 +259,14 @@ export function validateSteps(steps: Step[], selfId?: number): string[] {
       if (s.type === "condition" && i !== list.length - 1) problems.push("An if/else must be the last step in its branch.");
       if (s.type === "wait" && !(s.amount > 0)) problems.push("A wait step needs a length.");
       if (s.type === "send_text" && !s.body?.trim()) problems.push("A text step has no message.");
+      // A field name that doesn't exist would go out as typed, braces and all.
+      const written = [
+        "body" in s ? s.body : "",
+        "subject" in s ? s.subject : "",
+        "message" in s ? s.message : "",
+        s.type === "create_task" ? `${s.title} ${s.note ?? ""}` : "",
+      ].join(" ");
+      for (const f of unknownFields(written)) problems.push(`{${f}} isn't a merge field. Check the spelling, or add it as a custom field.`);
       if (s.type === "send_email" && (!s.subject?.trim() || !s.body?.trim())) problems.push("An email step needs a subject and a message.");
       if ((s.type === "add_tag" || s.type === "remove_tag") && !s.tag?.trim()) problems.push("A tag step has no tag.");
       if (s.type === "create_task" && !s.title?.trim()) problems.push("A task step has no title.");
@@ -344,19 +353,9 @@ export function leadTypeFor(source: string | null | undefined, message?: string 
 }
 
 /** {first_name}, {name}, {property}, {source}, {agent_name}, {agent_phone} in a message. */
+/** Fill in merge fields for this person (server/merge-fields.ts). */
 export function render(template: string, contactId: string, ctx: RunContext): string {
-  const c = storage.getCrmContact(contactId);
-  const first = c?.firstName || c?.name?.split(/\s+/)[0] || "there";
-  const values: Record<string, string> = {
-    first_name: first,
-    name: c?.name || first,
-    property: ctx.property || "the property",
-    source: ctx.source || c?.source || "",
-    agent_name: AGENT.name,
-    agent_first_name: AGENT.name.split(/\s+/)[0],
-    agent_phone: AGENT.phone ?? "",
-  };
-  return template.replace(/\{\s*([a-z_]+)\s*\}/gi, (m, k: string) => values[k.toLowerCase()] ?? m);
+  return renderMerge(template, contactId, { property: ctx.property, source: ctx.source });
 }
 
 // ---- Quiet hours --------------------------------------------------------------------------------

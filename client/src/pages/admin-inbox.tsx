@@ -30,6 +30,8 @@ import {
   ExternalLink,
   Copy,
   Check,
+  ListChecks,
+  Pencil,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
@@ -42,6 +44,7 @@ import { formatEmailText } from "@/lib/email-text";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ListingSearch } from "@/components/listing-picker";
+import { MergeFieldPicker, CustomFieldsDialog, insertAtCursor } from "@/components/merge-field-picker";
 
 // ---- Types (mirror server/inbox.ts) ------------------------------------------------
 
@@ -742,6 +745,34 @@ function Composer({
     };
   });
 
+  // Merge fields go into whichever box was used last, at its cursor.
+  const subjectBox = useRef<HTMLInputElement>(null);
+  const subjectCaret = useRef<number | null>(null);
+  const lastBox = useRef<"subject" | "body">("body");
+  const insertField = (token: string) => {
+    if (channel === "email" && lastBox.current === "subject") {
+      const r = insertAtCursor(subjectBox.current, subject, token, subjectCaret.current);
+      setSubject(r.value);
+      subjectCaret.current = r.caret;
+      setTimeout(() => {
+        subjectBox.current?.focus();
+        subjectBox.current?.setSelectionRange(r.caret, r.caret);
+      }, 0);
+      return;
+    }
+    let at = 0;
+    setBody((prev) => {
+      const r = insertAtCursor(null, prev, token, caret.current);
+      at = r.caret;
+      return r.value;
+    });
+    setTimeout(() => {
+      area.current?.focus();
+      area.current?.setSelectionRange(at, at);
+      caret.current = at;
+    }, 0);
+  };
+
   const send = useMutation({
     mutationFn: async () =>
       (
@@ -789,6 +820,7 @@ function Composer({
         ))}
         {why && <span className="text-[11.5px] text-muted-foreground ml-2">{why}</span>}
         <div className="flex-1" />
+        <MergeFieldPicker onPick={insertField} disabled={!!why} />
         <Popover open={picking} onOpenChange={setPicking}>
           <PopoverTrigger asChild>
             <button
@@ -813,7 +845,19 @@ function Composer({
         </Popover>
       </div>
       {channel === "email" && (
-        <Input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject" className="h-8 rounded-sm text-[13px]" disabled={!!why} />
+        <Input
+          ref={subjectBox}
+          value={subject}
+          onChange={(e) => {
+            setSubject(e.target.value);
+            subjectCaret.current = e.target.selectionStart;
+          }}
+          onFocus={() => (lastBox.current = "subject")}
+          onSelect={() => (subjectCaret.current = subjectBox.current?.selectionStart ?? null)}
+          placeholder="Subject"
+          className="h-8 rounded-sm text-[13px]"
+          disabled={!!why}
+        />
       )}
       <div className="flex gap-2 items-end">
         <textarea
@@ -825,6 +869,7 @@ function Composer({
           }}
           onSelect={remember}
           onBlur={remember}
+          onFocus={() => (lastBox.current = "body")}
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && body.trim() && !why) send.mutate();
           }}
@@ -919,6 +964,8 @@ function ContactPanel({ data, onInsert }: { data: ContactData; onInsert: (l: Lis
           <Empty>No email address, so no tracked activity.</Empty>
         )}
       </Section>
+
+      <ContactDetails fubId={data.contact.fubId} />
 
       <Section title="PROPERTIES" icon={Home} count={properties.length}>
         {properties.length === 0 ? (
@@ -1033,6 +1080,83 @@ function ContactPanel({ data, onInsert }: { data: ContactData; onInsert: (l: Lis
         )}
       </Section>
     </aside>
+  );
+}
+
+interface ContactField {
+  key: string;
+  label: string;
+  type: string;
+  source: "fub" | "app";
+  value: string | null;
+  fubValue: string | null;
+  appValue: string | null;
+}
+
+/**
+ * The contact's custom fields (Birthday, Spouse name, ones added in the app),
+ * the values behind {custom_…} merge fields. Filled-in ones show; Edit shows
+ * them all. A value typed here wins over Follow Up Boss's.
+ */
+function ContactDetails({ fubId }: { fubId: string }) {
+  const qc = useQueryClient();
+  const key = [`/api/admin/contacts/${fubId}/fields`];
+  const { data = [] } = useQuery<ContactField[]>({ queryKey: key });
+  const [editing, setEditing] = useState(false);
+  const [managing, setManaging] = useState(false);
+  const save = useMutation({
+    mutationFn: async ({ field, value }: { field: string; value: string }) =>
+      (await apiRequest("PUT", `/api/admin/contacts/${fubId}/fields/${encodeURIComponent(field)}`, { value })).json(),
+    onSuccess: (rows: ContactField[]) => qc.setQueryData(key, rows),
+  });
+  const filled = data.filter((f) => f.value);
+  const shown = editing ? data : filled;
+  return (
+    <Section title="DETAILS" icon={ListChecks} count={filled.length}>
+      {shown.length === 0 && !editing ? (
+        <Empty>No details yet.</Empty>
+      ) : (
+        <div className="space-y-1.5">
+          {shown.map((f) => (
+            <div key={f.key} className="text-[12px]">
+              <div className="text-muted-foreground flex items-center justify-between gap-2">
+                <span className="truncate">{f.label}</span>
+                {f.appValue && f.fubValue && <span className="text-[10px] shrink-0">edited here</span>}
+              </div>
+              {editing ? (
+                <input
+                  type={f.type === "date" ? "date" : f.type === "number" ? "number" : "text"}
+                  defaultValue={f.value ?? ""}
+                  onBlur={(e) => {
+                    if (e.target.value !== (f.value ?? "")) save.mutate({ field: f.key, value: e.target.value });
+                  }}
+                  className="w-full h-7 rounded-sm border border-border bg-transparent px-2 text-[12px]"
+                  data-testid={`contact-field-${f.key}`}
+                />
+              ) : (
+                <div className="break-words">{f.type === "date" && f.value ? new Date(`${f.value.slice(0, 10)}T12:00:00`).toLocaleDateString("en-CA", { month: "long", day: "numeric", year: "numeric" }) : f.value}</div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="mt-2 flex gap-3 text-[11.5px]">
+        <button type="button" onClick={() => setEditing(!editing)} className="flex items-center gap-1 underline underline-offset-2">
+          <Pencil className="h-3 w-3" /> {editing ? "Done" : "Edit"}
+        </button>
+        <button type="button" onClick={() => setManaging(true)} className="underline underline-offset-2 text-muted-foreground">
+          Custom fields
+        </button>
+      </div>
+      {managing && (
+        <CustomFieldsDialog
+          onClose={() => {
+            setManaging(false);
+            qc.invalidateQueries({ queryKey: key });
+          }}
+        />
+      )}
+    </Section>
   );
 }
 

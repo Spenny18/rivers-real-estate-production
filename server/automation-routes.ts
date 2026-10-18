@@ -38,6 +38,7 @@ import {
   type Trigger,
 } from "./automations";
 import { LEAD_SOURCES } from "./lead-intake";
+import { mergeFieldCatalog } from "./merge-fields";
 import { smsConfigured } from "./sms";
 import { canSendEmail } from "./gmail";
 import { agentUserId } from "./gmail-inbox";
@@ -91,16 +92,16 @@ function buyerNewLeadTemplate(): Step[] {
     {
       id: id(),
       type: "send_text",
-      body: "Hi {first_name}, it's {agent_first_name} with Rivers Real Estate. Thanks for reaching out about {property}. When's a good time to chat, or would you like to see it in person?",
+      body: "Hi {contact_first_name|there}, it's {agent_first_name} with Rivers Real Estate. Thanks for reaching out about {inquiry_address|the property}. When's a good time to chat, or would you like to see it in person?",
     },
     {
       id: id(),
       type: "send_email",
-      subject: "Your inquiry about {property}",
+      subject: "Your inquiry about {inquiry_address|the property}",
       body:
-        "Hi {first_name},\n\nThanks for your interest in {property}. I'd be happy to send you more details, comparable sales, or set up a private showing.\n\nWhat would be most helpful?",
+        "Hi {contact_first_name|there},\n\nThanks for your interest in {inquiry_address|the property}. I'd be happy to send you more details, comparable sales, or set up a private showing.\n\nWhat would be most helpful?",
     },
-    { id: id(), type: "create_task", title: "Call {name}", note: "New lead from {source}", dueInHours: 1 },
+    { id: id(), type: "create_task", title: "Call {contact_name}", note: "New lead from {lead_source}", dueInHours: 1 },
     { id: id(), type: "wait", amount: 1, unit: "days" },
     {
       id: id(),
@@ -108,16 +109,16 @@ function buyerNewLeadTemplate(): Step[] {
       check: "replied",
       yes: [{ id: id(), type: "add_tag", tag: "Engaged" }],
       no: [
-        { id: id(), type: "send_text", body: "Hi {first_name}, just following up on {property}. Happy to answer any questions or book a time to see it." },
+        { id: id(), type: "send_text", body: "Hi {contact_first_name|there}, just following up on {inquiry_address|the property}. Happy to answer any questions or book a time to see it." },
         { id: id(), type: "wait", amount: 3, unit: "days" },
         {
           id: id(),
           type: "send_email",
           subject: "Still looking?",
-          body: "Hi {first_name},\n\nAre you still searching? If you tell me what matters most in your next home, I'll send you listings that fit, often before they hit Realtor.ca.",
+          body: "Hi {contact_first_name|there},\n\nAre you still searching? If you tell me what matters most in your next home, I'll send you listings that fit, often before they hit Realtor.ca.",
         },
         { id: id(), type: "wait", amount: 7, unit: "days" },
-        { id: id(), type: "create_task", title: "Check in with {name}", note: "No reply to the new-lead plan after 11 days", dueInHours: 0 },
+        { id: id(), type: "create_task", title: "Check in with {contact_name}", note: "No reply to the new-lead plan after 11 days", dueInHours: 0 },
       ],
     },
   ];
@@ -130,16 +131,16 @@ function sellerNewLeadTemplate(): Step[] {
     {
       id: id(),
       type: "send_text",
-      body: "Hi {first_name}, it's {agent_first_name} with Rivers Real Estate. Thanks for reaching out about selling. I'd be glad to put together a no-obligation price opinion for your home. When's a good time for a quick call?",
+      body: "Hi {contact_first_name|there}, it's {agent_first_name} with Rivers Real Estate. Thanks for reaching out about selling. I'd be glad to put together a no-obligation price opinion for your home. When's a good time for a quick call?",
     },
     {
       id: id(),
       type: "send_email",
       subject: "What your home could sell for",
       body:
-        "Hi {first_name},\n\nThanks for getting in touch. I'll prepare a pricing analysis based on recent sales near you, what's competing on the market right now, and how quickly comparable homes are selling.\n\nA short visit lets me account for updates and finishes that online estimates miss. Would sometime this week work?",
+        "Hi {contact_first_name|there},\n\nThanks for getting in touch. I'll prepare a pricing analysis based on recent sales near you, what's competing on the market right now, and how quickly comparable homes are selling.\n\nA short visit lets me account for updates and finishes that online estimates miss. Would sometime this week work?",
     },
-    { id: id(), type: "create_task", title: "Call {name} about selling", note: "Seller lead from {source}", dueInHours: 1 },
+    { id: id(), type: "create_task", title: "Call {contact_name} about selling", note: "Seller lead from {lead_source}", dueInHours: 1 },
     { id: id(), type: "wait", amount: 2, unit: "days" },
     {
       id: id(),
@@ -147,17 +148,17 @@ function sellerNewLeadTemplate(): Step[] {
       check: "replied",
       yes: [{ id: id(), type: "add_tag", tag: "Seller engaged" }],
       no: [
-        { id: id(), type: "send_text", body: "Hi {first_name}, just following up on your home's value. Happy to send the numbers by email if that's easier." },
+        { id: id(), type: "send_text", body: "Hi {contact_first_name|there}, just following up on your home's value. Happy to send the numbers by email if that's easier." },
         { id: id(), type: "wait", amount: 5, unit: "days" },
         {
           id: id(),
           type: "send_email",
           subject: "Thinking of selling this year?",
           body:
-            "Hi {first_name},\n\nWhether you're planning to list soon or just want to know where you stand, I'm happy to walk you through what's selling in your area and what buyers are paying for.\n\nNo pressure either way. Just reply whenever the timing suits.",
+            "Hi {contact_first_name|there},\n\nWhether you're planning to list soon or just want to know where you stand, I'm happy to walk you through what's selling in your area and what buyers are paying for.\n\nNo pressure either way. Just reply whenever the timing suits.",
         },
         { id: id(), type: "wait", amount: 14, unit: "days" },
-        { id: id(), type: "create_task", title: "Check in with {name} about selling", note: "No reply to the seller plan after 3 weeks", dueInHours: 0 },
+        { id: id(), type: "create_task", title: "Check in with {contact_name} about selling", note: "No reply to the seller plan after 3 weeks", dueInHours: 0 },
       ],
     },
   ];
@@ -220,7 +221,7 @@ export function registerAutomationRoutes(app: Express, deps: { requireAuth: Midd
         text: texting.ok ? { ok: true } : { ok: false, reason: `Texting isn't set up (missing ${texting.missing.join(", ")})` },
         email,
       },
-      fields: ["first_name", "name", "property", "source", "agent_name", "agent_first_name", "agent_phone"],
+      fields: mergeFieldCatalog(),
     });
   });
 
