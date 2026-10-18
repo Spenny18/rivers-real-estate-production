@@ -26,6 +26,8 @@ import {
   StickyNote,
   UserCheck,
   Briefcase,
+  Plus,
+  ExternalLink,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
@@ -36,6 +38,8 @@ import { useToast } from "@/hooks/use-toast";
 import { showingStreetLine } from "@shared/showing-address";
 import { formatEmailText } from "@/lib/email-text";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ListingSearch } from "@/components/listing-picker";
 
 // ---- Types (mirror server/inbox.ts) ------------------------------------------------
 
@@ -79,6 +83,16 @@ interface Listing {
   photoUrl: string | null;
 }
 
+/**
+ * A listing as it goes into a text or email: the address and its one-line
+ * summary, then the link on its own line (clients and phones make it tappable;
+ * in emails it's a tracked link).
+ */
+function listingSnippet(l: Listing): string {
+  const line = [l.address, l.summary].filter(Boolean).join(" · ");
+  return l.url ? `${line}\n${l.url}` : line;
+}
+
 interface ContactData {
   contact: {
     fubId: string;
@@ -106,6 +120,8 @@ interface ContactData {
       events: ActivityEvent[];
     } | null;
     favorites: Array<Listing & { savedAt: string }>;
+    /** Every listing they're connected to: saved, viewed, shown, dealt on, enquired about. */
+    properties?: Array<Listing & { reasons: string[]; lastAt: string }>;
     savedSearches: Array<{ id: number; name: string; frequency: string; active: boolean; createdAt: string }>;
     inquiries: Array<{ id: number; source: string; message: string; createdAt: string }>;
     showings: Array<{ id: number; scheduledFor: string; status: string; listing: Listing }>;
@@ -307,6 +323,9 @@ function Conversation({ fubId, status, onBack }: { fubId: string; status?: Inbox
     bottom.current?.scrollIntoView({ block: "end" });
   }, [items.length]);
 
+  // The panel's "Insert" buttons write into the composer.
+  const insertListing = useRef<((l: Listing) => void) | null>(null);
+
   if (isLoading || !data) {
     return (
       <div className="flex items-center justify-center text-[13px] text-muted-foreground xl:col-span-2">
@@ -354,6 +373,7 @@ function Conversation({ fubId, status, onBack }: { fubId: string; status?: Inbox
           contact={c}
           status={status}
           defaultSubject={data.replySubject}
+          insertRef={insertListing}
           onSent={() => {
             qc.invalidateQueries({ queryKey: [`/api/admin/inbox/contact/${fubId}`] });
             qc.invalidateQueries({ predicate: (q) => String(q.queryKey[0]).startsWith("/api/admin/inbox/conversations") });
@@ -362,7 +382,7 @@ function Conversation({ fubId, status, onBack }: { fubId: string; status?: Inbox
         />
       </section>
 
-      <ContactPanel data={data} />
+      <ContactPanel data={data} onInsert={(l) => insertListing.current?.(l)} />
     </>
   );
 }
@@ -664,12 +684,14 @@ function Composer({
   contact,
   status,
   defaultSubject,
+  insertRef,
   onSent,
   onError,
 }: {
   contact: ContactData["contact"];
   status?: InboxStatus;
   defaultSubject: string | null;
+  insertRef: React.MutableRefObject<((l: Listing) => void) | null>;
   onSent: () => void;
   onError: (m: string) => void;
 }) {
@@ -678,6 +700,43 @@ function Composer({
   const [channel, setChannel] = useState<"email" | "text">(textReady && !emailReady ? "text" : "email");
   const [subject, setSubject] = useState(defaultSubject ?? "");
   const [body, setBody] = useState("");
+  const [picking, setPicking] = useState(false);
+  const area = useRef<HTMLTextAreaElement>(null);
+  // Where the cursor was, so a listing picked from the panel (which takes the
+  // focus away) lands there rather than at the end.
+  const caret = useRef<number | null>(null);
+  const remember = () => {
+    caret.current = area.current?.selectionStart ?? null;
+  };
+
+  /** Put a listing into the message at the cursor, on its own lines. */
+  const insert = (l: Listing) => {
+    const snippet = listingSnippet(l);
+    let at = 0;
+    setBody((prev) => {
+      const pos = Math.min(caret.current ?? prev.length, prev.length);
+      const before = prev.slice(0, pos);
+      const after = prev.slice(pos);
+      // A blank line either side, so listings and sentences don't run together.
+      const lead = !before ? "" : before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
+      const trail = !after ? "" : after.startsWith("\n\n") ? "" : after.startsWith("\n") ? "\n" : "\n\n";
+      at = before.length + lead.length + snippet.length;
+      return before + lead + snippet + trail + after;
+    });
+    setTimeout(() => {
+      const el = area.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(at, at);
+      caret.current = at;
+    }, 0);
+  };
+  useEffect(() => {
+    insertRef.current = insert;
+    return () => {
+      insertRef.current = null;
+    };
+  });
 
   const send = useMutation({
     mutationFn: async () =>
@@ -718,14 +777,43 @@ function Composer({
           </button>
         ))}
         {why && <span className="text-[11.5px] text-muted-foreground ml-2">{why}</span>}
+        <div className="flex-1" />
+        <Popover open={picking} onOpenChange={setPicking}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              disabled={!!why}
+              className="px-2.5 py-1 rounded-sm text-[11.5px] flex items-center gap-1.5 text-muted-foreground hover:bg-secondary disabled:opacity-50"
+              data-testid="inbox-insert-listing"
+            >
+              <Home className="h-3 w-3" /> Insert listing
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-[380px] p-3">
+            <div className="text-[12px] text-muted-foreground mb-2">Find a listing by address or MLS® number. It goes in with its link.</div>
+            <ListingSearch
+              autoFocus
+              onPick={(l) => {
+                setPicking(false);
+                insert(l);
+              }}
+            />
+          </PopoverContent>
+        </Popover>
       </div>
       {channel === "email" && (
         <Input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject" className="h-8 rounded-sm text-[13px]" disabled={!!why} />
       )}
       <div className="flex gap-2 items-end">
         <textarea
+          ref={area}
           value={body}
-          onChange={(e) => setBody(e.target.value)}
+          onChange={(e) => {
+            setBody(e.target.value);
+            caret.current = e.target.selectionStart;
+          }}
+          onSelect={remember}
+          onBlur={remember}
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && body.trim() && !why) send.mutate();
           }}
@@ -771,8 +859,10 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <div className="text-[12.5px] text-muted-foreground">{children}</div>;
 }
 
-function ContactPanel({ data }: { data: ContactData }) {
+function ContactPanel({ data, onInsert }: { data: ContactData; onInsert: (l: Listing) => void }) {
   const p = data.panel;
+  // Older responses (before properties existed) still show their saved homes.
+  const properties = p.properties ?? p.favorites.map((f) => ({ ...f, reasons: ["Saved"], lastAt: f.savedAt }));
   const e = p.engagement?.summary;
   const tags = (() => {
     try {
@@ -813,19 +903,48 @@ function ContactPanel({ data }: { data: ContactData }) {
         )}
       </Section>
 
-      <Section title="SAVED HOMES" icon={Heart} count={p.favorites.length}>
-        {p.favorites.length === 0 ? (
-          <Empty>None saved in their portal.</Empty>
+      <Section title="PROPERTIES" icon={Home} count={properties.length}>
+        {properties.length === 0 ? (
+          <Empty>No saved, viewed or shown listings yet.</Empty>
         ) : (
-          <div className="space-y-1.5">
-            {p.favorites.slice(0, 8).map((f) => (
-              <a key={f.mlsNumber ?? f.address} href={f.url ?? "#"} target="_blank" rel="noreferrer" className="flex gap-2 items-center hover:bg-secondary/50 rounded-sm">
-                {f.photoUrl ? <img src={f.photoUrl} alt="" className="w-12 h-9 object-cover rounded-sm bg-secondary" loading="lazy" /> : <div className="w-12 h-9 rounded-sm bg-secondary" />}
-                <div className="min-w-0 text-[12px]">
-                  <div className="truncate">{showingStreetLine(f.address)}</div>
-                  <div className="text-muted-foreground truncate">{f.summary}</div>
+          <div className="space-y-2" data-testid="inbox-properties">
+            {properties.slice(0, 12).map((l) => (
+              <div key={l.mlsNumber ?? l.url ?? l.address} className="flex gap-2 items-start group">
+                {l.photoUrl ? (
+                  <img src={l.photoUrl} alt="" className="w-12 h-9 object-cover rounded-sm bg-secondary shrink-0" loading="lazy" />
+                ) : (
+                  <div className="w-12 h-9 rounded-sm bg-secondary shrink-0" />
+                )}
+                <div className="min-w-0 flex-1 text-[12px]">
+                  <div className="truncate" title={l.address}>
+                    {showingStreetLine(l.address)}
+                  </div>
+                  <div className="text-muted-foreground truncate">{l.summary}</div>
+                  <div className="flex flex-wrap gap-1 mt-0.5">
+                    {l.reasons.map((r) => (
+                      <span key={r} className="text-[10px] px-1 rounded-sm bg-secondary text-muted-foreground">
+                        {r}
+                      </span>
+                    ))}
+                  </div>
                 </div>
-              </a>
+                <div className="flex flex-col items-end gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => onInsert(l)}
+                    className="text-[11px] flex items-center gap-0.5 underline underline-offset-2 text-foreground hover:opacity-70"
+                    title="Insert this listing and its link into your message"
+                    data-testid={`insert-property-${l.mlsNumber ?? l.address}`}
+                  >
+                    <Plus className="h-3 w-3" /> Insert
+                  </button>
+                  {l.url && (
+                    <a href={l.url} target="_blank" rel="noreferrer" className="text-muted-foreground hover:text-foreground" aria-label="Open listing">
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  )}
+                </div>
+              </div>
             ))}
           </div>
         )}
