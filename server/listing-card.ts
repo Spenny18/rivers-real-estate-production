@@ -42,7 +42,7 @@ function esc(s: string): string {
 }
 
 /** "407 kanell Drive NE" → "407 Kanell Drive NE": the feed sometimes leaves a street name lower-case. */
-function tidyAddress(a: string): string {
+export function tidyAddress(a: string): string {
   return a.replace(/\b([a-z])([a-z]+)\b/g, (_m, f: string, rest: string) => f.toUpperCase() + rest);
 }
 

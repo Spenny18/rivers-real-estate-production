@@ -594,6 +594,10 @@ export async function registerRoutes(
     const { registerDashboardActivityRoutes } = await import("./dashboard-activity");
     registerDashboardActivityRoutes(app, { requireAuth });
 
+    // Merge fields and custom fields. See server/merge-fields.ts.
+    const { registerMergeFieldRoutes } = await import("./merge-field-routes");
+    registerMergeFieldRoutes(app, { requireAuth });
+
     const { registerMarketRoutes } = await import("./market-routes");
     registerMarketRoutes(app, { requireAuth });
   } catch (e) {

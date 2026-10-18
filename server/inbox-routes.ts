@@ -130,8 +130,17 @@ export function registerInboxRoutes(app: Express, deps: { requireAuth: Middlewar
     const contact = storage.getCrmContact(fubId);
     if (!contact) return res.status(404).json({ message: "Contact not found" });
     const channel = req.body?.channel === "text" ? "text" : "email";
-    const body = String(req.body?.body ?? "").trim();
-    if (!body) return res.status(400).json({ message: "The message is empty." });
+    const typed = String(req.body?.body ?? "").trim();
+    if (!typed) return res.status(400).json({ message: "The message is empty." });
+    // Merge fields ({contact_first_name}, {inquiry_address} …) are filled in
+    // for this contact; a misspelt one stops the send rather than going out
+    // with its braces showing (server/merge-fields.ts).
+    const { renderMerge, unknownFields } = await import("./merge-fields");
+    const unknown = unknownFields(`${typed} ${String(req.body?.subject ?? "")}`);
+    if (unknown.length) {
+      return res.status(400).json({ message: `Not sent: {${unknown[0]}} isn't a merge field. Fix it or use Insert field.` });
+    }
+    const body = renderMerge(typed, fubId);
     const userId = userIdOf(req);
 
     if (channel === "text") {
@@ -144,9 +153,11 @@ export function registerInboxRoutes(app: Express, deps: { requireAuth: Middlewar
 
     if (!contact.email) return res.status(400).json({ message: "This contact has no email address." });
     const last = lastEmailOf(fubId);
-    const subject =
+    const subject = renderMerge(
       String(req.body?.subject ?? "").trim() ||
-      (last?.subject ? (/^re:/i.test(last.subject) ? last.subject : `Re: ${last.subject}`) : "");
+        (last?.subject ? (/^re:/i.test(last.subject) ? last.subject : `Re: ${last.subject}`) : ""),
+      fubId,
+    );
     if (!subject) return res.status(400).json({ message: "Give the email a subject." });
 
     // Opens and clicks come back to this contact's activity (server/tracking.ts).

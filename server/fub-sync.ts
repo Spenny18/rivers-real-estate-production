@@ -478,6 +478,8 @@ export interface ResourceSpec {
   appendOnly?: boolean;
   /** Ceiling for one run. Only matters for a first, non-incremental pull. */
   maxRecords?: number;
+  /** Sent with every request for this resource. */
+  extraParams?: Record<string, string>;
   optional?: boolean;
   note?: string;
 }
@@ -496,6 +498,9 @@ export const RESOURCE_SPECS: ResourceSpec[] = [
     collectionKey: "people",
     watchFields: ["name", "email", "stage", "fubUpdatedAt"],
     incrementalParam: "updatedAfter",
+    // Custom fields (Birthday, Spouse name, …) only come back when asked for;
+    // they land in `raw` for merge fields (server/merge-fields.ts).
+    extraParams: { fields: "allFields" },
   },
   {
     resource: "deals",
@@ -628,7 +633,7 @@ export async function syncResource(
   //
   // Both are requests the API may refuse, so `usedIncremental` is remembered
   // and a 4xx on the first page retries the resource in full below.
-  const params: Record<string, string | number | undefined> = {};
+  const params: Record<string, string | number | undefined> = { ...(spec.extraParams ?? {}) };
   let startCursor: string | undefined;
   let cursor: string | null = null;
   const lastCursor = opts.full ? null : storage.lastCrmCursor(spec.resource);
@@ -657,7 +662,7 @@ export async function syncResource(
       console.warn(
         `[crm-sync] ${spec.resource}: incremental request rejected (HTTP ${status}) — retrying in full`,
       );
-      page = await fubGetAll(spec.path, spec.collectionKey, { maxRecords: spec.maxRecords });
+      page = await fubGetAll(spec.path, spec.collectionKey, { params: { ...(spec.extraParams ?? {}) }, maxRecords: spec.maxRecords });
     }
   } catch (e: any) {
     storage.finishCrmSyncRun(run.id, {
@@ -713,6 +718,9 @@ export async function syncResource(
       // aren't started twice.
       const { onContactsSynced } = await import("./automations");
       onContactsSynced();
+      // Custom field names and labels, so they can be merge fields.
+      const { syncFubCustomFields } = await import("./merge-fields");
+      await syncFubCustomFields();
     }
   }
 

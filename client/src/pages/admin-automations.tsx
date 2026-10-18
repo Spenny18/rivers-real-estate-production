@@ -4,7 +4,7 @@
 // /admin/automations/:id    the builder: drag steps from the left onto a "+" (or
 //                           click "+"), click a step to edit it; and the people in it.
 
-import { useEffect, useMemo, useState, type DragEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
@@ -48,6 +48,7 @@ import {
   Zap,
 } from "lucide-react";
 import { apiErrorMessage, apiRequest } from "@/lib/queryClient";
+import { MergeFieldPicker, insertAtCursor, type MergeField } from "@/components/merge-field-picker";
 import { timeAgo } from "@/lib/mock-data";
 
 // ---- Types (mirror server/automations.ts) ------------------------------------------------
@@ -112,7 +113,7 @@ interface Meta {
   sources: string[];
   tags: string[];
   channels: { text: { ok: boolean; reason?: string }; email: { ok: boolean; reason?: string } };
-  fields: string[];
+  fields: MergeField[];
 }
 
 // ---- Step catalogue ----------------------------------------------------------------------
@@ -976,9 +977,39 @@ function Field({ label, children, hint }: { label: string; children: ReactNode; 
   );
 }
 
-function MergeHint({ meta }: { meta?: Meta }) {
-  if (!meta) return null;
-  return <span>Merge fields: {meta.fields.map((f) => `{${f}}`).join(" ")}</span>;
+/** A text box with "Insert field" above it: the picked merge field goes in at the cursor. */
+function FieldBox({ value, onChange, rows, multiline }: { value: string; onChange: (v: string) => void; rows?: number; multiline?: boolean }) {
+  const ref = useRef<any>(null);
+  const caret = useRef<number | null>(null);
+  const props = {
+    ref,
+    value,
+    onChange: (e: any) => {
+      onChange(e.target.value);
+      caret.current = e.target.selectionStart;
+    },
+    onSelect: () => {
+      caret.current = ref.current?.selectionStart ?? null;
+    },
+  };
+  return (
+    <div className="space-y-1">
+      <div className="flex justify-end -mt-6">
+        <MergeFieldPicker
+          onPick={(token) => {
+            const r = insertAtCursor(ref.current, value, token, caret.current);
+            onChange(r.value);
+            caret.current = r.caret;
+            setTimeout(() => {
+              ref.current?.focus();
+              ref.current?.setSelectionRange(r.caret, r.caret);
+            }, 0);
+          }}
+        />
+      </div>
+      {multiline ? <Textarea rows={rows} {...props} /> : <Input {...props} />}
+    </div>
+  );
 }
 
 function TagInput({ value, onChange, meta }: { value: string; onChange: (v: string) => void; meta?: Meta }) {
@@ -1125,9 +1156,9 @@ function StepFields({ step, meta, plans, onStep }: { step: Step; meta?: Meta; pl
     case "send_text":
       return (
         <Field label="Message" hint={undefined}>
-          <Textarea rows={6} value={step.body} onChange={(e) => onStep({ body: e.target.value })} />
+          <FieldBox multiline rows={6} value={step.body} onChange={(body) => onStep({ body })} />
           <div className="text-xs text-muted-foreground space-y-1">
-            <div>{step.body.length} characters. <MergeHint meta={meta} /></div>
+            <div>{step.body.length} characters.</div>
             <div>Automatic texts wait until 8 am if they'd go out between 9 pm and 8 am.</div>
           </div>
         </Field>
@@ -1136,12 +1167,12 @@ function StepFields({ step, meta, plans, onStep }: { step: Step; meta?: Meta; pl
       return (
         <>
           <Field label="Subject">
-            <Input value={step.subject} onChange={(e) => onStep({ subject: e.target.value })} />
+            <FieldBox value={step.subject} onChange={(subject) => onStep({ subject })} />
           </Field>
           <Field label="Message">
-            <Textarea rows={10} value={step.body} onChange={(e) => onStep({ body: e.target.value })} />
+            <FieldBox multiline rows={10} value={step.body} onChange={(body) => onStep({ body })} />
             <div className="text-xs text-muted-foreground">
-              Sent from your Gmail. <MergeHint meta={meta} />
+              Sent from your Gmail, with your Gmail signature.
             </div>
           </Field>
         </>
@@ -1157,10 +1188,10 @@ function StepFields({ step, meta, plans, onStep }: { step: Step; meta?: Meta; pl
       return (
         <>
           <Field label="Task">
-            <Input value={step.title} onChange={(e) => onStep({ title: e.target.value })} />
+            <FieldBox value={step.title} onChange={(title) => onStep({ title })} />
           </Field>
           <Field label="Note">
-            <Textarea rows={3} value={step.note ?? ""} onChange={(e) => onStep({ note: e.target.value })} />
+            <FieldBox multiline rows={3} value={step.note ?? ""} onChange={(note) => onStep({ note })} />
           </Field>
           <Field label="Due in (hours)">
             <Input type="number" min={0} value={step.dueInHours ?? 0} onChange={(e) => onStep({ dueInHours: Number(e.target.value) })} className="w-24" />
@@ -1183,10 +1214,10 @@ function StepFields({ step, meta, plans, onStep }: { step: Step; meta?: Meta; pl
             </Select>
           </Field>
           <Field label="Message">
-            <Textarea rows={5} value={step.message} onChange={(e) => onStep({ message: e.target.value })} />
+            <FieldBox multiline rows={5} value={step.message} onChange={(message) => onStep({ message })} />
           </Field>
           <p className="text-xs text-muted-foreground">
-            Facebook, Instagram and LinkedIn don't let apps start conversations, so this makes you a task with the message written and a link to find them. <MergeHint meta={meta} />
+            Facebook, Instagram and LinkedIn don't let apps start conversations, so this makes you a task with the message written and a link to find them.
           </p>
         </>
       );
