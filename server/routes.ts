@@ -598,6 +598,10 @@ export async function registerRoutes(
     const { registerMergeFieldRoutes } = await import("./merge-field-routes");
     registerMergeFieldRoutes(app, { requireAuth });
 
+    // Text and email templates. See server/templates.ts.
+    const { registerTemplateRoutes } = await import("./template-routes");
+    registerTemplateRoutes(app, { requireAuth });
+
     const { registerMarketRoutes } = await import("./market-routes");
     registerMarketRoutes(app, { requireAuth });
   } catch (e) {
