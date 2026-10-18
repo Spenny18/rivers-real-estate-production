@@ -23,6 +23,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { sqlite, storage } from "./storage";
 import { addressesIn, decode, walk, type GmailMessage } from "./gmail-inbox";
 import { createNativeContact, findContact } from "./contacts";
+import { findListingByAddress } from "./showings";
 
 sqlite.exec(`
   CREATE TABLE IF NOT EXISTS lead_intake_emails (
@@ -272,6 +273,8 @@ export interface LeadInput {
   email: string | null;
   phone: string | null;
   message: string;
+  /** The address they asked about, as the email gave it; linked to its MLS listing when it matches one. */
+  property?: string | null;
 }
 
 /** Create the lead (and its contact, with the source as its source). */
@@ -294,7 +297,7 @@ export function createLeadFromIntake(source: LeadSource, input: LeadInput): { le
   }
   if (dup) return { leadId: dup, contactId, duplicate: true };
   const lead = storage.createLead({
-    listingId: null,
+    listingId: findListingByAddress(input.property)?.mlsNumber ?? null,
     name: input.name.trim() || email || phone || "New lead",
     email: email ?? "",
     phone,
@@ -440,6 +443,7 @@ export async function readIntake(id: number, mode: "live" | "sample" = "live"): 
     email: data.email,
     phone: data.phone,
     message: leadMessage(source, data),
+    property: data.property,
   });
   updateIntake(id, {
     status: made.duplicate ? "duplicate" : "imported",

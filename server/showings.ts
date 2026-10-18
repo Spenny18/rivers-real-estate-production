@@ -181,6 +181,31 @@ export function searchShowingListings(query: string, limit = 8): ListingMatch[] 
     .map(({ r }) => ({ ...resolveShowingListing(r.id), status: r.status }));
 }
 
+/**
+ * The MLS listing an address written out in an email refers to, e.g.
+ * "485-3223 83 Street NW, Calgary, AB, T3B 5P4" → MLS "485, 3223 83 Street NW".
+ * Only the street part counts (before the first comma; "485-3223" is unit 485
+ * at 3223). Every word of it has to match a whole word of the listing's
+ * address — or start one, or be its abbreviation — so a near miss returns
+ * null rather than the wrong home. When an address has been listed more than
+ * once, the active listing wins (searchShowingListings sorts it first).
+ */
+export function findListingByAddress(text: string | null | undefined): ListingMatch | null {
+  const street = (text ?? "").split(/[,\n]/)[0].trim().replace(/^#?(\w+)\s*-\s*(\d)/, "$1 $2");
+  const tokens = street.toLowerCase().replace(/[#,.]/g, " ").split(/\s+/).filter(Boolean);
+  // A number and a name at least: "Kanell Drive" alone could be any home on it.
+  if (tokens.length < 2 || !tokens.some((t) => /^\d/.test(t))) return null;
+  const covers = (words: string[], t: string) =>
+    words.some((w) => w === t || (t.length >= 2 && /^[a-z]+$/.test(t) && w.startsWith(t)) || w === STREET_ABBREVIATIONS[t]);
+  for (const candidate of searchShowingListings(tokens.join(" "), 10)) {
+    const words = candidate.address.toLowerCase().replace(/[#,.]/g, " ").split(/\s+/).filter(Boolean);
+    // The same numbers, exactly: "3223 83 Street NW" is the building, not unit 485 in it.
+    const nums = (ws: string[]) => ws.filter((w) => /^\d/.test(w)).sort().join(" ");
+    if (tokens.every((t) => covers(words, t)) && nums(words) === nums(tokens)) return candidate;
+  }
+  return null;
+}
+
 export function mapUrl(address: string): string {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
 }
