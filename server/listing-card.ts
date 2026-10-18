@@ -10,7 +10,7 @@
 import { storage } from "./storage";
 import { resolveShowingListing, type ShowingListing } from "./showings";
 import { publicOrigin } from "./origin";
-import { createTrackedEmail, plainTextToTrackedHtml, type LinkBlock } from "./tracking";
+import { createTrackedEmail, EMAIL_FONT, plainTextToTrackedHtml, type LinkBlock } from "./tracking";
 
 const OWN_HOSTS = new Set(["riversrealestate.ca", "www.riversrealestate.ca"]);
 
@@ -53,7 +53,7 @@ export function listingCardHtml(l: ShowingListing, href: string): string {
   const parts = (l.summary ?? "").split(" · ").filter(Boolean);
   const price = parts[0]?.startsWith("$") ? parts.shift()! : null;
   const rooms = parts.join(" · ");
-  const font = "font-family:Arial,Helvetica,sans-serif;";
+  const font = `font-family:${EMAIL_FONT};`;
   return (
     `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" ` +
     `style="max-width:480px;border:1px solid #e3e3e3;border-radius:6px;border-collapse:separate;margin:10px 0;">` +

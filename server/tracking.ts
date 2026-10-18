@@ -459,6 +459,15 @@ export interface LinkBlock {
   caption?: (line: string) => boolean;
 }
 
+/**
+ * The look of emails Spencer sends to contacts (Inbox, CRM, automations):
+ * Georgia, the closest font every mail client has to the serif Claude writes
+ * in — mail clients don't load web fonts, so it has to be one already installed.
+ */
+// No quoted family names: this goes inside double-quoted style attributes.
+export const EMAIL_FONT = "Georgia,Times,serif";
+export const EMAIL_BODY_STYLE = `font-family:${EMAIL_FONT};font-size:15px;line-height:1.55;color:#222;`;
+
 export function plainTextToTrackedHtml(text: string, trackingId: string, opts: { block?: (url: string) => LinkBlock | null } = {}): string {
   const linkify = (t: string) =>
     escapeHtml(t).replace(/https?:\/\/[^\s<>"]+[^\s<>".,;:!?)\]]/g, (escapedUrl) => {
@@ -486,7 +495,7 @@ export function plainTextToTrackedHtml(text: string, trackingId: string, opts: {
     .map((h, i) => (h.startsWith("<table") || i === out.length - 1 || out[i + 1].startsWith("<table") ? h : `${h}<br>`))
     .join("\n");
   return instrumentHtml(
-    `<!doctype html><html><body><div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#222;">${body}</div></body></html>`,
+    `<!doctype html><html><body><div style="${EMAIL_BODY_STYLE}">${body}</div></body></html>`,
     trackingId,
   );
 }
