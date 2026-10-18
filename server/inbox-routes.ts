@@ -15,7 +15,7 @@ import { inboxReadiness } from "./deal-inbox";
 import { canSendEmail, sendGmail } from "./gmail";
 import { getValidAccessToken } from "./google-calendar";
 import { sendSms, smsConfigured } from "./sms";
-import { createTrackedEmail, plainTextToTrackedHtml } from "./tracking";
+import { createTrackedEmail } from "./tracking";
 import { fubConfigured } from "./fub-client";
 import { syncTextsForContact } from "./fub-sync";
 
@@ -152,7 +152,9 @@ export function registerInboxRoutes(app: Express, deps: { requireAuth: Middlewar
     // Opens and clicks come back to this contact's activity (server/tracking.ts).
     let html: string | undefined;
     try {
-      html = plainTextToTrackedHtml(body, createTrackedEmail(contact.email, subject, { kind: "crm", channel: "gmail", contactFubId: fubId }));
+      // Listing links on their own line go out as property cards (server/listing-card.ts).
+      const { emailHtml } = await import("./listing-card");
+      html = emailHtml(body, createTrackedEmail(contact.email, subject, { kind: "crm", channel: "gmail", contactFubId: fubId }));
     } catch (e: any) {
       console.error("[inbox] tracking setup failed:", e?.message ?? e);
     }

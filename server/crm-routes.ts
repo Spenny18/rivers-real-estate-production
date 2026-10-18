@@ -7,7 +7,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { storage } from "./storage";
 import { fubConfigured, probe, testConnection } from "./fub-client";
 import { canSendEmail, sendGmail } from "./gmail";
-import { createTrackedEmail, plainTextToTrackedHtml } from "./tracking";
+import { createTrackedEmail } from "./tracking";
 import {
   RESOURCE_SPECS,
   SYNCED_RESOURCES,
@@ -317,7 +317,9 @@ export function registerCrmRoutes(app: Express, deps: { requireAuth: Middleware 
         channel: "gmail",
         contactFubId: fubId,
       });
-      html = plainTextToTrackedHtml(text, trackingId);
+      // Listing links on their own line go out as property cards (server/listing-card.ts).
+      const { emailHtml } = await import("./listing-card");
+      html = emailHtml(text, trackingId);
     } catch (e: any) {
       console.error("[crm] email tracking setup failed:", e?.message ?? e);
     }
