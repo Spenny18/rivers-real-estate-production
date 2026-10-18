@@ -195,6 +195,19 @@ export default function AdminInboxPage() {
     refetchInterval: 60_000,
   });
   const { data: status } = useQuery<InboxStatus>({ queryKey: ["/api/admin/inbox/status"] });
+  // Everyone else who matches the search — contacts with no messages yet —
+  // so a conversation can be started with anyone in the CRM.
+  const { data: contactMatches = [] } = useQuery<Array<{ fubId: string; name: string | null; email: string | null; phone: string | null }>>({
+    queryKey: [`/api/admin/crm/contacts?q=${encodeURIComponent(q)}&limit=25`],
+    enabled: q.length >= 2,
+  });
+  const inList = new Set(conversations.map((c) => c.contactFubId));
+  const others = q.length >= 2 ? contactMatches.filter((c) => !inList.has(c.fubId)).slice(0, 15) : [];
+  const searchBox = useRef<HTMLInputElement>(null);
+  const open = (fubId: string) => {
+    setSelected(fubId);
+    window.history.replaceState(null, "", `/admin/inbox?contact=${encodeURIComponent(fubId)}`);
+  };
 
   return (
     <AppShell pageTitle="Inbox">
@@ -208,15 +221,30 @@ export default function AdminInboxPage() {
           {/* Conversation list */}
           <aside className={`border-r border-border min-h-0 flex flex-col ${selected ? "hidden md:flex" : "flex"}`}>
             <div className="p-3 border-b border-border space-y-2">
-              <div className="relative">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-                <Input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search name, email, phone"
-                  className="pl-8 h-9 rounded-sm text-[13px]"
-                  data-testid="input-inbox-search"
-                />
+              <div className="flex gap-1.5">
+                <div className="relative flex-1">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                  <Input
+                    ref={searchBox}
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search any contact"
+                    className="pl-8 h-9 rounded-sm text-[13px]"
+                    data-testid="input-inbox-search"
+                  />
+                </div>
+                <Button
+                  variant="outline"
+                  className="h-9 rounded-sm px-2.5 text-[12px]"
+                  onClick={() => {
+                    setFilter("all");
+                    searchBox.current?.focus();
+                  }}
+                  title="Start a text or email with any contact: search for them"
+                  data-testid="inbox-new-message"
+                >
+                  <Plus className="h-3.5 w-3.5 mr-1" /> New
+                </Button>
               </div>
               <div className="flex gap-1">
                 {(["all", "unread", "text", "email", "call"] as Filter[]).map((f) => (
@@ -237,9 +265,9 @@ export default function AdminInboxPage() {
                 <div className="p-4 text-[13px] text-muted-foreground flex items-center gap-2">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…
                 </div>
-              ) : conversations.length === 0 ? (
+              ) : conversations.length === 0 && others.length === 0 ? (
                 <div className="p-4 text-[13px] text-muted-foreground">
-                  {filter === "unread" ? "You're all caught up." : q ? "No conversations match." : "No conversations yet."}
+                  {filter === "unread" ? "You're all caught up." : q ? "No contacts match." : "No conversations yet."}
                 </div>
               ) : (
                 conversations.map((c) => {
@@ -247,7 +275,7 @@ export default function AdminInboxPage() {
                   return (
                     <button
                       key={c.contactFubId}
-                      onClick={() => setSelected(c.contactFubId)}
+                      onClick={() => open(c.contactFubId)}
                       className={`w-full text-left px-3 py-2.5 border-b border-border flex gap-2.5 ${
                         selected === c.contactFubId ? "bg-secondary" : "hover:bg-secondary/50"
                       }`}
@@ -273,6 +301,31 @@ export default function AdminInboxPage() {
                     </button>
                   );
                 })
+              )}
+              {others.length > 0 && (
+                <div data-testid="inbox-other-contacts">
+                  <div className="px-3 pt-3 pb-1 text-[10px] tracking-[0.14em] uppercase text-muted-foreground">
+                    No messages yet: start one
+                  </div>
+                  {others.map((c) => (
+                    <button
+                      key={c.fubId}
+                      onClick={() => open(c.fubId)}
+                      className={`w-full text-left px-3 py-2 border-b border-border flex gap-2.5 items-center ${
+                        selected === c.fubId ? "bg-secondary" : "hover:bg-secondary/50"
+                      }`}
+                      data-testid={`contact-${c.fubId}`}
+                    >
+                      <div className="h-8 w-8 shrink-0 rounded-full border border-dashed border-border flex items-center justify-center text-[11px]">
+                        {initials(c.name, c.email)}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-[13px] truncate">{c.name || c.email || c.phone}</div>
+                        <div className="text-[11.5px] text-muted-foreground truncate">{[c.phone, c.email].filter(Boolean).join(" · ")}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
               )}
             </div>
           </aside>
