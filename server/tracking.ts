@@ -449,13 +449,42 @@ function escapeHtml(s: string): string {
  * a pixel at all. Deliberately plain — it should look like the text version
  * typed in a mail client, not like a template. URLs become (tracked) links.
  */
-export function plainTextToTrackedHtml(text: string, trackingId: string): string {
-  const linked = escapeHtml(text).replace(/https?:\/\/[^\s<>"]+[^\s<>".,;:!?)\]]/g, (escapedUrl) => {
-    const url = decodeHtmlAttr(escapedUrl);
-    const href = shouldWrap(url) ? trackedLinkUrl(trackingId, url) : url;
-    return `<a href="${encodeHtmlAttr(href)}">${escapedUrl}</a>`;
-  });
-  const body = linked.replace(/\r?\n/g, "<br>\n");
+/**
+ * A block of HTML to stand in for a link that sits on a line of its own —
+ * e.g. a property card for a listing URL (server/listing-card.ts). `caption`
+ * is the text line just above that the card makes redundant, if any.
+ */
+export interface LinkBlock {
+  html: (href: string) => string;
+  caption?: (line: string) => boolean;
+}
+
+export function plainTextToTrackedHtml(text: string, trackingId: string, opts: { block?: (url: string) => LinkBlock | null } = {}): string {
+  const linkify = (t: string) =>
+    escapeHtml(t).replace(/https?:\/\/[^\s<>"]+[^\s<>".,;:!?)\]]/g, (escapedUrl) => {
+      const url = decodeHtmlAttr(escapedUrl);
+      const href = shouldWrap(url) ? trackedLinkUrl(trackingId, url) : url;
+      return `<a href="${encodeHtmlAttr(href)}">${escapedUrl}</a>`;
+    });
+  // Line by line, so a link alone on its line can become a block (a card).
+  const out: string[] = [];
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const bare = line.trim();
+    const block = opts.block && /^https?:\/\/\S+$/.test(bare) ? opts.block(bare) : null;
+    if (block) {
+      if (out.length && i > 0 && block.caption?.(lines[i - 1])) out.pop();
+      const href = shouldWrap(bare) ? trackedLinkUrl(trackingId, bare) : bare;
+      out.push(block.html(encodeHtmlAttr(href)));
+      continue;
+    }
+    out.push(linkify(line));
+  }
+  // Blocks are their own elements; plain lines are joined with <br>.
+  const body = out
+    .map((h, i) => (h.startsWith("<table") || i === out.length - 1 || out[i + 1].startsWith("<table") ? h : `${h}<br>`))
+    .join("\n");
   return instrumentHtml(
     `<!doctype html><html><body><div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#222;">${body}</div></body></html>`,
     trackingId,
