@@ -703,6 +703,8 @@ function Composer({
   const [subject, setSubject] = useState(defaultSubject ?? "");
   const [body, setBody] = useState("");
   const [picking, setPicking] = useState(false);
+  // Emails carry the Gmail signature unless this is unticked (server/gmail-signature.ts).
+  const [signature, setSignature] = useState(true);
   const area = useRef<HTMLTextAreaElement>(null);
   // Where the cursor was, so a listing picked from the panel (which takes the
   // focus away) lands there rather than at the end.
@@ -742,7 +744,14 @@ function Composer({
 
   const send = useMutation({
     mutationFn: async () =>
-      (await apiRequest("POST", `/api/admin/inbox/contact/${contact.fubId}/reply`, { channel, body, subject: channel === "email" ? subject : undefined })).json(),
+      (
+        await apiRequest("POST", `/api/admin/inbox/contact/${contact.fubId}/reply`, {
+          channel,
+          body,
+          subject: channel === "email" ? subject : undefined,
+          signature: channel === "email" ? signature : undefined,
+        })
+      ).json(),
     onSuccess: () => {
       setBody("");
       onSent();
@@ -834,7 +843,13 @@ function Composer({
           {send.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
         </Button>
       </div>
-      <div className="text-[11px] text-muted-foreground">
+      <div className="text-[11px] text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1">
+        {channel === "email" && (
+          <label className="inline-flex items-center gap-1.5 cursor-pointer">
+            <input type="checkbox" checked={signature} onChange={(e) => setSignature(e.target.checked)} data-testid="inbox-signature" />
+            Add my Gmail signature
+          </label>
+        )}
         {channel === "email" ? "Sends from your Gmail; replies thread normally. ⌘+Enter to send." : "Sends from your business line. ⌘+Enter to send."}
         {channel === "text" && body.length > 160 && ` ${Math.ceil(body.length / 153)} texts.`}
       </div>

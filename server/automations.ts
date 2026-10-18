@@ -715,7 +715,7 @@ async function deliver(run: RunRow, step: Step, payload: { to: string; body: str
   const { trackedEmailHtml } = await import("./listing-card");
   const html = trackedEmailHtml(payload.body, payload.to, payload.subject ?? "", { kind: "automation", contactFubId: run.contact_fub_id });
   const r = userId
-    ? await sendGmail(userId, { to: payload.to, subject: payload.subject ?? "", text: payload.body, html })
+    ? await sendGmail(userId, { to: payload.to, subject: payload.subject ?? "", text: payload.body, html, signature: true })
     : { ok: false, error: "No agent user" };
   logStep(run.id, step.id, step.type, r.ok ? "done" : "failed", r.ok ? `Emailed ${payload.to}` : `Email failed: ${(r as any).error}`, payload);
   return r.ok;

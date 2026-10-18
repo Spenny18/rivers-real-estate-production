@@ -79,6 +79,8 @@ export interface OutgoingEmail {
   threadId?: string;
   /** The Message-ID being replied to, so mail clients thread it correctly. */
   inReplyTo?: string;
+  /** Add Spencer's Gmail signature to both parts, as Gmail would (server/gmail-signature.ts). */
+  signature?: boolean;
 }
 
 /**
@@ -150,6 +152,10 @@ export async function sendGmail(userId: number, email: OutgoingEmail): Promise<S
   }
   const integ = storage.getUserIntegration(userId, "google");
   const from = integ?.accountEmail ?? "me";
+  if (email.signature) {
+    const { gmailSignature, withSignature } = await import("./gmail-signature");
+    email = { ...email, ...withSignature(email, await gmailSignature()) };
+  }
 
   try {
     const res = await fetch(`${GMAIL_API}/messages/send`, {
