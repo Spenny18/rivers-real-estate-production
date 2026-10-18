@@ -35,6 +35,7 @@ import {
   Inbox,
   Workflow,
   FileText as TemplatesIcon,
+  MessagesSquare,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -83,6 +84,7 @@ const primaryNav: NavGroup[] = [
       { label: "Leads", icon: Users, href: "/admin/leads" },
       { label: "Automations", icon: Workflow, href: "/admin/automations" },
       { label: "Templates", icon: TemplatesIcon, href: "/admin/templates" },
+      { label: "Bulk text", icon: MessagesSquare, href: "/admin/bulk-text" },
     ],
   },
   {

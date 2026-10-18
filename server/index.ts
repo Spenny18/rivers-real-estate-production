@@ -225,6 +225,12 @@ app.use((req, res, next) => {
     console.error("[automations] failed to start:", err);
   }
   try {
+    const { startBulkTextSender } = await import("./bulk-texts");
+    startBulkTextSender();
+  } catch (err) {
+    console.error("[bulk-texts] failed to start:", err);
+  }
+  try {
     const { startInboxEmailCron } = await import("./gmail-inbox");
     startInboxEmailCron();
   } catch (err) {

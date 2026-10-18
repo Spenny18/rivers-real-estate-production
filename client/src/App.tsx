@@ -84,6 +84,7 @@ const AdminCrmPage = lazy(() => import("@/pages/admin-crm"));
 const AdminInboxPage = lazy(() => import("@/pages/admin-inbox"));
 const AdminAutomationsPage = lazy(() => import("@/pages/admin-automations"));
 const AdminTemplatesPage = lazy(() => import("@/pages/admin-templates"));
+const AdminBulkTextPage = lazy(() => import("@/pages/admin-bulk-text"));
 const AdminMarketPage = lazy(() => import("@/pages/admin-market"));
 const AdminMarketReportsPage = lazy(() => import("@/pages/admin-market-reports"));
 const AdminNewsletterPage = lazy(() => import("@/pages/admin-newsletter"));
@@ -224,6 +225,10 @@ function AppRouter() {
       <Route
         path="/admin/templates"
         component={() => <ProtectedRoute component={AdminTemplatesPage} />}
+      />
+      <Route
+        path="/admin/bulk-text"
+        component={() => <ProtectedRoute component={AdminBulkTextPage} />}
       />
       <Route
         path="/admin/automations/:id"
