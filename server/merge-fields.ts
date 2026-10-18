@@ -336,9 +336,19 @@ export function unknownFields(template: string): string[] {
 
 /** Fill in a message for one contact. Unknown fields are left as typed. */
 export function renderMerge(template: string, contactId: string, ctx: MergeContext = {}): string {
-  if (!/\{/.test(template)) return template;
+  return renderMergeChecked(template, contactId, ctx).text;
+}
+
+/**
+ * Fill in a message, and say which fields came out empty for this person
+ * (no value, no "|fallback"), so a bulk send can hold their copy rather than
+ * text "Hi ," to them.
+ */
+export function renderMergeChecked(template: string, contactId: string, ctx: MergeContext = {}): { text: string; blank: string[] } {
+  if (!/\{/.test(template)) return { text: template, blank: [] };
   const values = mergeValues(contactId, ctx);
-  return template.replace(TOKEN, (whole, rawKey: string, fallback: string | undefined) => {
+  const blank = new Set<string>();
+  const text = template.replace(TOKEN, (whole, rawKey: string, fallback: string | undefined) => {
     let key = rawKey.toLowerCase();
     if (!(key in values) && ALIASES[key]) key = ALIASES[key];
     if (!(key in values)) return whole;
@@ -346,6 +356,9 @@ export function renderMerge(template: string, contactId: string, ctx: MergeConte
     if (v) return v;
     if (fallback !== undefined) return fallback.trim();
     // What the first automations' fields said when empty; kept so they read the same.
-    return LEGACY_FALLBACK[rawKey.toLowerCase()] ?? "";
+    const legacy = LEGACY_FALLBACK[rawKey.toLowerCase()];
+    if (legacy === undefined) blank.add(rawKey.toLowerCase());
+    return legacy ?? "";
   });
+  return { text, blank: Array.from(blank) };
 }

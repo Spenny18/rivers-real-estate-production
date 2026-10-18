@@ -49,6 +49,14 @@ sqlite.exec(`
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+
+  -- Numbers that replied STOP. Keyed on the last 10 digits.
+  CREATE TABLE IF NOT EXISTS sms_opt_outs (
+    phone TEXT PRIMARY KEY,
+    contact_fub_id TEXT,
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
 `);
 
 // ---- Configuration -------------------------------------------------------------
@@ -161,6 +169,46 @@ function logOnContact(contactFubId: string | null | undefined, direction: "inbou
   ]);
 }
 
+// ---- Opt-outs ------------------------------------------------------------------------
+//
+// A client who replies STOP (or UNSUBSCRIBE, CANCEL…) is opted out: Twilio
+// itself blocks further texts to them from this number (error 21610), and the
+// app records it so bulk texts skip them and nobody is texted by mistake.
+// START undoes it, on both sides.
+
+const STOP_WORDS = /^(stop|stopall|unsubscribe|cancel|end|quit|optout|opt out|revoke)$/i;
+const START_WORDS = /^(start|unstop|subscribe)$/i;
+
+/** "stop" / "start" when a reply is one of the carrier opt-out keywords, else null. */
+export function optKeyword(body: string): "stop" | "start" | null {
+  const word = body.trim().replace(/[.!]+$/, "");
+  if (STOP_WORDS.test(word)) return "stop";
+  if (START_WORDS.test(word)) return "start";
+  return null;
+}
+
+export function isOptedOut(phone: string | null | undefined): boolean {
+  const k = last10(phone);
+  return k.length === 10 && !!sqlite.prepare(`SELECT 1 FROM sms_opt_outs WHERE phone = ?`).get(k);
+}
+
+export function recordOptOut(phone: string, reason: string, contactFubId?: string | null) {
+  const k = last10(phone);
+  if (k.length !== 10) return;
+  sqlite
+    .prepare(`INSERT OR IGNORE INTO sms_opt_outs (phone, contact_fub_id, reason, created_at) VALUES (?, ?, ?, ?)`)
+    .run(k, contactFubId ?? null, reason.slice(0, 200), new Date().toISOString());
+}
+
+export function clearOptOut(phone: string) {
+  sqlite.prepare(`DELETE FROM sms_opt_outs WHERE phone = ?`).run(last10(phone));
+}
+
+/** Every opted-out number (last 10 digits). */
+export function optedOutNumbers(): Set<string> {
+  return new Set((sqlite.prepare(`SELECT phone FROM sms_opt_outs`).all() as Array<{ phone: string }>).map((r) => r.phone));
+}
+
 /** Send one text from the business line. Never throws. */
 export async function sendSms(
   to: string,
@@ -172,6 +220,7 @@ export async function sendSms(
   const conf = smsConfigured();
   if (!conf.ok) return { ok: false, error: `Texting isn't set up (missing ${conf.missing.join(", ")})` };
   if (!dest) return { ok: false, error: `"${to}" isn't a phone number that can receive texts` };
+  if (dest !== cfg.agentCell && isOptedOut(dest)) return { ok: false, error: `${prettyPhone(dest)} replied STOP, so they can't be texted` };
 
   let sid: string | undefined;
   let error: string | undefined;
@@ -192,7 +241,11 @@ export async function sendSms(
     });
     const data: any = await res.json().catch(() => ({}));
     if (res.ok && data?.sid) sid = data.sid;
-    else error = `Twilio ${res.status}: ${data?.message ?? "send failed"}`.slice(0, 300);
+    else {
+      error = `Twilio ${res.status}: ${data?.message ?? "send failed"}`.slice(0, 300);
+      // 21610: they replied STOP at some point; Twilio won't deliver until they reply START.
+      if (data?.code === 21610) recordOptOut(dest, "Twilio: replied STOP", log.contactFubId);
+    }
   } catch (e: any) {
     error = String(e?.message ?? e).slice(0, 300);
   }
@@ -343,6 +396,9 @@ export async function handleInboundSms(from: string, body: string, sid: string |
   const who = ensureContactForPhone(sender, "text");
   logMessage({ direction: "inbound", kind: "client", from: sender, to: cfg.from ?? "", body, sid, contactFubId: who.contactFubId });
   logOnContact(who.contactFubId, "inbound", body, sid);
+  const opt = optKeyword(body);
+  if (opt === "stop") recordOptOut(sender, `Replied "${body.trim().slice(0, 20)}"`, who.contactFubId);
+  if (opt === "start") clearOptOut(sender);
   if (cfg.agentCell) {
     setReplyTarget(sender);
     const label = who.name ? `${who.name} · ${prettyPhone(sender)}` : prettyPhone(sender);

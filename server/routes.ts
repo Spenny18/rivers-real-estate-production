@@ -602,6 +602,10 @@ export async function registerRoutes(
     const { registerTemplateRoutes } = await import("./template-routes");
     registerTemplateRoutes(app, { requireAuth });
 
+    // Bulk texts. See server/bulk-texts.ts.
+    const { registerBulkTextRoutes } = await import("./bulk-text-routes");
+    registerBulkTextRoutes(app, { requireAuth });
+
     const { registerMarketRoutes } = await import("./market-routes");
     registerMarketRoutes(app, { requireAuth });
   } catch (e) {
