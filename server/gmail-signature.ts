@@ -11,6 +11,7 @@
 
 import { getValidAccessToken } from "./google-calendar";
 import { agentUserId, gmailGet } from "./gmail-inbox";
+import { EMAIL_BODY_STYLE } from "./tracking";
 
 export interface Signature {
   html: string;
@@ -74,7 +75,7 @@ export function withSignature(email: { text: string; html?: string }, sig: Signa
   const block = `<div style="margin-top:16px;">${sig.html}</div>`;
   const base =
     email.html ??
-    `<!doctype html><html><body><div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#222;">${escapeHtml(email.text).replace(/\r?\n/g, "<br>\n")}</div></body></html>`;
+    `<!doctype html><html><body><div style="${EMAIL_BODY_STYLE}">${escapeHtml(email.text).replace(/\r?\n/g, "<br>\n")}</div></body></html>`;
   const html = /<\/body>/i.test(base) ? base.replace(/<\/body>/i, `${block}</body>`) : base + block;
   return { text, html };
 }

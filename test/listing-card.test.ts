@@ -67,3 +67,11 @@ test("only the site's own listing pages are recognised", () => {
 test(`sample card written to ${dir}/sample.html`, () => {
   assert.ok(fs.existsSync(path.join(dir, "sample.html")));
 });
+
+test("emails are set in Georgia, and the font doesn't break the HTML", () => {
+  const html = emailHtml(body, createTrackedEmail("christel@example.com", "font", { kind: "crm", channel: "gmail" }));
+  assert.match(html, /<div style="font-family:Georgia,Times,serif;font-size:15px;/);
+  assert.match(html, /<div style="font-size:18px;font-weight:bold;color:#111;">/);
+  // Every style attribute closes where it should: no stray quotes inside them.
+  for (const m of html.matchAll(/style="([^"]*)"/g)) assert.doesNotMatch(m[1], /'/);
+});

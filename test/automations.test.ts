@@ -15,6 +15,11 @@ const auto = await import("../server/automations");
 const { storage, sqlite } = await import("../server/storage");
 
 const settle = () => new Promise((r) => setTimeout(r, 20));
+/** Wait for a condition (up to 2 s) rather than a fixed delay: the first run in a file is slow while modules warm up. */
+async function waitFor(check: () => boolean, ms = 2000) {
+  const end = Date.now() + ms;
+  while (!check() && Date.now() < end) await new Promise((r) => setTimeout(r, 10));
+}
 let n = 0;
 function person(extra: { phone?: string | null; email?: string | null; source?: string } = {}) {
   n += 1;
@@ -45,7 +50,7 @@ test("instant steps run straight through; an if/else takes the right branch", as
   auto.updateAutomation(a.id, { mode: "auto" });
   const c = person();
   const runId = auto.enroll(auto.getAutomation(a.id)!, c)!;
-  await settle();
+  await waitFor(() => run(runId).status === "completed");
   assert.equal(run(runId).status, "completed");
   assert.deepEqual(auto.appTags(c), ["Hot"]);
   const task = (auto.listAppTasks() as any[]).find((t) => t.contactFubId === c);
