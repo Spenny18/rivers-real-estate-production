@@ -32,12 +32,14 @@ import {
   Check,
   ListChecks,
   Pencil,
+  FileStack,
+  BookmarkPlus,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { apiRequest } from "@/lib/queryClient";
+import { apiErrorMessage, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { showingStreetLine } from "@shared/showing-address";
 import { formatEmailText } from "@/lib/email-text";
@@ -45,6 +47,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ListingSearch } from "@/components/listing-picker";
 import { MergeFieldPicker, CustomFieldsDialog, insertAtCursor } from "@/components/merge-field-picker";
+import type { MessageTemplate } from "@/pages/admin-templates";
 
 // ---- Types (mirror server/inbox.ts) ------------------------------------------------
 
@@ -826,6 +829,32 @@ function Composer({
     }, 0);
   };
 
+  /**
+   * Use a template: an email's subject replaces the current one; the message
+   * fills an empty box, or goes in at the cursor if something's written.
+   * Merge fields stay as {fields} and are filled in when sent.
+   */
+  const applyTemplate = (t: MessageTemplate) => {
+    if (t.kind === "email" && t.subject) setSubject(t.subject);
+    if (!body.trim()) {
+      setBody(t.body);
+      caret.current = t.body.length;
+    } else {
+      let at = 0;
+      setBody((prev) => {
+        const pos = Math.min(caret.current ?? prev.length, prev.length);
+        const before = prev.slice(0, pos);
+        const after = prev.slice(pos);
+        const lead = !before ? "" : before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
+        at = before.length + lead.length + t.body.length;
+        return before + lead + t.body + (after && !after.startsWith("\n") ? "\n\n" : "") + after;
+      });
+      caret.current = null;
+      void at;
+    }
+    setTimeout(() => area.current?.focus(), 0);
+  };
+
   const send = useMutation({
     mutationFn: async () =>
       (
@@ -873,6 +902,7 @@ function Composer({
         ))}
         {why && <span className="text-[11.5px] text-muted-foreground ml-2">{why}</span>}
         <div className="flex-1" />
+        <TemplatePicker kind={channel} onPick={applyTemplate} disabled={!!why} />
         <MergeFieldPicker onPick={insertField} disabled={!!why} />
         <Popover open={picking} onOpenChange={setPicking}>
           <PopoverTrigger asChild>
@@ -949,9 +979,114 @@ function Composer({
           </label>
         )}
         {channel === "email" ? "Sends from your Gmail; replies thread normally. ⌘+Enter to send." : "Sends from your business line. ⌘+Enter to send."}
+        <SaveAsTemplate kind={channel} subject={subject} body={body} />
         {channel === "text" && body.length > 160 && ` ${Math.ceil(body.length / 153)} texts.`}
       </div>
     </div>
+  );
+}
+
+/** "Templates": pick a saved text or email template for this channel (pages/admin-templates.tsx). */
+function TemplatePicker({ kind, onPick, disabled }: { kind: "email" | "text"; onPick: (t: MessageTemplate) => void; disabled?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const { data: templates = [], isLoading } = useQuery<MessageTemplate[]>({ queryKey: [`/api/admin/templates?kind=${kind}`], enabled: open });
+  const n = q.trim().toLowerCase();
+  const shown = n ? templates.filter((t) => `${t.name} ${t.subject ?? ""} ${t.body}`.toLowerCase().includes(n)) : templates;
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          disabled={disabled}
+          className="px-2.5 py-1 rounded-sm text-[11.5px] flex items-center gap-1.5 text-muted-foreground hover:bg-secondary disabled:opacity-50"
+          data-testid="inbox-templates"
+        >
+          <FileStack className="h-3 w-3" /> Templates
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-[400px] p-0">
+        <div className="p-2 border-b border-border">
+          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Search ${kind} templates`} autoFocus className="h-8 text-[13px]" />
+        </div>
+        <div className="max-h-[360px] overflow-y-auto divide-y divide-border">
+          {isLoading && <div className="px-3 py-2 text-[12px] text-muted-foreground">Loading…</div>}
+          {!isLoading && shown.length === 0 && (
+            <div className="px-3 py-3 text-[12px] text-muted-foreground">
+              {templates.length ? "No templates match." : "No templates yet."}{" "}
+              <Link href="/admin/templates" className="underline underline-offset-2">
+                Manage templates
+              </Link>
+            </div>
+          )}
+          {shown.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => {
+                onPick(t);
+                setOpen(false);
+                setQ("");
+              }}
+              className="w-full text-left px-3 py-2 hover:bg-secondary"
+              data-testid={`use-template-${t.id}`}
+            >
+              <div className="text-[13px] font-medium truncate flex items-center gap-1.5">
+                {t.name}
+                {t.unknownFields.length > 0 && <span className="text-[10px] text-destructive font-normal">check fields</span>}
+              </div>
+              <div className="text-[11.5px] text-muted-foreground line-clamp-2 whitespace-pre-line">{t.kind === "email" && t.subject ? `${t.subject} — ${t.body}` : t.body}</div>
+            </button>
+          ))}
+        </div>
+        <div className="border-t border-border px-3 py-2 text-[11.5px]">
+          <Link href="/admin/templates" className="underline underline-offset-2">
+            Manage templates
+          </Link>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** "Save as template": keep what's written (merge fields and all) for next time. */
+function SaveAsTemplate({ kind, subject, body }: { kind: "email" | "text"; subject: string; body: string }) {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const save = useMutation({
+    mutationFn: async () => (await apiRequest("POST", "/api/admin/templates", { kind, name, subject: kind === "email" ? subject.replace(/^re:\s*/i, "") : undefined, body })).json(),
+    onSuccess: () => {
+      qc.invalidateQueries({ predicate: (x) => String(x.queryKey[0]).startsWith("/api/admin/templates") });
+      setOpen(false);
+      setName("");
+    },
+  });
+  if (!body.trim()) return null;
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button type="button" className="inline-flex items-center gap-1 underline underline-offset-2 hover:text-foreground" data-testid="inbox-save-template">
+          <BookmarkPlus className="h-3 w-3" /> Save as template
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-[300px] p-3 space-y-2">
+        <div className="text-[12px] text-muted-foreground">Save this {kind} as a template. Merge fields stay as fields.</div>
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (name.trim()) save.mutate();
+          }}
+        >
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Template name" autoFocus className="h-8 text-[13px]" />
+          <Button type="submit" size="sm" className="rounded-sm h-8" disabled={!name.trim() || save.isPending}>
+            Save
+          </Button>
+        </form>
+        {save.isError && <p className="text-[12px] text-destructive">{apiErrorMessage(save.error)}</p>}
+      </PopoverContent>
+    </Popover>
   );
 }
 

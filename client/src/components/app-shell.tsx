@@ -34,6 +34,7 @@ import {
   ChevronDown,
   Inbox,
   Workflow,
+  FileText as TemplatesIcon,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -81,6 +82,7 @@ const primaryNav: NavGroup[] = [
       { label: "Listings", icon: Home, href: "/admin/listings" },
       { label: "Leads", icon: Users, href: "/admin/leads" },
       { label: "Automations", icon: Workflow, href: "/admin/automations" },
+      { label: "Templates", icon: TemplatesIcon, href: "/admin/templates" },
     ],
   },
   {
