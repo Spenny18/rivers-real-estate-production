@@ -1,0 +1,137 @@
+# Uptime monitor: texts Spencer when riversrealestate.ca stops answering, or
+# backups stop arriving, and again when it's fixed.
+#
+# Runs on GitHub, not Fly, so it still works when the Fly machine is down.
+# Every 5 minutes (GitHub may run it a few minutes late under load):
+#   - the site: /healthz, three tries a minute apart — one slow answer isn't
+#     an outage;
+#   - backups: /healthz/backup (server/index.ts) — continuous copy within
+#     2 hours, daily backup within 30.
+# A text goes out when either changes state, and every hour while the site
+# stays down. The last state is kept in the Actions cache between runs.
+#
+# This repository is public, so its run logs are too: nothing here prints a
+# phone number or a key.
+#
+# Alerts come from the business line, and a text to it from Spencer's cell is
+# relayed to the last client (server/sms.ts) — hence "don't reply".
+#
+# Secrets (Settings → Secrets and variables → Actions):
+#   TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN  the app's Twilio account
+#   ALERT_SMS_FROM                         the business line, +15876025820
+#   ALERT_SMS_TO                           Spencer's cell
+name: Uptime monitor
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      test_alert:
+        description: "Send a test text to confirm alerts reach you"
+        type: boolean
+        default: false
+
+concurrency:
+  group: uptime-monitor
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Load last state
+        uses: actions/cache/restore@v4
+        with:
+          path: .uptime-state
+          key: uptime-state-${{ github.run_id }}
+          restore-keys: uptime-state-
+
+      - name: Check the site and backups
+        env:
+          SITE: https://riversrealestate.ca
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          ALERT_SMS_FROM: ${{ secrets.ALERT_SMS_FROM }}
+          ALERT_SMS_TO: ${{ secrets.ALERT_SMS_TO }}
+          TEST_ALERT: ${{ github.event.inputs.test_alert }}
+        run: |
+          set -u
+          STATE=.uptime-state
+          [ -f "$STATE" ] || printf 'site=up\nsite_since=0\nsite_alerted=0\nbackup=ok\n' > "$STATE"
+          . "./$STATE"
+          now=$(date +%s)
+
+          sms() {
+            if [ -z "$TWILIO_ACCOUNT_SID" ] || [ -z "$ALERT_SMS_TO" ]; then
+              echo "::warning::Alert secrets aren't set; would have texted: $1"
+              return
+            fi
+            code=$(curl -s -o /dev/null -w '%{http_code}' -m 20 \
+              -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN" \
+              --data-urlencode "To=$ALERT_SMS_TO" \
+              --data-urlencode "From=$ALERT_SMS_FROM" \
+              --data-urlencode "Body=Rivers site monitor (automated - don't reply, replies go to your last client): $1" \
+              "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/Messages.json")
+            echo "Text sent (Twilio $code): $1"
+          }
+
+          if [ "$TEST_ALERT" = "true" ]; then
+            sms "test alert. If you got this, downtime alerts reach your phone."
+          fi
+
+          # --- The site -------------------------------------------------------
+          up=0
+          for attempt in 1 2 3; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -m 20 "$SITE/healthz" || echo 000)
+            if [ "$code" = "200" ]; then up=1; break; fi
+            echo "Attempt $attempt: /healthz answered $code"
+            if [ "$attempt" -lt 3 ]; then sleep 60; fi
+          done
+
+          if [ "$up" = 1 ]; then
+            echo "Site is up."
+            if [ "$site" = "down" ]; then
+              mins=$(( (now - site_since) / 60 ))
+              sms "riversrealestate.ca is back up (down about $mins min)."
+            fi
+            site=up; site_since=$now; site_alerted=0
+          else
+            echo "::error::Site is not answering."
+            if [ "$site" = "up" ]; then
+              site=down; site_since=$now; site_alerted=$now
+              sms "riversrealestate.ca is DOWN (no answer for 2+ min). Fly status: https://status.flyio.net"
+            elif [ $(( now - site_alerted )) -ge 3600 ]; then
+              mins=$(( (now - site_since) / 60 ))
+              site_alerted=$now
+              sms "riversrealestate.ca is still down ($mins min so far)."
+            fi
+          fi
+
+          # --- Backups (only meaningful while the site answers) ---------------
+          if [ "$up" = 1 ]; then
+            body=$(curl -s -m 30 -w '\n%{http_code}' "$SITE/healthz/backup" || printf '\n000')
+            bcode=$(printf '%s' "$body" | tail -n1)
+            json=$(printf '%s' "$body" | sed '$d')
+            if [ "$bcode" = "200" ] || [ "$bcode" = "503" ]; then echo "Backup check: $bcode $json"; else echo "Backup check: $bcode (no backup status available)"; fi
+            if [ "$bcode" = "200" ]; then
+              if [ "$backup" = "bad" ]; then sms "backups are healthy again."; fi
+              backup=ok
+            elif [ "$bcode" = "503" ]; then
+              why=$(printf '%s' "$json" | jq -r '.problems | join("; ")' 2>/dev/null || echo "unknown problem")
+              if [ "$backup" = "ok" ]; then sms "backup problem: $why."; fi
+              backup=bad
+            fi
+          fi
+
+          # The run itself always succeeds: the texts are the alert, and a failed
+          # run would also email the repo owner every five minutes.
+          printf 'site=%s\nsite_since=%s\nsite_alerted=%s\nbackup=%s\n' "$site" "$site_since" "$site_alerted" "$backup" > "$STATE"
+
+      - name: Save state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .uptime-state
+          key: uptime-state-${{ github.run_id }}

@@ -40,6 +40,40 @@ app.get("/healthz", (_req, res) => {
   res.status(200).type("text/plain").send("ok");
 });
 
+// Whether backups are current, for the outside uptime monitor
+// (.github/workflows/uptime.yml). 200 when both the continuous copy and the
+// daily backup are recent, 503 with the reason otherwise. Ages only — nothing
+// about where the backups live.
+app.get("/healthz/backup", async (_req, res) => {
+  try {
+    const { litestreamEnabled, litestreamFreshness, litestreamProcess } = await import("./litestream");
+    const { backupStatus } = await import("./backup");
+    const problems: string[] = [];
+    const on = litestreamEnabled();
+    const proc = litestreamProcess();
+    const fresh = on.ok ? await litestreamFreshness() : null;
+    if (on.ok) {
+      if (!proc.running) problems.push("continuous backup isn't running");
+      if (fresh?.error) problems.push("can't reach the backup storage");
+      // The MLS sync alone writes several times an hour, so two quiet hours
+      // means copies have stopped arriving.
+      else if (fresh && (fresh.ageMinutes === null || fresh.ageMinutes > 120)) problems.push("no continuous backup in the last 2 hours");
+    }
+    const daily = backupStatus();
+    const lastDaily = daily.lastOk?.finishedAt ?? null;
+    const dailyHours = lastDaily ? Math.round((Date.now() - Date.parse(lastDaily)) / 3_600_000) : null;
+    if (daily.configured && (dailyHours === null || dailyHours > 30)) problems.push("no daily backup in the last 30 hours");
+    res.status(problems.length ? 503 : 200).json({
+      ok: problems.length === 0,
+      problems,
+      continuous: on.ok ? { running: proc.running, restarts: proc.restarts, lastCopyMinutesAgo: fresh?.ageMinutes ?? null } : { off: on.reason },
+      daily: { lastSuccessHoursAgo: dailyHours },
+    });
+  } catch (e: any) {
+    res.status(503).json({ ok: false, problems: [String(e?.message ?? e).slice(0, 200)] });
+  }
+});
+
 // 301 www → apex. Both hostnames resolve to this app; without the redirect
 // Google indexes duplicate content across the two hosts.
 app.use((req, res, next) => {
@@ -206,6 +240,13 @@ app.use((req, res, next) => {
     startBackupCron();
   } catch (err) {
     console.error("[backup] failed to start cron:", err);
+  }
+  try {
+    // Continuous backup to R2 (server/litestream.ts).
+    const { startLitestream } = await import("./litestream");
+    startLitestream();
+  } catch (err) {
+    console.error("[litestream] failed to start:", err);
   }
   try {
     const { startDbMaintenance } = await import("./db-maintenance");

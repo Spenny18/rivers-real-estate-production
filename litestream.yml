@@ -1,0 +1,30 @@
+# Continuous backup of the production database (server/litestream.ts starts
+# Litestream with this file once the database is open).
+#
+# Every change to /data/rivers.db is copied to the same R2 bucket as the daily
+# encrypted backup (server/backup.ts), under <prefix>/litestream/, within
+# about ten seconds. A full snapshot is taken daily and three days are kept,
+# so the database can be restored to any moment in the last three days.
+#
+# Litestream 0.5 can't encrypt client-side (age support was removed); the
+# bucket is private and R2 encrypts everything at rest. The daily backup stays
+# client-side encrypted as a second, independent copy.
+#
+# Restore: see script/litestream-restore.sh.
+dbs:
+  - path: ${DB_PATH}
+    replica:
+      type: s3
+      endpoint: ${BACKUP_S3_ENDPOINT}
+      bucket: ${BACKUP_S3_BUCKET}
+      path: ${LITESTREAM_PREFIX}/litestream/rivers.db
+      region: auto
+      access-key-id: ${BACKUP_S3_ACCESS_KEY}
+      secret-access-key: ${BACKUP_S3_SECRET_KEY}
+      # 10 s, not the 1 s default: the MLS sync rewrites thousands of rows at
+      # a time, and every sync is an R2 write request.
+      sync-interval: 10s
+
+snapshot:
+  interval: 24h
+  retention: 72h
