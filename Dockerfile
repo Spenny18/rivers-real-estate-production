@@ -37,6 +37,14 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends qpdf \
  && rm -rf /var/lib/apt/lists/*
 
+# Litestream: continuous backup of the database to R2 (server/litestream.ts,
+# litestream.yml). Pinned; bump deliberately.
+ARG LITESTREAM_VERSION=0.5.17
+ADD https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}/litestream-${LITESTREAM_VERSION}-linux-x86_64.deb /tmp/litestream.deb
+RUN dpkg -i /tmp/litestream.deb && rm /tmp/litestream.deb && litestream version
+COPY litestream.yml /etc/litestream.yml
+COPY script/litestream-restore.sh /app/script/litestream-restore.sh
+
 # Bring in only what the server bundle needs at runtime.
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund \
