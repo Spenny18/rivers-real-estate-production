@@ -331,6 +331,7 @@ export function registerCrmRoutes(app: Express, deps: { requireAuth: Middleware 
       html,
       threadId: typeof req.body?.threadId === "string" ? req.body.threadId : undefined,
       inReplyTo: typeof req.body?.inReplyTo === "string" ? req.body.inReplyTo : undefined,
+      signature: req.body?.signature !== false,
     });
     if (!sent.ok) return res.status(502).json({ message: sent.error ?? "Send failed" });
 

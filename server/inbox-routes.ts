@@ -167,6 +167,7 @@ export function registerInboxRoutes(app: Express, deps: { requireAuth: Middlewar
       html,
       threadId: replying ? last!.threadId ?? undefined : undefined,
       inReplyTo: replying ? last!.messageIdHeader ?? undefined : undefined,
+      signature: req.body?.signature !== false,
     });
     if (!sent.ok || !sent.messageId) return res.status(502).json({ message: sent.error ?? "Send failed" });
 

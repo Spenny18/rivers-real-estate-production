@@ -98,7 +98,7 @@ function buyerNewLeadTemplate(): Step[] {
       type: "send_email",
       subject: "Your inquiry about {property}",
       body:
-        "Hi {first_name},\n\nThanks for your interest in {property}. I'd be happy to send you more details, comparable sales, or set up a private showing.\n\nWhat would be most helpful?\n\n{agent_name}\n{agent_phone}",
+        "Hi {first_name},\n\nThanks for your interest in {property}. I'd be happy to send you more details, comparable sales, or set up a private showing.\n\nWhat would be most helpful?",
     },
     { id: id(), type: "create_task", title: "Call {name}", note: "New lead from {source}", dueInHours: 1 },
     { id: id(), type: "wait", amount: 1, unit: "days" },
@@ -114,7 +114,7 @@ function buyerNewLeadTemplate(): Step[] {
           id: id(),
           type: "send_email",
           subject: "Still looking?",
-          body: "Hi {first_name},\n\nAre you still searching? If you tell me what matters most in your next home, I'll send you listings that fit, often before they hit Realtor.ca.\n\n{agent_name}",
+          body: "Hi {first_name},\n\nAre you still searching? If you tell me what matters most in your next home, I'll send you listings that fit, often before they hit Realtor.ca.",
         },
         { id: id(), type: "wait", amount: 7, unit: "days" },
         { id: id(), type: "create_task", title: "Check in with {name}", note: "No reply to the new-lead plan after 11 days", dueInHours: 0 },
@@ -137,7 +137,7 @@ function sellerNewLeadTemplate(): Step[] {
       type: "send_email",
       subject: "What your home could sell for",
       body:
-        "Hi {first_name},\n\nThanks for getting in touch. I'll prepare a pricing analysis based on recent sales near you, what's competing on the market right now, and how quickly comparable homes are selling.\n\nA short visit lets me account for updates and finishes that online estimates miss. Would sometime this week work?\n\n{agent_name}\n{agent_phone}",
+        "Hi {first_name},\n\nThanks for getting in touch. I'll prepare a pricing analysis based on recent sales near you, what's competing on the market right now, and how quickly comparable homes are selling.\n\nA short visit lets me account for updates and finishes that online estimates miss. Would sometime this week work?",
     },
     { id: id(), type: "create_task", title: "Call {name} about selling", note: "Seller lead from {source}", dueInHours: 1 },
     { id: id(), type: "wait", amount: 2, unit: "days" },
@@ -154,7 +154,7 @@ function sellerNewLeadTemplate(): Step[] {
           type: "send_email",
           subject: "Thinking of selling this year?",
           body:
-            "Hi {first_name},\n\nWhether you're planning to list soon or just want to know where you stand, I'm happy to walk you through what's selling in your area and what buyers are paying for.\n\nNo pressure either way. Just reply whenever the timing suits.\n\n{agent_name}",
+            "Hi {first_name},\n\nWhether you're planning to list soon or just want to know where you stand, I'm happy to walk you through what's selling in your area and what buyers are paying for.\n\nNo pressure either way. Just reply whenever the timing suits.",
         },
         { id: id(), type: "wait", amount: 14, unit: "days" },
         { id: id(), type: "create_task", title: "Check in with {name} about selling", note: "No reply to the seller plan after 3 weeks", dueInHours: 0 },
