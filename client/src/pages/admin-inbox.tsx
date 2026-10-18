@@ -28,6 +28,8 @@ import {
   Briefcase,
   Plus,
   ExternalLink,
+  Copy,
+  Check,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
@@ -920,6 +922,7 @@ function ContactPanel({ data, onInsert }: { data: ContactData; onInsert: (l: Lis
                     {showingStreetLine(l.address)}
                   </div>
                   <div className="text-muted-foreground truncate">{l.summary}</div>
+                  {l.mlsNumber && <MlsNumber value={l.mlsNumber} />}
                   <div className="flex flex-wrap gap-1 mt-0.5">
                     {l.reasons.map((r) => (
                       <span key={r} className="text-[10px] px-1 rounded-sm bg-secondary text-muted-foreground">
@@ -1015,6 +1018,38 @@ function ContactPanel({ data, onInsert }: { data: ContactData; onInsert: (l: Lis
         )}
       </Section>
     </aside>
+  );
+}
+
+/** The MLS® number, selectable, with a one-click copy. */
+function MlsNumber({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard blocked: the number is selectable text, so it can still be copied by hand.
+    }
+  };
+  return (
+    <div className="flex items-center gap-1 text-muted-foreground">
+      <span>
+        MLS® <span className="select-all tabular-nums">{value}</span>
+      </span>
+      <button
+        type="button"
+        onClick={copy}
+        className="hover:text-foreground"
+        aria-label={copied ? "Copied" : `Copy MLS number ${value}`}
+        title={copied ? "Copied" : "Copy MLS® number"}
+        data-testid={`copy-mls-${value}`}
+      >
+        {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+      </button>
+      {copied && <span className="text-[10px]">Copied</span>}
+    </div>
   );
 }
 
