@@ -7,7 +7,7 @@
 //   GET  /api/admin/inbox/status                     what's connected
 //   POST /api/admin/inbox/sync                       read new Gmail now
 
-import type { Express, Request, Response, NextFunction } from "express";
+import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import { sqlite, storage } from "./storage";
 import { contactPanel, lastEmailOf, listConversations, markRead, threadFor, unreadCount } from "./inbox";
 import { lastInboxSync, storeEmail, syncInboxEmails } from "./gmail-inbox";
@@ -16,6 +16,7 @@ import { canSendEmail, sendGmail } from "./gmail";
 import { getValidAccessToken } from "./google-calendar";
 import { sendSms, smsConfigured } from "./sms";
 import { createTrackedEmail } from "./tracking";
+import { MAX_TOTAL_BYTES, dropAttachment, holdAttachment, releaseAttachments, takeAttachments } from "./email-attachments";
 import { fubConfigured } from "./fub-client";
 import { syncTextsForContact } from "./fub-sync";
 
@@ -125,6 +126,31 @@ export function registerInboxRoutes(app: Express, deps: { requireAuth: Middlewar
     });
   });
 
+  // A file for an email being written (server/email-attachments.ts). Raw
+  // bytes, sent as application/octet-stream so the JSON parser leaves them
+  // alone; the real type and name come in headers.
+  app.post(
+    "/api/admin/email-attachments",
+    requireAuth,
+    express.raw({ type: "application/octet-stream", limit: MAX_TOTAL_BYTES + 1024 }),
+    (req, res) => {
+      if (!Buffer.isBuffer(req.body)) return res.status(400).json({ message: "No file received." });
+      let name = String(req.headers["x-filename"] ?? "attachment");
+      try {
+        name = decodeURIComponent(name);
+      } catch {
+        /* as sent */
+      }
+      const r = holdAttachment(name, String(req.headers["x-file-type"] ?? ""), req.body);
+      if ("error" in r) return res.status(400).json({ message: r.error });
+      res.json({ id: r.id });
+    },
+  );
+  app.delete("/api/admin/email-attachments/:id", requireAuth, (req, res) => {
+    dropAttachment(String(req.params.id));
+    res.json({ ok: true });
+  });
+
   app.post("/api/admin/inbox/contact/:fubId/reply", requireAuth, async (req, res) => {
     const fubId = String(req.params.fubId);
     const contact = storage.getCrmContact(fubId);
@@ -159,6 +185,8 @@ export function registerInboxRoutes(app: Express, deps: { requireAuth: Middlewar
       fubId,
     );
     if (!subject) return res.status(400).json({ message: "Give the email a subject." });
+    const taken = takeAttachments(req.body?.attachmentIds);
+    if ("error" in taken) return res.status(400).json({ message: taken.error });
 
     // Opens and clicks come back to this contact's activity (server/tracking.ts).
     let html: string | undefined;
@@ -179,8 +207,10 @@ export function registerInboxRoutes(app: Express, deps: { requireAuth: Middlewar
       threadId: replying ? last!.threadId ?? undefined : undefined,
       inReplyTo: replying ? last!.messageIdHeader ?? undefined : undefined,
       signature: req.body?.signature !== false,
+      attachments: taken.files,
     });
     if (!sent.ok || !sent.messageId) return res.status(502).json({ message: sent.error ?? "Send failed" });
+    releaseAttachments(taken.files);
 
     const now = new Date().toISOString();
     storeEmail({
@@ -193,7 +223,7 @@ export function registerInboxRoutes(app: Express, deps: { requireAuth: Middlewar
       subject,
       body,
       messageIdHeader: await sentMessageIdHeader(userId, sent.messageId),
-      hasAttachments: false,
+      hasAttachments: taken.files.length > 0,
       occurredAt: now,
     });
     // The CRM contact drawer reads crm_activities; keep it in step (the inbox
