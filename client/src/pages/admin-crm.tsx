@@ -4,6 +4,7 @@
 // FUB per page view, so this stays fast and still renders when the API is
 // down. The Sync now button forces a refresh.
 
+import { AttachButton, AttachmentChips, useAttachments } from "@/components/email-attachments";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
@@ -393,12 +394,14 @@ export default function AdminCrmPage() {
   const [editingContact, setEditingContact] = useState(false);
   const [subject, setSubject] = useState("");
   const [emailBody, setEmailBody] = useState("");
+  const attachments = useAttachments();
 
   const sendEmail = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", `/api/admin/crm/contacts/${openContact}/email`, {
         subject,
         body: emailBody,
+        attachmentIds: attachments.ids,
       });
       return (await res.json()) as { messageId: string };
     },
@@ -406,6 +409,7 @@ export default function AdminCrmPage() {
       setComposeOpen(false);
       setSubject("");
       setEmailBody("");
+      attachments.clear();
       qc.invalidateQueries({ queryKey: [`/api/admin/crm/contacts/${openContact}`] });
       toast({ title: "Sent", description: "It's in your Gmail Sent folder and this contact's history." });
     },
@@ -1273,12 +1277,19 @@ export default function AdminCrmPage() {
                         rows={7}
                         data-testid="input-email-body"
                         className="w-full text-[14px] leading-relaxed rounded-sm border border-border bg-transparent p-3 resize-y"
+                        onDragOver={(e) => e.dataTransfer.types.includes("Files") && e.preventDefault()}
+                        onDrop={(e) => {
+                          if (!e.dataTransfer.files.length) return;
+                          e.preventDefault();
+                          attachments.add(e.dataTransfer.files);
+                        }}
                       />
+                      <AttachmentChips files={attachments.files} onRemove={attachments.remove} />
                       <div className="flex flex-wrap items-center gap-2">
                         <Button
                           size="sm"
                           onClick={() => sendEmail.mutate()}
-                          disabled={sendEmail.isPending || !subject.trim() || !emailBody.trim()}
+                          disabled={sendEmail.isPending || !subject.trim() || !emailBody.trim() || attachments.uploading || attachments.hasErrors}
                           data-testid="button-send-email"
                           className="rounded-sm text-[11px] font-display tracking-[0.14em]"
                         >
@@ -1300,6 +1311,7 @@ export default function AdminCrmPage() {
                         >
                           CANCEL
                         </Button>
+                        <AttachButton onFiles={attachments.add} />
                         <span className="text-[11.5px] text-muted-foreground">
                           Sends from your Gmail, so replies come back to you normally.
                         </span>

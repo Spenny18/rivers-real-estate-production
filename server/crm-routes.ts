@@ -8,6 +8,7 @@ import { storage } from "./storage";
 import { fubConfigured, probe, testConnection } from "./fub-client";
 import { canSendEmail, sendGmail } from "./gmail";
 import { createTrackedEmail } from "./tracking";
+import { releaseAttachments, takeAttachments } from "./email-attachments";
 import {
   RESOURCE_SPECS,
   SYNCED_RESOURCES,
@@ -304,6 +305,8 @@ export function registerCrmRoutes(app: Express, deps: { requireAuth: Middleware 
     const text = String(req.body?.body ?? "").trim();
     if (!subject) return res.status(400).json({ message: "Give the email a subject." });
     if (!text) return res.status(400).json({ message: "The message is empty." });
+    const taken = takeAttachments(req.body?.attachmentIds);
+    if ("error" in taken) return res.status(400).json({ message: taken.error });
 
     const userId = (req as any).authUserId;
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
@@ -332,8 +335,10 @@ export function registerCrmRoutes(app: Express, deps: { requireAuth: Middleware 
       threadId: typeof req.body?.threadId === "string" ? req.body.threadId : undefined,
       inReplyTo: typeof req.body?.inReplyTo === "string" ? req.body.inReplyTo : undefined,
       signature: req.body?.signature !== false,
+      attachments: taken.files,
     });
     if (!sent.ok) return res.status(502).json({ message: sent.error ?? "Send failed" });
+    releaseAttachments(taken.files);
 
     // Record it locally straight away. Follow Up Boss will mirror the same
     // message on its next mailbox sync, and the uid is keyed on Gmail's own

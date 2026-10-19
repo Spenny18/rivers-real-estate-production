@@ -49,6 +49,7 @@ import { ListingSearch } from "@/components/listing-picker";
 import { MergeFieldPicker, CustomFieldsDialog, insertAtCursor } from "@/components/merge-field-picker";
 import type { MessageTemplate } from "@/pages/admin-templates";
 import { TemplatePicker } from "@/components/template-picker";
+import { AttachButton, AttachmentChips, useAttachments } from "@/components/email-attachments";
 
 // ---- Types (mirror server/inbox.ts) ------------------------------------------------
 
@@ -765,6 +766,7 @@ function Composer({
   const [picking, setPicking] = useState(false);
   // Emails carry the Gmail signature unless this is unticked (server/gmail-signature.ts).
   const [signature, setSignature] = useState(true);
+  const attachments = useAttachments();
   const area = useRef<HTMLTextAreaElement>(null);
   // Where the cursor was, so a listing picked from the panel (which takes the
   // focus away) lands there rather than at the end.
@@ -864,10 +866,12 @@ function Composer({
           body,
           subject: channel === "email" ? subject : undefined,
           signature: channel === "email" ? signature : undefined,
+          attachmentIds: channel === "email" ? attachments.ids : undefined,
         })
       ).json(),
     onSuccess: () => {
       setBody("");
+      attachments.clear();
       onSent();
     },
     onError: (e: any) => onError(e?.message ?? "Try again."),
@@ -886,8 +890,20 @@ function Composer({
           ? status?.canEmail.reason ?? "Email sending isn't connected."
           : null;
 
+  const attachBlocked = channel === "email" && (attachments.uploading || attachments.hasErrors);
+
   return (
-    <div className="border-t border-border p-3 space-y-2 bg-background">
+    <div
+      className="border-t border-border p-3 space-y-2 bg-background"
+      onDragOver={(e) => {
+        if (channel === "email" && !why && e.dataTransfer.types.includes("Files")) e.preventDefault();
+      }}
+      onDrop={(e) => {
+        if (channel !== "email" || why || !e.dataTransfer.files.length) return;
+        e.preventDefault();
+        attachments.add(e.dataTransfer.files);
+      }}
+    >
       <div className="flex items-center gap-1">
         {(["email", "text"] as const).map((ch) => (
           <button
@@ -905,6 +921,7 @@ function Composer({
         <div className="flex-1" />
         <TemplatePicker kind={channel} onPick={applyTemplate} disabled={!!why} />
         <MergeFieldPicker onPick={insertField} disabled={!!why} />
+        {channel === "email" && <AttachButton onFiles={attachments.add} disabled={!!why} />}
         <Popover open={picking} onOpenChange={setPicking}>
           <PopoverTrigger asChild>
             <button
@@ -955,7 +972,7 @@ function Composer({
           onBlur={remember}
           onFocus={() => (lastBox.current = "body")}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && body.trim() && !why) send.mutate();
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && body.trim() && !why && !attachBlocked) send.mutate();
           }}
           rows={channel === "text" ? 2 : 4}
           placeholder={channel === "text" ? "Text message…" : "Write your email…"}
@@ -965,13 +982,14 @@ function Composer({
         />
         <Button
           onClick={() => send.mutate()}
-          disabled={!!why || !body.trim() || send.isPending || (channel === "email" && !subject.trim())}
+          disabled={!!why || !body.trim() || send.isPending || (channel === "email" && !subject.trim()) || attachBlocked}
           className="rounded-sm h-9"
           data-testid="inbox-send"
         >
           {send.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
         </Button>
       </div>
+      {channel === "email" && <AttachmentChips files={attachments.files} onRemove={attachments.remove} />}
       <div className="text-[11px] text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1">
         {channel === "email" && (
           <label className="inline-flex items-center gap-1.5 cursor-pointer">

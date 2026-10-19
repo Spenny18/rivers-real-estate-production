@@ -81,6 +81,8 @@ export interface OutgoingEmail {
   inReplyTo?: string;
   /** Add Spencer's Gmail signature to both parts, as Gmail would (server/gmail-signature.ts). */
   signature?: boolean;
+  /** Files sent with it (server/email-attachments.ts). The message becomes multipart/mixed. */
+  attachments?: Array<{ filename: string; contentType: string; data: Buffer }>;
 }
 
 /**
@@ -99,7 +101,15 @@ function base64Url(s: string): string {
   return Buffer.from(s, "utf8").toString("base64url");
 }
 
-function buildMime(from: string, email: OutgoingEmail): string {
+/** Content-Disposition for a file, with RFC 2231 encoding when the name isn't plain ASCII. */
+function dispositionFor(filename: string): string {
+  // eslint-disable-next-line no-control-regex
+  if (/^[\x20-\x7E]*$/.test(filename)) return `attachment; filename="${filename}"`;
+  const ascii = filename.normalize("NFKD").replace(/[^\x20-\x7E]/g, "_");
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
+export function buildMime(from: string, email: OutgoingEmail): string {
   const headers = [
     `From: ${from}`,
     `To: ${email.to}`,
@@ -114,31 +124,95 @@ function buildMime(from: string, email: OutgoingEmail): string {
   // A bare LF between headers and body is tolerated by Gmail but not by every
   // relay downstream; CRLF is what the spec asks for.
   const crlf = (t: string) => t.replace(/\r?\n/g, "\r\n");
+  const wrap = (b: string) => b.replace(/.{76}/g, "$&\r\n");
+  const b64 = (t: string) => wrap(Buffer.from(t, "utf8").toString("base64"));
+  const boundary = () => `=_lhc_${randomBytes(12).toString("hex")}`;
+
+  // The message itself: plain text, or text + HTML as alternatives.
+  let bodyHeaders: string[];
+  let bodyContent: string;
   if (!email.html) {
-    headers.push('Content-Type: text/plain; charset="UTF-8"', "Content-Transfer-Encoding: 8bit");
-    return `${headers.join("\r\n")}\r\n\r\n${crlf(email.text)}`;
+    bodyHeaders = ['Content-Type: text/plain; charset="UTF-8"', "Content-Transfer-Encoding: 8bit"];
+    bodyContent = crlf(email.text);
+  } else {
+    // Base64 parts: no line-length or 8-bit concerns for either body, whatever
+    // was typed. Text first — the last part is the one clients prefer to show.
+    const alt = boundary();
+    bodyHeaders = [`Content-Type: multipart/alternative; boundary="${alt}"`];
+    bodyContent = [
+      `--${alt}`,
+      'Content-Type: text/plain; charset="UTF-8"',
+      "Content-Transfer-Encoding: base64",
+      "",
+      b64(crlf(email.text)),
+      `--${alt}`,
+      'Content-Type: text/html; charset="UTF-8"',
+      "Content-Transfer-Encoding: base64",
+      "",
+      b64(email.html),
+      `--${alt}--`,
+      "",
+    ].join("\r\n");
   }
-  // Base64 parts: no line-length or 8-bit concerns for either body, whatever
-  // was typed. Text first — the last part is the one clients prefer to show.
-  const boundary = `=_lhc_${randomBytes(12).toString("hex")}`;
-  const b64 = (t: string) => Buffer.from(t, "utf8").toString("base64").replace(/.{76}/g, "$&\r\n");
-  headers.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
+
+  const files = email.attachments ?? [];
+  if (!files.length) return `${[...headers, ...bodyHeaders].join("\r\n")}\r\n\r\n${bodyContent}`;
+
+  // With files: multipart/mixed, the message first and each file after it.
+  const mixed = boundary();
   return [
-    headers.join("\r\n"),
+    [...headers, `Content-Type: multipart/mixed; boundary="${mixed}"`].join("\r\n"),
     "",
-    `--${boundary}`,
-    'Content-Type: text/plain; charset="UTF-8"',
-    "Content-Transfer-Encoding: base64",
+    `--${mixed}`,
+    ...bodyHeaders,
     "",
-    b64(crlf(email.text)),
-    `--${boundary}`,
-    'Content-Type: text/html; charset="UTF-8"',
-    "Content-Transfer-Encoding: base64",
-    "",
-    b64(email.html),
-    `--${boundary}--`,
+    bodyContent,
+    ...files.flatMap((f) => [
+      `--${mixed}`,
+      `Content-Type: ${f.contentType}; name="${f.filename.replace(/[^\x20-\x7E]/g, "_")}"`,
+      `Content-Disposition: ${dispositionFor(f.filename)}`,
+      "Content-Transfer-Encoding: base64",
+      "",
+      wrap(f.data.toString("base64")),
+    ]),
+    `--${mixed}--`,
     "",
   ].join("\r\n");
+}
+
+/**
+ * The send request. Small messages go as JSON; with attachments, Gmail's
+ * upload endpoint, which takes the raw message (up to 35 MB) rather than a
+ * base64url copy of it inside JSON.
+ */
+export function sendRequest(raw: string, threadId: string | undefined): { url: string; headers: Record<string, string>; body: string | Buffer } {
+  if (raw.length < 4 * 1024 * 1024) {
+    return {
+      url: `${GMAIL_API}/messages/send`,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ raw: base64Url(raw), ...(threadId ? { threadId } : {}) }),
+    };
+  }
+  const b = `=_lhc_up_${randomBytes(12).toString("hex")}`;
+  return {
+    url: `${GMAIL_API.replace("/gmail/v1/", "/upload/gmail/v1/")}/messages/send?uploadType=multipart`,
+    headers: { "Content-Type": `multipart/related; boundary="${b}"` },
+    body: Buffer.from(
+      [
+        `--${b}`,
+        "Content-Type: application/json; charset=UTF-8",
+        "",
+        JSON.stringify(threadId ? { threadId } : {}),
+        `--${b}`,
+        "Content-Type: message/rfc822",
+        "",
+        raw,
+        `--${b}--`,
+        "",
+      ].join("\r\n"),
+      "utf8",
+    ),
+  };
 }
 
 /** Send one message as the connected Google account. */
@@ -158,13 +232,11 @@ export async function sendGmail(userId: number, email: OutgoingEmail): Promise<S
   }
 
   try {
-    const res = await fetch(`${GMAIL_API}/messages/send`, {
+    const req = sendRequest(buildMime(from, email), email.threadId);
+    const res = await fetch(req.url, {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        raw: base64Url(buildMime(from, email)),
-        ...(email.threadId ? { threadId: email.threadId } : {}),
-      }),
+      headers: { Authorization: `Bearer ${token}`, ...req.headers },
+      body: req.body,
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
