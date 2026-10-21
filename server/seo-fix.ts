@@ -339,6 +339,11 @@ function describePage(page: PageAnalysis, locked: string | null = null): string 
   lines.push(`Score ${page.score}/100. Missing: ${page.components.filter((c) => c.earned < c.max).map((c) => `${c.label} — ${c.detail}`).join("; ") || "nothing"}`);
   if (page.issues.length) lines.push(`Issues: ${page.issues.join("; ")}`);
   lines.push(`Editorial links in (${page.inboundLinks.length}): ${page.inboundLinks.join(", ") || "none"}`);
+  lines.push(`External sites linked: ${page.externalDomains?.join(", ") || "none"}`);
+  if (page.images?.featured) {
+    const f = page.images.featured;
+    lines.push(`Featured image alt text: ${f.alt ? `"${f.alt}"` : "(none)"}${f.source === "fallback" ? " — not set; the page falls back to the post title" : ""} · ${page.images.total} body image${page.images.total === 1 ? "" : "s"}, ${page.images.missingAlt} without alt text`);
+  }
   if (page.recommendedInboundFrom.length) {
     lines.push(`Pages that mention its keyword but don't link: ${page.recommendedInboundFrom.map((r) => r.path).join(", ")}`);
   }
@@ -541,6 +546,22 @@ Prefer differentiating when both pages earn meaningful impressions for different
   if (resolved.kind === "candidate") {
     parts.push(`These posts share a topic no cluster owns. Decide whether it deserves its own cluster. If yes: one set_cluster change creating it (clusterId "", a short label, pillar = the best existing page or the suggested one, head term, vocabulary words, members = the posts), edit_blog changes that link each post up to the pillar, differentiated targets for posts that overlap, and plannedTopics for missing angles. If a whole new pillar page is needed, draft it with create_blog_draft and set it as pillar using its future path /blog/<slug>. If it does not deserve a cluster, return no changes and explain why.`);
   }
+  const taskType = resolved.opportunity?.type;
+  if (taskType === "prune") {
+    parts.push(`This post earns next to nothing and is dead weight. Prefer removing it: add_redirect from it to the most relevant live page (the overlapping page named in the task if there is one, otherwise its cluster pillar), plus unpublish_blog. If it has useful material, carry that across first with edit_blog on the target. Only if the topic clearly deserves to rank, rewrite it instead — and say why in the rationale.`);
+  }
+  if (taskType === "orphan") {
+    parts.push(`No page links to this one from its body copy. Fix it with edit_blog link insertions on 2–3 related live posts (or a code_change for a code-owned page), each a natural sentence with descriptive anchor text. Do not change the orphan's own title or description.`);
+  }
+  if (taskType === "external_links") {
+    parts.push(`The page cites no outside sources. Add one or two links to authoritative, stable sources that back up a claim already on the page (City of Calgary, CREB®, RECA, CMHC, Bank of Canada, school boards). Use markdown [anchor](https://…) in blog bodies, or a code_change for a template. Never invent a statistic to have something to cite; never link to competing brokerages or listing portals.`);
+  }
+  if (taskType === "image_alt") {
+    parts.push(`Fix the image alt text. For a blog post, set heroImageAlt with edit_blog: one plain sentence (under 125 characters) describing what the featured image shows that names the focus keyword naturally — not a keyword list, and not just the title again. For a template, a code_change that builds descriptive alt text from the page's own name.${resolved.opportunity?.template ? " One template change fixes every page listed; the first is detailed below as the example." : ""}`);
+  }
+  if (taskType === "thin_content") {
+    parts.push(`The page is too thin to rank. Expand it with sections that genuinely answer what a Calgary buyer or seller searching its keyword wants to know, using only facts available on the site. Keep the existing copy; add to it.`);
+  }
   if (resolved.opportunity?.type === "content_gap") {
     parts.push(`No page targets this query yet. Propose one create_blog_draft that would genuinely answer it for a Calgary buyer or seller, plus edit_blog link insertions on 1–2 existing related posts pointing to the new slug (only if a natural sentence exists to link from).`);
   }
@@ -558,7 +579,9 @@ Prefer differentiating when both pages earn meaningful impressions for different
   // pillar gets the full treatment there; candidate plans carry their posts.
   const detailed = resolved.kind === "candidate"
     ? resolved.paths.slice(0, 6)
-    : resolved.paths;
+    : resolved.opportunity?.template
+      ? resolved.paths.slice(0, 1) // one template change; one page shows it
+      : resolved.paths;
   const pillars = new Set(report.clusters.map((c) => c.pillar));
   for (const path of detailed) {
     const page = report.pages.find((p) => p.path === path);
