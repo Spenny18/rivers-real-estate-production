@@ -22,7 +22,7 @@ import { metaForPath } from "./seo-inject";
 
 import { publicOrigin } from "./origin";
 import type { Ga4PageMetrics } from "./seo-stats";
-import { buildOpportunities, type Opportunity } from "./seo-opportunities";
+import { buildOpportunities, sortOpportunities, type Opportunity } from "./seo-opportunities";
 import { buildArchitecture, type ArchitectureReport } from "./seo-architecture";
 import { getStoredClusters } from "./seo-store";
 const ORIGIN = publicOrigin();
@@ -167,6 +167,9 @@ export interface CrawledPage {
   sisterDomainLinks: string[];
   schemaTypes: string[];
   canonical: string | null;
+  /** Images inside the page body, in document order — the first is the
+   *  featured/hero image. alt is null when the attribute is absent. */
+  images: Array<{ src: string; alt: string | null }>;
 }
 
 function stripTags(html: string): string {
@@ -257,6 +260,14 @@ function parsePage(path: string, status: number, rawHtml: string): CrawledPage {
 
   const schemaTypes = Array.from(html.matchAll(/"@type"\s*:\s*"([A-Za-z]+)"/g)).map((m) => m[1]);
 
+  // Body images only, so the logo and nav icons don't count against every page.
+  const images = Array.from(body.matchAll(/<img\b[^>]*>/gi)).map((m) => {
+    const tag = m[0];
+    const alt = tag.match(/(?:^|\s)alt\s*=\s*"([^"]*)"/i);
+    const src = tag.match(/(?:^|\s)src\s*=\s*"([^"]*)"/i);
+    return { src: src ? decodeEntities(src[1]) : "", alt: alt ? decodeEntities(alt[1]).trim() : null };
+  });
+
   return {
     path,
     status,
@@ -272,6 +283,7 @@ function parsePage(path: string, status: number, rawHtml: string): CrawledPage {
     externalLinks: Array.from(external),
     sisterDomainLinks: Array.from(sister),
     schemaTypes: Array.from(new Set(schemaTypes)),
+    images,
   };
 }
 
@@ -320,7 +332,7 @@ async function fetchRoute(base: string, path: string): Promise<CrawledPage> {
     return {
       path, status: 0, title: "", description: "", h1: "", headings: [], text: "",
       wordCount: 0, internalLinks: [], bodyLinks: [], externalLinks: [], sisterDomainLinks: [],
-      schemaTypes: [], canonical: null,
+      schemaTypes: [], canonical: null, images: [],
     };
   }
 }
@@ -488,6 +500,17 @@ export function containsKeyword(haystack: string, keyword: string): boolean {
   return true;
 }
 
+/** Looser than containsKeyword: every SUBJECT token of the keyword (generic
+ *  filler like "homes", "calgary", "for sale" removed) appears, in any order.
+ *  Right for short strings like alt text and URLs, which name the subject
+ *  ("aspen-woods") without repeating the whole phrase. */
+export function mentionsSubject(haystack: string, keyword: string): boolean {
+  const subject = subjectTokens(keyword);
+  if (!subject.length) return containsKeyword(haystack, keyword);
+  const hay = new Set(normalize(haystack).split(" "));
+  return subject.every((t) => hay.has(t));
+}
+
 /** Occurrences of the keyword's rarest token — a proxy for how often the page
  *  actually discusses the subject, tolerant of phrasing changes. */
 function keywordOccurrences(haystack: string, keyword: string): number {
@@ -551,12 +574,32 @@ export function clusterFor(path: string, page: CrawledPage, clusters: ClusterDef
 // Scoring
 // ---------------------------------------------------------------------------
 
+/** Score checks are grouped the way Rank Math groups its checklist, so the
+ *  breakdown reads familiarly: the basics first, then refinements, then links. */
+export type ScoreGroup = "basic" | "additional" | "links";
+
 export interface ScoreComponent {
   id: string;
   label: string;
   earned: number;
   max: number;
   detail: string;
+  group: ScoreGroup;
+}
+
+export interface PageImages {
+  total: number;
+  /** Body images with no alt attribute or an empty one. */
+  missingAlt: number;
+  /** The first body image — the hero / featured image. */
+  featured: {
+    src: string;
+    alt: string;
+    hasKeyword: boolean;
+    /** Blog posts only: "set" when hero_image_alt is filled in, "fallback"
+     *  when the page is showing the post title in its place. */
+    source?: "set" | "fallback";
+  } | null;
 }
 
 export interface PageAnalysis {
@@ -585,6 +628,12 @@ export interface PageAnalysis {
   suggestedKeyword: string | null;
   suggestionReason: string | null;
   gsc?: { clicks: number; impressions: number; position: number; topQuery: string | null };
+  /** Where the page actually ranks for its focus keyword (the best-matching
+   *  Search Console query), so the on-page score sits next to real results. */
+  keywordRank: { query: string; position: number; impressions: number; clicks: number } | null;
+  images: PageImages;
+  /** Blog posts: when it went live, so a brand-new post isn't called dead weight. */
+  publishedAt?: string;
   ga4?: Ga4PageMetrics;
   issues: string[];
 }
@@ -782,43 +831,102 @@ export async function buildSeoReport(opts: {
       .map((h) => h.replace(/\/$/, "") || "/")
       .filter((h) => h !== page.path && !isChrome(h));
 
-    // -- components --
+    // -- images: the featured (first body) image and alt-text coverage --
+    const firstImg = page.images[0] ?? null;
+    let heroAltSource: "set" | "fallback" | undefined;
+    let publishedAt: string | undefined;
+    if (page.path.startsWith("/blog/")) {
+      try {
+        const post = storage.getBlogBySlug(page.path.slice("/blog/".length));
+        // The page renders the post title when hero_image_alt is empty.
+        if (post && firstImg) heroAltSource = post.heroImageAlt?.trim() ? "set" : "fallback";
+        if (post) publishedAt = post.publishedAt;
+      } catch { /* storage unavailable — leave unknown */ }
+    }
+    const images: PageImages = {
+      total: page.images.length,
+      missingAlt: page.images.filter((i) => !i.alt).length,
+      featured: firstImg
+        ? {
+            src: firstImg.src,
+            alt: firstImg.alt ?? "",
+            hasKeyword: Boolean(nk && firstImg.alt && mentionsSubject(firstImg.alt, kw)),
+            ...(heroAltSource ? { source: heroAltSource } : {}),
+          }
+        : null,
+    };
+
+    // -- components: a Rank Math-style checklist, 100 points in all --
     const C: ScoreComponent[] = [];
     const has = (h: string) => Boolean(nk) && containsKeyword(h, kw);
-    const push = (id: string, label: string, ok: boolean, max: number, detail: string) =>
-      C.push({ id, label, earned: ok ? max : 0, max, detail });
+    const push = (group: ScoreGroup, id: string, label: string, earned: number | boolean, max: number, detail: string) =>
+      C.push({ id, label, group, earned: earned === true ? max : earned === false ? 0 : Math.round(earned), max, detail });
 
-    push("title", "Focus keyword in title", has(hayTitle), 15,
+    // Basic SEO
+    push("basic", "title", "Focus keyword in title", has(hayTitle), 12,
       has(hayTitle) ? "Present" : `"${kw || "—"}" not found in <title>`);
-    push("desc", "Focus keyword in meta description", has(hayDesc), 10,
+    // Near the front means within the first half of the title, brand suffix aside.
+    const titleHead = page.title.split(/\s+[|–—-]\s+/)[0];
+    const titleFront = titleHead.split(/\s+/).slice(0, Math.max(3, Math.ceil(titleHead.split(/\s+/).length / 2))).join(" ");
+    const atFront = Boolean(nk) && mentionsSubject(titleFront, kw);
+    push("basic", "titleStart", "Focus keyword near the start of the title", atFront, 3,
+      atFront ? "Leads the title" : "Move it toward the front — searchers scan the first few words");
+    push("basic", "desc", "Focus keyword in meta description", has(hayDesc), 8,
       has(hayDesc) ? "Present" : "Not found in meta description");
-    push("h1", "Focus keyword in H1", has(hayH1), 10,
+    push("basic", "h1", "Focus keyword in H1", has(hayH1), 8,
       has(hayH1) ? "Present" : `H1 reads "${page.h1.slice(0, 60) || "—"}"`);
+    const slug = page.path.split("/").filter(Boolean).join(" ").replace(/-/g, " ");
+    const inUrl = page.path === "/" || (Boolean(nk) && mentionsSubject(slug, kw));
+    push("basic", "url", "Focus keyword in URL", inUrl, 5,
+      page.path === "/" ? "Homepage — not applicable" : inUrl ? "Present" : `${page.path} doesn't name the subject`);
+    const words = normalize(page.text).split(" ");
+    const intro = words.slice(0, Math.max(60, Math.ceil(words.length * 0.1))).join(" ");
+    const inIntro = Boolean(nk) && containsKeyword(intro, kw);
+    push("basic", "intro", "Focus keyword in the introduction", inIntro, 5,
+      inIntro ? "Used in the first 10% of the copy" : "Not used in the first 10% of the copy");
     const bodyHits = nk ? keywordOccurrences(hayBody, kw) : 0;
-    push("body", "Focus keyword used in body", bodyHits >= 2, 10,
+    push("basic", "body", "Focus keyword used in body", bodyHits >= 2, 6,
       `${bodyHits} occurrence${bodyHits === 1 ? "" : "s"} in body copy`);
+    const wc = page.wordCount;
+    push("basic", "length", "Content length", wc >= 600 ? 6 : wc >= 300 ? 3 : 0, 6,
+      `${wc.toLocaleString()} words (target 600+)`);
 
+    // Additional
+    const inSub = Boolean(nk) && page.headings.some((h) => mentionsSubject(h, kw));
+    push("additional", "subheading", "Focus keyword in a subheading", inSub, 5,
+      inSub ? "Used in an H2/H3" : page.headings.length ? "No H2/H3 mentions it" : "No H2/H3 subheadings");
+    const altHit = Boolean(nk) && page.images.some((i) => i.alt && mentionsSubject(i.alt, kw));
+    push("additional", "imageAlt", "Focus keyword in image alt text", altHit, 5,
+      !page.images.length ? "No images in the page body"
+        : altHit ? "An image's alt text names it"
+        : `None of ${page.images.length} image${page.images.length === 1 ? "" : "s"} name it${images.missingAlt ? ` · ${images.missingAlt} missing alt` : ""}`);
+    const kwLen = nk ? nk.split(" ").filter((w) => !STOP.has(w)).length : 0;
+    const density = wc && kwLen ? (bodyHits * kwLen / wc) * 100 : 0;
+    push("additional", "density", "Keyword density", density >= 0.5 && density <= 2.5, 4,
+      `${density.toFixed(1)}% (target 0.5–2.5%)`);
     const tl = page.title.length;
-    push("titleLen", "Title length", tl >= 35 && tl <= 65, 5, `${tl} chars (target 35–65)`);
+    push("additional", "titleLen", "Title length", tl >= 35 && tl <= 65, 3, `${tl} chars (target 35–65)`);
     const dl = page.description.length;
-    push("descLen", "Description length", dl >= 110 && dl <= 165, 5, `${dl} chars (target 110–165)`);
-
-    push("unique", "Focus keyword is unowned elsewhere", conflicts.length === 0, 20,
+    push("additional", "descLen", "Description length", dl >= 110 && dl <= 165, 3, `${dl} chars (target 110–165)`);
+    push("additional", "unique", "Focus keyword is unowned elsewhere", conflicts.length === 0, 12,
       conflicts.length === 0
         ? "No other page targets this"
         : `Contested by ${conflicts.length} page${conflicts.length === 1 ? "" : "s"}`);
-
-    const inCount = inboundEditorial.length;
-    push("inbound", "Editorial inbound links", inCount >= 3, 15,
-      `${inCount} contextual link${inCount === 1 ? "" : "s"} in (target ≥3)`);
-    push("outbound", "Editorial outbound links", outbound.length >= 2, 5,
-      `${outbound.length} contextual link${outbound.length === 1 ? "" : "s"} out (target ≥2)`);
-
     const entity = countVocab(hayBody, NOUNS_IDENTITY) + countVocab(hayBody, NOUNS_PLACE)
       + countVocab(hayBody, VERBS_SERVICE) + countVocab(hayBody, MODIFIERS);
     const per100 = page.wordCount ? (entity / page.wordCount) * 100 : 0;
-    push("entities", "Noun / verb / modifier density", per100 >= 4, 5,
+    push("additional", "entities", "Noun / verb / modifier density", per100 >= 4, 3,
       `${entity} entity terms · ${per100.toFixed(1)} per 100 words (target ≥4)`);
+
+    // Links
+    const inCount = inboundEditorial.length;
+    push("links", "inbound", "Editorial inbound links", inCount >= 3, 7,
+      `${inCount} contextual link${inCount === 1 ? "" : "s"} in (target ≥3)`);
+    push("links", "outbound", "Editorial outbound links", outbound.length >= 2, 2,
+      `${outbound.length} contextual link${outbound.length === 1 ? "" : "s"} out (target ≥2)`);
+    const ext = page.externalLinks.length;
+    push("links", "external", "External links to sources", ext >= 1, 3,
+      ext ? `Links out to ${ext} site${ext === 1 ? "" : "s"}` : "No outbound citations");
 
     const score = C.reduce((s, c) => s + c.earned, 0);
 
@@ -884,6 +992,16 @@ export async function buildSeoReport(opts: {
       suggestionReason = `Google already ranks this page for "${bestQuery.query}" (${bestQuery.impressions} impressions, pos ${bestQuery.position.toFixed(1)}) rather than the keyword set`;
     }
 
+    // -- where it ranks for its own keyword --
+    const kwRow = nk
+      ? rows
+          .filter((r) => containsKeyword(r.query, kw) || similarity(r.query, kw) >= 0.85)
+          .sort((a, b) => b.impressions - a.impressions)[0]
+      : undefined;
+    const keywordRank = kwRow
+      ? { query: kwRow.query, position: Math.round(kwRow.position * 10) / 10, impressions: kwRow.impressions, clicks: kwRow.clicks }
+      : null;
+
     // -- issues --
     const issues: string[] = [];
     if (page.status !== 200) issues.push(`Returns HTTP ${page.status}`);
@@ -901,6 +1019,9 @@ export async function buildSeoReport(opts: {
       issues.push("No BreadcrumbList schema");
     }
     if (page.wordCount < 300 && page.status === 200) issues.push(`Thin — ${page.wordCount} words`);
+    if (images.missingAlt) {
+      issues.push(`${images.missingAlt} image${images.missingAlt === 1 ? " has" : "s have"} no alt text`);
+    }
 
     return {
       path: page.path,
@@ -935,6 +1056,9 @@ export async function buildSeoReport(opts: {
             topQuery: bestQuery ? bestQuery.query : null,
           }
         : undefined,
+      keywordRank,
+      images,
+      ...(publishedAt ? { publishedAt } : {}),
       ga4: ga4Pages.get(page.path),
       issues,
     };
@@ -959,8 +1083,7 @@ export async function buildSeoReport(opts: {
     ga4: ga4Pages,
     days: opts.gscDays ?? 90,
   });
-  const opportunities = [...pageOpportunities, ...architecture.opportunities]
-    .sort((a, b) => b.priority - a.priority);
+  const opportunities = sortOpportunities([...pageOpportunities, ...architecture.opportunities]);
 
   // The fix generator needs the raw query rows and the link graph for the
   // pages it is asked to work on; the report itself only carries rollups.

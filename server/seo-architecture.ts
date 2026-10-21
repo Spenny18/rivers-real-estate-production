@@ -20,8 +20,13 @@ import {
   EFFORT_COST,
   INTENT_WEIGHT,
   QUICK_WIN_MIN_GAIN,
+  categoryOf,
   expectedCtr,
+  gainOf,
+  noEstimate,
+  rollupEstimate,
   type Effort,
+  type GainEstimate,
   type Opportunity,
 } from "./seo-opportunities";
 
@@ -147,11 +152,11 @@ export function buildArchitecture(opts: {
   const opportunities: Opportunity[] = [];
 
   const push = (
-    o: Omit<Opportunity, "priority" | "quickWin" | "type">,
+    o: Omit<Opportunity, "priority" | "quickWin" | "type" | "category" | "estClicksGain">,
     intent: string,
     fallbackWeight: number,
   ) => {
-    const gain = round1(Math.max(0, o.estClicksGain));
+    const gain = gainOf(o.estimate);
     const g = o.paths[0] ? ga4.get(o.paths[0]) : undefined;
     const mult = g && g.sessions
       ? 1 + Math.min(1, (g.keyEvents / g.sessions) * 10) + (g.engagementRate >= 0.6 ? 0.2 : 0)
@@ -160,6 +165,7 @@ export function buildArchitecture(opts: {
     opportunities.push({
       ...o,
       type: "architecture",
+      category: categoryOf("architecture", o.subtype),
       estClicksGain: gain,
       priority: Math.round(priority * 10000) / 10000,
       quickWin: o.effort === "quick" && gain >= QUICK_WIN_MIN_GAIN,
@@ -172,6 +178,23 @@ export function buildArchitecture(opts: {
     return { impressions, clicks, ctr: impressions ? clicks / impressions : 0, position: impressions ? round1(position) : null };
   };
   const codeOwned = (path: string) => !/^\/blog\/[^/]+$/.test(path);
+  /** A rolled-up estimate over every query of a set of pages: the fix is
+   *  assumed to add `points` of click-through to their combined traffic. */
+  const pagesEstimate = (
+    paths: string[],
+    label: string,
+    points: number,
+    method: string,
+    factor = 1,
+    factorReason: string | null = null,
+  ): GainEstimate => {
+    const t = totals(paths.flatMap((p) => rowsByPath.get(p) ?? []));
+    if (!t.impressions) return noEstimate(`${method} These pages earn no Search Console impressions yet, so the estimate is 0.`);
+    return rollupEstimate({
+      label, impressions: t.impressions, clicks: t.clicks, position: t.position, perMonth,
+      ctrTarget: (now) => now + points, method, factor, factorReason,
+    });
+  };
 
   for (const c of clusters) {
     const members = pages.filter((p) => p.cluster === c.id);
@@ -281,7 +304,6 @@ export function buildArchitecture(opts: {
 
     // ---- architecture opportunities for this cluster ----
     if (c.id === "journal" || c.id === "trust") continue; // not hub-shaped by design
-    const childImpr = children.reduce((s, ch) => s + impressionsOf(ch), 0);
     if (children.length >= 2 && missingDownLinks.length) {
       const share = missingDownLinks.length / children.length;
       push({
@@ -295,7 +317,14 @@ export function buildArchitecture(opts: {
         action: "Add a section or links on the pillar that introduce each missing child page by its sub-topic.",
         queries: [],
         metrics: { ...totals(rowsByPath.get(c.pillar) ?? []) },
-        estClicksGain: childImpr * perMonth * 0.004 * share,
+        estimate: pagesEstimate(
+          children,
+          `Searches for the ${children.length} child pages`,
+          0.004,
+          "Body links from the pillar pass authority down to its children — assumed to add 0.4 percentage points of click-through across their searches.",
+          round1(share),
+          `×${round1(share)}: ${missingDownLinks.length} of ${children.length} child pages are missing the link, so only their share of the lift is counted.`,
+        ),
         effort: codeOwned(c.pillar) ? "medium" : "quick",
         basis: opts.gscRows.length ? "search-console" : "on-page",
       }, c.intent, share);
@@ -314,7 +343,14 @@ export function buildArchitecture(opts: {
         action: `Add one contextual link to ${c.pillar} in the body of each page that's missing it.`,
         queries: [],
         metrics: { ...totals(rowsByPath.get(c.pillar) ?? []) },
-        estClicksGain: impressionsOf(c.pillar) * perMonth * 0.01 * share,
+        estimate: pagesEstimate(
+          [c.pillar],
+          `Searches for the pillar ${c.pillar}`,
+          0.01,
+          "Children linking up with head-term anchor text tell Google which page owns the topic — assumed to add 1 percentage point of click-through to the pillar's searches.",
+          round1(share),
+          `×${round1(share)}: ${missingUpLinks.length} of ${children.length} child pages are missing the link, so only their share of the lift is counted.`,
+        ),
         effort: blogKids === missingUpLinks.length ? "quick" : "medium",
         basis: opts.gscRows.length ? "search-console" : "on-page",
       }, c.intent, share * 0.8);
@@ -335,7 +371,17 @@ export function buildArchitecture(opts: {
           ctr: r.impressions ? r.clicks / r.impressions : 0, position: round1(r.position), path: r.path,
         })),
         metrics: t,
-        estClicksGain: t.impressions * perMonth * Math.max(0, expectedCtr(Math.max(1, (headTerm.ownerPosition ?? 10) - 2)) - t.ctr) * 0.4,
+        estimate: rollupEstimate({
+          label: `Head-term searches (“${c.headKeyword}”)`,
+          impressions: t.impressions,
+          clicks: t.clicks,
+          position: t.position,
+          perMonth,
+          ctrTarget: () => expectedCtr(Math.max(1, (headTerm.ownerPosition ?? 10) - 2)),
+          method: `With one page clearly owning the head term, it typically ranks about 2 positions above the current best (#${headTerm.ownerPosition ?? 10}).`,
+          factor: 0.4,
+          factorReason: "×0.4: realigning ownership is slow and only part of the lift is counted.",
+        }),
         effort: "medium",
         basis: "search-console",
       }, c.intent, 1);
@@ -360,7 +406,12 @@ export function buildArchitecture(opts: {
       action: "Link it from its cluster pillar or another well-linked page.",
       queries: [],
       metrics: totals(rowsByPath.get(p.path) ?? []),
-      estClicksGain: impr * perMonth * 0.005,
+      estimate: pagesEstimate(
+        [p.path],
+        `Searches for ${p.path}`,
+        0.005,
+        "Pages within 3 clicks of the homepage get crawled more and inherit more authority — assumed to add half a percentage point of click-through.",
+      ),
       effort: "quick",
       basis: "search-console",
     }, p.intent, 0.5);
@@ -438,7 +489,12 @@ export function buildArchitecture(opts: {
       action: "Adopt it as a cluster with one pillar, then link the posts to it and give each a distinct angle.",
       queries: [],
       metrics: totals(cand.pages.flatMap((p) => rowsByPath.get(p) ?? [])),
-      estClicksGain: cand.impressions * perMonth * 0.01,
+      estimate: pagesEstimate(
+        cand.pages,
+        `Searches for the ${cand.pages.length} posts`,
+        0.01,
+        "Organising the posts under one pillar stops them competing with each other — assumed to add 1 percentage point of click-through across their searches.",
+      ),
       effort: "heavy",
       basis: cand.impressions ? "search-console" : "on-page",
     }, "informational", Math.min(1, cand.pages.length / 6));

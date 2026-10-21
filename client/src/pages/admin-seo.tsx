@@ -8,7 +8,7 @@ import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   RefreshCw, Search, AlertTriangle, Link2, Unlink, Target, ExternalLink, Save, X, UploadCloud,
-  ImageDown, Sparkles,
+  ImageDown, Sparkles, CheckCircle2, XCircle, MinusCircle,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
@@ -22,7 +22,11 @@ import { FixHistory, HouseStyleCard } from "@/components/seo/fix-history";
 import { ArchitectureSection } from "@/components/seo/architecture";
 import type { ClusterAudit, ClusterCandidate, FixSubject, Opportunity } from "@/components/seo/types";
 
-interface ScoreComponent { id: string; label: string; earned: number; max: number; detail: string }
+interface ScoreComponent {
+  id: string; label: string; earned: number; max: number; detail: string;
+  /** Absent on reports cached before the checks were grouped. */
+  group?: "basic" | "additional" | "links";
+}
 interface PageAnalysis {
   path: string; status: number; title: string; description: string; h1: string;
   wordCount: number; cluster: string; clusterLabel: string; intent: string;
@@ -34,6 +38,11 @@ interface PageAnalysis {
   recommendedInboundFrom: { path: string; reason: string }[];
   suggestedKeyword: string | null; suggestionReason: string | null;
   gsc?: { clicks: number; impressions: number; position: number; topQuery: string | null };
+  keywordRank?: { query: string; position: number; impressions: number; clicks: number } | null;
+  images?: {
+    total: number; missingAlt: number;
+    featured: { src: string; alt: string; hasKeyword: boolean; source?: "set" | "fallback" } | null;
+  };
   ga4?: { pageviews: number; sessions: number; engagementRate: number; keyEvents: number; organicLandings: number };
   issues: string[];
 }
@@ -467,15 +476,60 @@ function Stat({ label, value, tone }: { label: string; value: string | number; t
   );
 }
 
-function ScoreBar({ score }: { score: number }) {
-  const tone = score >= 75 ? "bg-emerald-500" : score >= 50 ? "bg-amber-500" : "bg-rose-500";
+const SCORE_TONE = (score: number) =>
+  score >= 75
+    ? { text: "text-emerald-600 dark:text-emerald-400", stroke: "stroke-emerald-500", pill: GRADE_STYLES.strong }
+    : score >= 50
+      ? { text: "text-amber-600 dark:text-amber-400", stroke: "stroke-amber-500", pill: GRADE_STYLES.fair }
+      : { text: "text-rose-600 dark:text-rose-400", stroke: "stroke-rose-500", pill: GRADE_STYLES.weak };
+
+/** The score as a Rank Math-style pill: "72 / 100", coloured by band. */
+function ScorePill({ score }: { score: number }) {
   return (
-    <div className="flex items-center gap-2 min-w-[92px]">
-      <div className="h-1.5 flex-1 bg-secondary overflow-hidden rounded-sm">
-        <div className={`h-full ${tone}`} style={{ width: `${score}%` }} />
+    <span className={`inline-flex items-baseline gap-0.5 rounded-full border px-2 py-0.5 text-xs font-semibold tabular-nums ${SCORE_TONE(score).pill}`}
+      data-testid="score-pill">
+      {score}<span className="text-[9px] font-normal opacity-70">/100</span>
+    </span>
+  );
+}
+
+/** The drawer's score ring. */
+function ScoreRing({ score }: { score: number }) {
+  const r = 26;
+  const c = 2 * Math.PI * r;
+  const tone = SCORE_TONE(score);
+  return (
+    <div className="relative w-16 h-16 shrink-0" aria-label={`SEO score ${score} out of 100`}>
+      <svg viewBox="0 0 64 64" className="w-16 h-16 -rotate-90">
+        <circle cx="32" cy="32" r={r} fill="none" strokeWidth="6" className="stroke-secondary" />
+        <circle cx="32" cy="32" r={r} fill="none" strokeWidth="6" strokeLinecap="round"
+          className={tone.stroke} strokeDasharray={c} strokeDashoffset={c * (1 - score / 100)} />
+      </svg>
+      <div className={`absolute inset-0 flex flex-col items-center justify-center ${tone.text}`}>
+        <span className="font-serif text-xl leading-none tabular-nums">{score}</span>
+        <span className="text-[8px] uppercase tracking-wider text-muted-foreground">/ 100</span>
       </div>
-      <span className="tabular-nums text-xs font-semibold w-7 text-right">{score}</span>
     </div>
+  );
+}
+
+const CHECK_GROUPS: Array<{ id: NonNullable<ScoreComponent["group"]>; label: string }> = [
+  { id: "basic", label: "Basic SEO" },
+  { id: "additional", label: "Additional" },
+  { id: "links", label: "Links" },
+];
+
+/** Where the page ranks for its own keyword — the result the score is for. */
+function RankCell({ p, gscOk }: { p: PageAnalysis; gscOk: boolean }) {
+  if (!gscOk) return <span className="text-xs text-muted-foreground">—</span>;
+  if (!p.keywordRank) return <span className="text-xs text-muted-foreground">not ranking</span>;
+  const pos = p.keywordRank.position;
+  const tone = pos <= 3 ? "text-emerald-600 dark:text-emerald-400" : pos <= 10 ? "text-foreground" : "text-muted-foreground";
+  return (
+    <span className={`text-xs tabular-nums font-semibold ${tone}`}
+      title={`“${p.keywordRank.query}” · ${p.keywordRank.impressions.toLocaleString()} impressions · ${p.keywordRank.clicks} clicks`}>
+      #{pos}
+    </span>
   );
 }
 
@@ -485,6 +539,7 @@ export default function AdminSeoPage() {
   const [q, setQ] = useState("");
   const [clusterFilter, setClusterFilter] = useState<string>("all");
   const [onlyIssues, setOnlyIssues] = useState(false);
+  const [pageKind, setPageKind] = useState<"all" | "pages" | "posts">("all");
   const [open, setOpen] = useState<string | null>(null);
   const [draftKeyword, setDraftKeyword] = useState("");
   const [fixId, setFixId] = useState<number | null>(null);
@@ -564,6 +619,7 @@ export default function AdminSeoPage() {
     let list = data?.pages ?? [];
     if (clusterFilter !== "all") list = list.filter((p) => p.cluster === clusterFilter);
     if (onlyIssues) list = list.filter((p) => p.issues.length || p.conflicts.length);
+    if (pageKind !== "all") list = list.filter((p) => p.path.startsWith("/blog/") === (pageKind === "posts"));
     const needle = q.trim().toLowerCase();
     if (needle) {
       list = list.filter((p) =>
@@ -572,7 +628,7 @@ export default function AdminSeoPage() {
         p.title.toLowerCase().includes(needle));
     }
     return list;
-  }, [data, q, clusterFilter, onlyIssues]);
+  }, [data, q, clusterFilter, onlyIssues, pageKind]);
 
   const conflictPairs = useMemo(() => {
     const seen = new Set<string>();
@@ -724,7 +780,22 @@ export default function AdminSeoPage() {
             {/* Page table */}
             <section>
               <div className="flex flex-wrap items-center gap-3 mb-4">
-                <h2 className="font-serif text-2xl flex-1">Pages</h2>
+                <div className="flex-1 min-w-[220px]">
+                  <h2 className="font-serif text-2xl">Pages &amp; posts</h2>
+                  <p className="text-xs text-muted-foreground mt-0.5 max-w-xl">
+                    Every page has one focus keyword and a 0–100 score from a Rank Math-style checklist.
+                    {data.gsc.ok && " “Google rank” is where it actually ranks for that keyword — the score says how well the page is built for it, the rank says whether that's working."}
+                  </p>
+                </div>
+                <div className="flex border border-border rounded-sm overflow-hidden" role="group" aria-label="Page type">
+                  {(["all", "pages", "posts"] as const).map((k) => (
+                    <button key={k} onClick={() => setPageKind(k)}
+                      className={`h-9 px-3 text-xs capitalize ${pageKind === k ? "bg-foreground text-background" : "hover:bg-secondary"}`}
+                      data-testid={`button-kind-${k}`}>
+                      {k === "all" ? "All" : k}
+                    </button>
+                  ))}
+                </div>
                 <div className="relative">
                   <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                   <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by path, keyword, title"
@@ -746,10 +817,10 @@ export default function AdminSeoPage() {
                   <thead>
                     <tr className="bg-secondary/60 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
                       <th className="text-left font-semibold px-4 py-2.5">Page</th>
-                      <th className="text-left font-semibold px-4 py-2.5">Focus keyword</th>
+                      <th className="text-left font-semibold px-4 py-2.5">Focus keyword · score</th>
+                      <th className="text-right font-semibold px-4 py-2.5">Google rank</th>
                       <th className="text-left font-semibold px-4 py-2.5">Cluster</th>
                       <th className="text-right font-semibold px-4 py-2.5">Links in</th>
-                      <th className="text-left font-semibold px-4 py-2.5">Score</th>
                       <th className="text-left font-semibold px-4 py-2.5">Flags</th>
                     </tr>
                   </thead>
@@ -763,16 +834,19 @@ export default function AdminSeoPage() {
                           <div className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{p.title || "— no title —"}</div>
                         </td>
                         <td className="px-4 py-3">
-                          <span className="text-xs">{p.focusKeyword || <em className="text-muted-foreground">none</em>}</span>
-                          {p.focusSource === "override" && (
-                            <span className="ml-2 text-[9px] uppercase tracking-wider bg-secondary px-1.5 py-0.5">set</span>
-                          )}
+                          <div className="flex items-center gap-2">
+                            <ScorePill score={p.score} />
+                            <span className="text-xs">{p.focusKeyword || <em className="text-muted-foreground">none</em>}</span>
+                            {p.focusSource === "override" && (
+                              <span className="text-[9px] uppercase tracking-wider bg-secondary px-1.5 py-0.5">set</span>
+                            )}
+                          </div>
                         </td>
+                        <td className="px-4 py-3 text-right"><RankCell p={p} gscOk={data.gsc.ok} /></td>
                         <td className="px-4 py-3 text-xs text-muted-foreground">
                           {p.clusterLabel}{p.isPillar && <span className="ml-1 text-foreground font-semibold">· pillar</span>}
                         </td>
                         <td className="px-4 py-3 text-right tabular-nums text-xs">{p.inboundLinks.length}</td>
-                        <td className="px-4 py-3"><ScoreBar score={p.score} /></td>
                         <td className="px-4 py-3">
                           <div className="flex flex-wrap gap-1">
                             {p.conflicts.length > 0 && (
@@ -780,6 +854,13 @@ export default function AdminSeoPage() {
                             )}
                             {p.inboundLinks.length === 0 && (
                               <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 border ${GRADE_STYLES.fair}`}>orphan</span>
+                            )}
+                            {p.status === 200 && p.externalDomains.length === 0 && (
+                              <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 border border-border text-muted-foreground">no ext links</span>
+                            )}
+                            {p.images && (p.images.missingAlt > 0 || p.images.featured?.source === "fallback" ||
+                              (p.images.featured && !p.images.featured.hasKeyword)) && (
+                              <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 border border-border text-muted-foreground">alt text</span>
                             )}
                             {p.sisterDomainLinks.length > 0 && (
                               <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 border border-border text-muted-foreground">sister links</span>
@@ -870,24 +951,86 @@ export default function AdminSeoPage() {
                   )}
                 </div>
 
-                {/* Score breakdown */}
+                {/* Score breakdown — grouped like Rank Math's checklist */}
                 <div>
-                  <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground font-semibold mb-2">
-                    Score {p.score}/100
-                  </div>
-                  <div className="border border-border divide-y divide-border">
-                    {p.components.map((c) => (
-                      <div key={c.id} className="flex items-start gap-3 px-3 py-2">
-                        <div className={`mt-1 w-1.5 h-1.5 rounded-full shrink-0 ${c.earned === c.max ? "bg-emerald-500" : "bg-rose-500"}`} />
-                        <div className="flex-1 min-w-0">
-                          <div className="text-xs font-medium">{c.label}</div>
-                          <div className="text-xs text-muted-foreground">{c.detail}</div>
-                        </div>
-                        <div className="tabular-nums text-xs text-muted-foreground">{c.earned}/{c.max}</div>
+                  <div className="flex items-center gap-4 mb-3">
+                    <ScoreRing score={p.score} />
+                    <div className="min-w-0">
+                      <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground font-semibold">SEO score for</div>
+                      <div className="text-sm font-semibold break-words">“{p.focusKeyword || "no keyword"}”</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        {p.components.filter((c) => c.earned === c.max).length} of {p.components.length} checks passed
+                        {data.gsc.ok && (
+                          p.keywordRank
+                            ? <> · ranks <b className="text-foreground">#{p.keywordRank.position}</b> for “{p.keywordRank.query}” ({p.keywordRank.impressions.toLocaleString()} impr, {p.keywordRank.clicks} clicks)</>
+                            : <> · not ranking for it in Search Console yet</>
+                        )}
                       </div>
-                    ))}
+                    </div>
+                  </div>
+                  <div className="space-y-3">
+                    {(p.components.some((c) => c.group)
+                      ? CHECK_GROUPS.map((g) => ({ ...g, items: p.components.filter((c) => c.group === g.id) }))
+                      : [{ id: "basic" as const, label: "Checks", items: p.components }]
+                    ).filter((g) => g.items.length).map((g) => {
+                      const earned = g.items.reduce((s, c) => s + c.earned, 0);
+                      const max = g.items.reduce((s, c) => s + c.max, 0);
+                      const failing = g.items.filter((c) => c.earned < c.max).length;
+                      return (
+                        <div key={g.id} className="border border-border">
+                          <div className="flex items-center justify-between px-3 py-2 bg-secondary/50">
+                            <span className="text-[10px] uppercase tracking-[0.14em] font-semibold">{g.label}</span>
+                            <span className={`text-[10px] tabular-nums ${failing ? "text-rose-600 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+                              {failing ? `${failing} to fix` : "All good"} · {earned}/{max} pts
+                            </span>
+                          </div>
+                          <div className="divide-y divide-border">
+                            {g.items.map((c) => {
+                              const Icon = c.earned === c.max ? CheckCircle2 : c.earned > 0 ? MinusCircle : XCircle;
+                              const tone = c.earned === c.max ? "text-emerald-500" : c.earned > 0 ? "text-amber-500" : "text-rose-500";
+                              return (
+                                <div key={c.id} className="flex items-start gap-2.5 px-3 py-2">
+                                  <Icon className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${tone}`} />
+                                  <div className="flex-1 min-w-0">
+                                    <div className="text-xs font-medium">{c.label}</div>
+                                    <div className="text-xs text-muted-foreground">{c.detail}</div>
+                                  </div>
+                                  <div className="tabular-nums text-xs text-muted-foreground">{c.earned}/{c.max}</div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
+
+                {/* Images */}
+                {p.images && p.images.total > 0 && (
+                  <div>
+                    <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground font-semibold mb-2 flex items-center gap-1.5">
+                      <ImageDown className="w-3 h-3" /> Images ({p.images.total})
+                    </div>
+                    {p.images.featured && (
+                      <div className="text-xs">
+                        <span className="text-muted-foreground">Featured image alt: </span>
+                        {p.images.featured.alt ? `“${p.images.featured.alt}”` : <em>none</em>}
+                        {p.images.featured.source === "fallback" && (
+                          <span className="text-amber-600 dark:text-amber-400"> — not set, so the post title is used</span>
+                        )}
+                        {p.images.featured.alt && p.focusKeyword && !p.images.featured.hasKeyword && p.images.featured.source !== "fallback" && (
+                          <span className="text-amber-600 dark:text-amber-400"> — doesn't name the keyword</span>
+                        )}
+                      </div>
+                    )}
+                    {p.images.missingAlt > 0 && (
+                      <div className="text-xs text-rose-600 dark:text-rose-400 mt-1">
+                        {p.images.missingAlt} image{p.images.missingAlt === 1 ? " has" : "s have"} no alt text
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Search Console */}
                 {p.ga4 && (

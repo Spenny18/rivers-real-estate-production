@@ -7,6 +7,11 @@ export type OpportunityType =
   | "keyword_mismatch"
   | "cannibalization"
   | "internal_links"
+  | "orphan"
+  | "prune"
+  | "external_links"
+  | "image_alt"
+  | "thin_content"
   | "content_gap"
   | "on_page"
   | "architecture";
@@ -20,9 +25,43 @@ export interface OpportunityQuery {
   path?: string;
 }
 
+export type TaskCategory =
+  | "delete_merge"
+  | "orphans"
+  | "internal_links"
+  | "external_links"
+  | "image_alt"
+  | "titles_meta"
+  | "content"
+  | "structure";
+
+export interface GainLine {
+  label: string;
+  path?: string;
+  position: number | null;
+  monthlyImpressions: number;
+  ctrNow: number;
+  ctrTarget: number;
+  clicks: number;
+}
+
+/** How estClicksGain was reached: subtotal of the lines × factor. */
+export interface GainEstimate {
+  method: string;
+  lines: GainLine[];
+  otherLines: number;
+  otherClicks: number;
+  subtotal: number;
+  factor: number;
+  factorReason: string | null;
+}
+
 export interface Opportunity {
   id: string;
   type: OpportunityType;
+  /** Absent on reports cached before categories existed. */
+  category?: TaskCategory;
+  template?: string;
   paths: string[];
   query: string | null;
   subtype?: "pillar_links" | "uplinks" | "pillar_not_owner" | "cluster_candidate" | "deep_page";
@@ -42,6 +81,7 @@ export interface Opportunity {
     organicLandings?: number;
   };
   estClicksGain: number;
+  estimate?: GainEstimate;
   effort: "quick" | "medium" | "heavy";
   priority: number;
   quickWin: boolean;
@@ -101,10 +141,45 @@ export const OPPORTUNITY_LABELS: Record<OpportunityType, string> = {
   keyword_mismatch: "Keyword mismatch",
   cannibalization: "Cannibalization",
   internal_links: "Internal links",
+  orphan: "Orphan page",
+  prune: "Dead weight",
+  external_links: "External links",
+  image_alt: "Image alt text",
+  thin_content: "Thin content",
   content_gap: "Content gap",
   on_page: "On-page basics",
   architecture: "Site architecture",
 };
+
+/** The "what needs doing" filter, in the order the chips appear. */
+export const TASK_CATEGORIES: Array<{ id: TaskCategory; label: string; hint: string }> = [
+  { id: "delete_merge", label: "Delete or merge", hint: "Dead-weight posts to remove, and pages competing for the same search" },
+  { id: "orphans", label: "Orphan pages", hint: "Pages nothing links to, or buried too deep to be found" },
+  { id: "internal_links", label: "Internal links", hint: "Pages that need more links from the rest of the site" },
+  { id: "external_links", label: "External links", hint: "Pages that cite no outside sources" },
+  { id: "image_alt", label: "Image alt text", hint: "Featured and body images with missing or weak alt text" },
+  { id: "titles_meta", label: "Titles & descriptions", hint: "Snippets that don't earn the click, or miss the keyword" },
+  { id: "content", label: "Content", hint: "Thin pages, near-page-one rankings and topics with no page" },
+  { id: "structure", label: "Site structure", hint: "Cluster ownership and new clusters forming" },
+];
+
+/** Category for an opportunity from a report cached before the server sent one. */
+export function categoryOf(o: Pick<Opportunity, "type" | "subtype" | "category">): TaskCategory {
+  if (o.category) return o.category;
+  switch (o.type) {
+    case "prune": case "cannibalization": return "delete_merge";
+    case "orphan": return "orphans";
+    case "internal_links": return "internal_links";
+    case "external_links": return "external_links";
+    case "image_alt": return "image_alt";
+    case "ctr_gap": case "keyword_mismatch": case "on_page": return "titles_meta";
+    case "striking_distance": case "thin_content": case "content_gap": return "content";
+    default:
+      if (o.subtype === "deep_page") return "orphans";
+      if (o.subtype === "pillar_links" || o.subtype === "uplinks") return "internal_links";
+      return "structure";
+  }
+}
 
 export interface ClusterAudit {
   id: string;
