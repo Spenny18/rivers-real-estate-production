@@ -204,6 +204,21 @@ export default function NeighbourhoodDetailPage() {
         <CopyBlock label="Shop & dine" body={data.shopDineCopy} />
       </section>
 
+      {/* Sources — outbound citations, shared across all neighbourhood pages */}
+      <section className="max-w-[1300px] mx-auto px-6 lg:px-10 pb-20">
+        <div className="border-t pt-4">
+          <p className="text-sm text-muted-foreground">
+            Official sources: the{" "}
+            <a href="https://www.calgary.ca/communities/profiles.html" target="_blank" rel="noopener" className="underline underline-offset-2">City of Calgary community profiles</a>{" "}
+            for community statistics, the{" "}
+            <a href="https://www.cbe.ab.ca/find-a-school" target="_blank" rel="noopener" className="underline underline-offset-2">Calgary Board of Education school locator</a>{" "}
+            for school catchments, and{" "}
+            <a href="https://www.creb.com/Housing_Statistics/" target="_blank" rel="noopener" className="underline underline-offset-2">CREB® housing statistics</a>{" "}
+            for city-wide price benchmarks. Active listing counts and prices on this page come from MLS® data and update daily.
+          </p>
+        </div>
+      </section>
+
       {/* Gallery strip (if available) */}
       {galleryImgs.length > 0 && (
         <section className="max-w-[1600px] mx-auto px-4 lg:px-8 pb-20">
