@@ -56,6 +56,7 @@ import type { Opportunity } from "./seo-opportunities";
 import type { ClusterAudit, ClusterCandidate } from "./seo-architecture";
 import { questionContext, hostOf, ENGINE_LABELS, type QuestionContext } from "./ai-visibility";
 import { markPagesChanged } from "./recrawl";
+import { stripSiteName } from "@shared/blog-title";
 
 /** Claude Opus 5 unless overridden. */
 const MODEL = process.env.SEO_FIX_MODEL?.trim() || "claude-opus-5";
@@ -640,7 +641,7 @@ Content policy — the site must not sprawl into dozens of thin, overlapping pos
 Change types and the fields each uses (set every unused field to "" — an empty string — or [] for arrays):
 - set_meta: path, title and/or description (plus variantGroup for alternatives). Works on any page. For blog posts prefer edit_blog (title/excerpt, also with variantGroup) instead, since those ARE the post's title and description.
 - set_focus_keyword: path, keyword — the query the page should own from now on.
-- edit_blog: slug, optional title / excerpt / heroImageAlt, and bodyEdits: [{find, replace}]. Each "find" must be copied EXACTLY from the supplied body and appear exactly once — use a whole sentence or paragraph. To add a new section, find the last sentence of the paragraph it should follow and replace it with that sentence + "\\n\\n## Heading\\n\\nNew paragraph". Keep edits surgical; do not rewrite whole posts.
+- edit_blog: slug, optional title / excerpt / heroImageAlt (a post title is its H1 — never end it with the site name; the page appends " — Rivers Real Estate" to the <title> itself), and bodyEdits: [{find, replace}]. Each "find" must be copied EXACTLY from the supplied body and appear exactly once — use a whole sentence or paragraph. To add a new section, find the last sentence of the paragraph it should follow and replace it with that sentence + "\\n\\n## Heading\\n\\nNew paragraph". Keep edits surgical; do not rewrite whole posts.
 - edit_entity_copy: kind ("neighbourhood" | "condo"), slug, field, and either text (for "tagline") or paragraphs (the COMPLETE new list for that array field). Plain text only.
 - add_redirect: from, to — 301 a weaker page into a stronger one. Only for consolidation.
 - unpublish_blog: slug — only alongside an add_redirect from that post.
@@ -1009,6 +1010,7 @@ export function validateChanges(
           let body = workingBodies.get(slug) ?? post.body;
           const rows: PreviewRow[] = [];
           let title = str(c.title);
+          if (title) title = stripSiteName(title);
           let excerpt = str(c.excerpt);
           const locked = metaLockedFor(`/blog/${slug}`, subject, pillars);
           if (locked && (title || excerpt)) {
@@ -1110,7 +1112,8 @@ export function validateChanges(
           const slug = (str(c.slug) ?? "").toLowerCase();
           if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug)) throw new Error(`"${slug}" isn't a valid slug`);
           if (storage.getBlogBySlug(slug)) throw new Error(`a post with slug "${slug}" already exists`);
-          const title = str(c.title);
+          const rawTitle = str(c.title);
+          const title = rawTitle ? stripSiteName(rawTitle) : null;
           const body = str(c.body);
           if (!title || !body) throw new Error("title and body are required");
           const draftsAllowed =
