@@ -31,6 +31,7 @@ function page(over: Partial<PageAnalysis> & { path: string }): PageAnalysis {
     grade: "strong",
     components: [],
     inboundLinks: ["/neighbourhoods", "/blog/a", "/blog/b"],
+    linkedFromNav: false,
     outboundLinks: [],
     externalDomains: ["calgary.ca"],
     sisterDomainLinks: [],
