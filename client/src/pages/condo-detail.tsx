@@ -5,6 +5,8 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { ChevronLeft, MapPin, ArrowRight, Building2, Layers, Calendar } from "lucide-react";
 import { PublicLayout } from "@/components/public-layout";
+import { ExploreMore } from "@/components/related-links";
+import type { PlaceLink, PostLink } from "@/lib/mls-types";
 import { NeighbourhoodPois } from "@/components/neighbourhood-pois";
 import { ClientOnly } from "@/components/client-only";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -17,6 +19,8 @@ import {
 } from "@/components/rivers-map";
 
 interface CondoDetail {
+  nearbyBuildings?: PlaceLink[];
+  journal?: PostLink[];
   slug: string;
   name: string;
   tagline: string;
@@ -459,6 +463,14 @@ export default function CondoDetailPage() {
           </Link>
         </div>
       </section>
+
+      <ExploreMore
+        eyebrow="KEEP EXPLORING"
+        placesTitle="More buildings to explore"
+        places={data.nearbyBuildings}
+        postsTitle={`${data.name} in the journal`}
+        posts={data.journal}
+      />
 
       {/* CTA */}
       <section className="bg-foreground text-background">

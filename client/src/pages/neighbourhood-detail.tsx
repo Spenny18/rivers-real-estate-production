@@ -9,6 +9,7 @@ import { ArrowRight, ChevronLeft, MapPin, Home as HomeIcon } from "lucide-react"
 import { PublicLayout } from "@/components/public-layout";
 import { ListingCard } from "@/components/listing-card";
 import { FaqAccordion } from "@/components/faq-accordion";
+import { ExploreMore } from "@/components/related-links";
 import { NeighbourhoodPois } from "@/components/neighbourhood-pois";
 import { NeighbourhoodReport } from "@/components/neighbourhood-report";
 import { ClientOnly } from "@/components/client-only";
@@ -377,6 +378,14 @@ export default function NeighbourhoodDetailPage() {
       <FaqAccordion
         items={seoFaq.map((f) => ({ q: f.question, a: f.answer }))}
         eyebrow={`FAQ · ${data.name.toUpperCase()}`}
+      />
+
+      <ExploreMore
+        eyebrow="KEEP EXPLORING"
+        placesTitle="More neighbourhoods to explore"
+        places={data.nearby}
+        postsTitle={`${data.name} in the journal`}
+        posts={data.journal}
       />
 
       {/* CTA */}

@@ -1,6 +1,6 @@
 import { Link, useRoute } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft, Clock, Phone, Mail } from "lucide-react";
+import { ChevronLeft, ChevronRight, Clock, Phone, Mail } from "lucide-react";
 import { PublicLayout } from "@/components/public-layout";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import {
 } from "@/lib/format";
 import type { PublicBlogPost } from "@/lib/mls-types";
 import { YouTubeEmbed } from "@/components/youtube-embed";
+import { placeHref } from "@/components/related-links";
 import { findYouTubeReferences } from "@shared/youtube";
 
 const BLOG_FALLBACK_HERO =
@@ -211,9 +212,13 @@ export default function BlogDetailPage() {
     );
   }
 
-  const related = (allPosts ?? [])
+  // Chosen by topic on the server (server/related-links.ts). The old list was
+  // the three newest posts, so every post linked to the same three.
+  const related = post.links?.more ?? (allPosts ?? [])
     .filter((p) => p.slug !== post.slug)
     .slice(0, 3);
+  const places = post.links?.places ?? [];
+  const { newer, older } = post.links ?? { newer: null, older: null };
 
   return (
     <PublicLayout>
@@ -308,6 +313,51 @@ export default function BlogDetailPage() {
           </div>
         </section>
       </article>
+
+      {/* Places the post is about, then the chronological neighbours */}
+      {(places.length > 0 || newer || older) && (
+        <section className="max-w-[800px] mx-auto px-6 pt-4">
+          {places.length > 0 && (
+            <div className="border-t border-border pt-8" data-testid="section-post-places">
+              <div className="font-display text-[11px] tracking-[0.22em] text-muted-foreground">
+                IN THIS POST
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {places.map((pl) => (
+                  <Link key={`${pl.kind}-${pl.slug}`} href={placeHref(pl)}
+                    className="inline-flex items-baseline gap-2 border border-border rounded-sm px-3 py-2 text-sm hover:border-foreground/40 transition-colors"
+                    data-testid={`link-post-place-${pl.slug}`}>
+                    {pl.name}
+                    <span className="text-[10px] font-display tracking-[0.16em] text-muted-foreground">
+                      {pl.kind === "condo" ? "BUILDING" : "NEIGHBOURHOOD"}
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
+          {(newer || older) && (
+            <nav className="mt-8 border-t border-border pt-8 grid gap-6 sm:grid-cols-2" aria-label="More posts">
+              {older ? (
+                <Link href={`/blog/${older.slug}`} className="group block" data-testid="link-post-older">
+                  <span className="inline-flex items-center gap-1 font-display text-[11px] tracking-[0.22em] text-muted-foreground">
+                    <ChevronLeft className="w-3 h-3" strokeWidth={1.8} /> PREVIOUS POST
+                  </span>
+                  <span className="block mt-2 font-serif text-lg leading-snug group-hover:underline underline-offset-4">{older.title}</span>
+                </Link>
+              ) : <span />}
+              {newer && (
+                <Link href={`/blog/${newer.slug}`} className="group block sm:text-right" data-testid="link-post-newer">
+                  <span className="inline-flex items-center gap-1 font-display text-[11px] tracking-[0.22em] text-muted-foreground">
+                    NEXT POST <ChevronRight className="w-3 h-3" strokeWidth={1.8} />
+                  </span>
+                  <span className="block mt-2 font-serif text-lg leading-snug group-hover:underline underline-offset-4">{newer.title}</span>
+                </Link>
+              )}
+            </nav>
+          )}
+        </section>
+      )}
 
       {/* Related */}
       {related.length > 0 && (

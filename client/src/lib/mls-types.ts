@@ -70,6 +70,8 @@ export interface PublicNeighbourhood {
 
 export interface PublicNeighbourhoodDetail extends PublicNeighbourhood {
   listings: PublicMlsListing[];
+  nearby?: PlaceLink[];
+  journal?: PostLink[];
   /** Condo & townhome buildings in the community. Entries with a slug have
    *  a dedicated /condos/:slug page; the rest render as plain names. */
   condoBuildings?: Array<{ name: string; address?: string; slug?: string }>;
@@ -88,6 +90,22 @@ export interface PublicNeighbourhoodDetail extends PublicNeighbourhood {
   } | null;
 }
 
+/** A link to another page, chosen by server/related-links.ts. */
+export interface PostLink {
+  slug: string;
+  title: string;
+  category: string;
+  heroImage: string;
+  heroImageAlt: string | null;
+}
+export interface PlaceLink {
+  kind: "neighbourhood" | "condo";
+  slug: string;
+  name: string;
+  /** Neighbourhood zone, or the building's neighbourhood. */
+  context: string | null;
+}
+
 export interface PublicBlogPost {
   id: number;
   slug: string;
@@ -101,6 +119,8 @@ export interface PublicBlogPost {
   authorAvatar: string | null;
   readMinutes: number;
   publishedAt: string;
+  /** Detail endpoint only. */
+  links?: { newer: PostLink | null; older: PostLink | null; more: PostLink[]; places: PlaceLink[] };
 }
 
 export interface PublicTestimonial {

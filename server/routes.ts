@@ -44,6 +44,7 @@ const execFileAsync = promisify(execFile);
 // can serve them too.
 import { UPLOADS_ROOT, ensureUploadsDir } from "./uploads";
 import { heroImageGenerationEnabled, queueHeroImage, keepGeneratedHero, regenerateHeroImage } from "./hero-image";
+import { linksForPost, nearbyCondos, nearbyNeighbourhoods, postsNaming } from "./related-links";
 
 function parseJsonArr(s: string | null | undefined): any[] {
   if (!s) return [];
@@ -2248,6 +2249,8 @@ export async function registerRoutes(
       amenities: parseJsonArr(c.amenities),
       gallery: parseJsonArr(c.gallery),
       listings,
+      nearbyBuildings: nearbyCondos(c.slug, storage.listCondoBuildings()),
+      journal: postsNaming(c.name, publishedPosts()),
     });
   });
 
@@ -2503,6 +2506,8 @@ export async function registerRoutes(
       gallery: parseJsonArr(n.gallery),
       borders: (() => { try { return JSON.parse(n.borders); } catch { return {}; } })(),
       listings,
+      nearby: nearbyNeighbourhoods(n.slug, storage.listNeighbourhoods()),
+      journal: postsNaming(n.name, publishedPosts()),
     });
   });
 
@@ -2697,9 +2702,11 @@ export async function registerRoutes(
   // articles in full — and because /blog is SSR-prefetched, that JSON was
   // embedded in the HTML as well, so it went out twice in one response. It was
   // never indexable either way: inside a <script> tag it is not page copy.
+  const publishedPosts = () =>
+    storage.listBlogSummaries().filter((p) => (p.status ?? "published") === "published");
+
   app.get("/api/public/blog", (_req, res) => {
-    const all = storage.listBlogSummaries();
-    res.json(all.filter((p) => (p.status ?? "published") === "published"));
+    res.json(publishedPosts());
   });
 
   // GET /api/public/blog/:slug — 404 on drafts so they don't leak.
@@ -2708,7 +2715,10 @@ export async function registerRoutes(
     if (!post || ((post as any).status ?? "published") !== "published") {
       return res.status(404).json({ message: "Post not found" });
     }
-    res.json(post);
+    // Previous/next, related posts and the places the post is about — see
+    // server/related-links.ts.
+    const links = linksForPost(post.slug, publishedPosts(), storage.listNeighbourhoods(), storage.listCondoBuildings());
+    res.json({ ...post, links });
   });
 
   // GET /api/public/testimonials
