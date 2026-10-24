@@ -56,8 +56,11 @@ import HomeEvaluationPage from "@/pages/home-evaluation";
 import WorkWithDetailPage, { WorkWithIndexPage } from "@/pages/work-with";
 import AssignmentsPage from "@/pages/assignments";
 import PrivacyPolicyPage from "@/pages/privacy-policy";
-const BookIndexPage = lazy(() => import("@/pages/book-index"));
-const BookEventPage = lazy(() => import("@/pages/book-event"));
+// Imported eagerly: server/ssr.ts renders these, and a lazy page renders as
+// an empty Suspense fallback until its chunk loads — that empty page was what
+// got cached and served to Google, hiding /book's links to each booking page.
+import BookIndexPage from "@/pages/book-index";
+import BookEventPage from "@/pages/book-event";
 const BookManagePage = lazy(() => import("@/pages/book-manage"));
 
 // Admin (existing dashboard) pages — mounted under /admin/*

@@ -33,6 +33,8 @@ interface PageAnalysis {
   isPillar: boolean; focusKeyword: string; focusSource: "override" | "derived";
   score: number; grade: "strong" | "fair" | "weak"; components: ScoreComponent[];
   inboundLinks: string[]; outboundLinks: string[]; externalDomains: string[];
+  /** Absent on reports cached before it existed. */
+  linkedFromNav?: boolean;
   sisterDomainLinks: string[]; schemaTypes: string[];
   conflicts: { path: string; keyword: string; similarity: number }[];
   recommendedInboundFrom: { path: string; reason: string }[];
@@ -846,13 +848,17 @@ export default function AdminSeoPage() {
                         <td className="px-4 py-3 text-xs text-muted-foreground">
                           {p.clusterLabel}{p.isPillar && <span className="ml-1 text-foreground font-semibold">· pillar</span>}
                         </td>
-                        <td className="px-4 py-3 text-right tabular-nums text-xs">{p.inboundLinks.length}</td>
+                        <td className="px-4 py-3 text-right tabular-nums text-xs">
+                          {p.linkedFromNav
+                            ? <span className="text-[9px] uppercase tracking-wider text-muted-foreground" title="Linked from the site menu or footer on every page">menu</span>
+                            : p.inboundLinks.length}
+                        </td>
                         <td className="px-4 py-3">
                           <div className="flex flex-wrap gap-1">
                             {p.conflicts.length > 0 && (
                               <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 border ${GRADE_STYLES.weak}`}>conflict</span>
                             )}
-                            {p.inboundLinks.length === 0 && (
+                            {p.inboundLinks.length === 0 && !p.linkedFromNav && (
                               <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 border ${GRADE_STYLES.fair}`}>orphan</span>
                             )}
                             {p.status === 200 && p.externalDomains.length === 0 && (
@@ -865,7 +871,7 @@ export default function AdminSeoPage() {
                             {p.sisterDomainLinks.length > 0 && (
                               <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 border border-border text-muted-foreground">sister links</span>
                             )}
-                            {p.issues.length > 0 && p.conflicts.length === 0 && p.inboundLinks.length > 0 && (
+                            {p.issues.length > 0 && p.conflicts.length === 0 && (p.inboundLinks.length > 0 || p.linkedFromNav) && (
                               <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 border border-border text-muted-foreground">
                                 {p.issues.length}
                               </span>
@@ -1066,7 +1072,9 @@ export default function AdminSeoPage() {
                       </div>
                     ) : (
                       <p className="text-xs text-muted-foreground">
-                        None. Nav and footer links are excluded — they appear on every page, so they don't tell Google this page matters.
+                        {p.linkedFromNav
+                          ? "Linked from the site menu or footer on every page, so it isn't an orphan. Those links aren't listed here: they're on every page, so they don't single this one out."
+                          : "None. Nav and footer links are excluded — they appear on every page, so they don't tell Google this page matters."}
                       </p>
                     )}
                   </div>

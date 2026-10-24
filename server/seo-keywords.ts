@@ -619,6 +619,9 @@ export interface PageAnalysis {
   grade: "strong" | "fair" | "weak";
   components: ScoreComponent[];
   inboundLinks: string[];
+  /** Linked from the site-wide menu or footer (on 80%+ of pages). Those
+   *  links aren't counted in inboundLinks, but the page isn't an orphan. */
+  linkedFromNav: boolean;
   outboundLinks: string[];
   externalDomains: string[];
   sisterDomainLinks: string[];
@@ -1040,6 +1043,7 @@ export async function buildSeoReport(opts: {
       grade: band(score),
       components: C,
       inboundLinks: inboundEditorial,
+      linkedFromNav: isChrome(page.path),
       outboundLinks: outbound,
       externalDomains: page.externalLinks,
       sisterDomainLinks: page.sisterDomainLinks,
@@ -1121,7 +1125,9 @@ export async function buildSeoReport(opts: {
       fair: analyses.filter((p) => p.grade === "fair").length,
       weak: analyses.filter((p) => p.grade === "weak").length,
       conflicts: analyses.filter((p) => p.conflicts.length).length,
-      orphans: analyses.filter((p) => p.inboundLinks.length === 0).length,
+      // Menu and footer pages have no counted links but are the best-linked
+      // pages on the site — counting them here reported ~20 false orphans.
+      orphans: analyses.filter((p) => p.inboundLinks.length === 0 && !p.linkedFromNav).length,
       missingKeyword: analyses.filter((p) => !p.focusKeyword).length,
     },
     clusters,
