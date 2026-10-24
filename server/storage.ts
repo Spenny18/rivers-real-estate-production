@@ -86,6 +86,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
 import { eq, desc, and, gte, lte, like, sql, or, asc, inArray, getTableColumns } from "drizzle-orm";
 import { assignMlsAliasSlugLookup, assignMlsSeoSlugs } from "@shared/mls-url";
+import { stripSiteName } from "@shared/blog-title";
 
 // Use data.db for SQLite. The publish flow snapshots/restores `data.db` across
 // redeploys. If the snapshot becomes corrupt ("database disk image is
@@ -1171,6 +1172,26 @@ try {
   if (r.changes > 0) console.log("[migration] backfilled video date + length on the $3M-$4M post");
 } catch (e) {
   console.error("[migration] blog_posts video backfill:", e);
+}
+
+// Cleanup (2026-10-24): SEO fixes saved post titles ending in
+// " — Rivers Real Estate", which the page <title> then appended again and the
+// H1 showed. Writes strip it now (upsertBlogPost); this clears the rows
+// already saved that way. Idempotent — a clean title is left untouched.
+try {
+  const rows = sqlite
+    .prepare("SELECT slug, title FROM blog_posts WHERE title LIKE '%Rivers Real Estate%'")
+    .all() as Array<{ slug: string; title: string }>;
+  const update = sqlite.prepare("UPDATE blog_posts SET title = ? WHERE slug = ?");
+  for (const r of rows) {
+    const clean = stripSiteName(r.title);
+    if (clean !== r.title) {
+      update.run(clean, r.slug);
+      console.log(`[migration] stripped site name from blog title: ${r.slug}`);
+    }
+  }
+} catch (e) {
+  console.error("[migration] blog_posts title site name:", e);
 }
 
 // One-time backfill (2026-07-31): the BOFU cluster cadence assigned one shared
@@ -3105,6 +3126,7 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(blogPosts).where(eq(blogPosts.slug, slug)).get();
   }
   upsertBlogPost(data: InsertBlogPost): BlogPost {
+    if (typeof data.title === "string") data = { ...data, title: stripSiteName(data.title) };
     const existing = db.select().from(blogPosts).where(eq(blogPosts.slug, data.slug!)).get();
     if (existing) {
       return db.update(blogPosts).set(data).where(eq(blogPosts.slug, data.slug!)).returning().get();
