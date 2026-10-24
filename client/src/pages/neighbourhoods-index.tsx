@@ -166,7 +166,7 @@ export default function NeighbourhoodsIndexPage() {
                       <div className="relative aspect-[4/3] overflow-hidden rounded-sm bg-secondary">
                         <img
                           src={n.heroImage}
-                          alt={`${n.name} homes for sale`}
+                          alt={`${n.name} homes for sale — Calgary luxury neighbourhoods`}
                           loading="lazy"
                           className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-[1.04]"
                         />
@@ -206,6 +206,104 @@ export default function NeighbourhoodsIndexPage() {
             </div>
           ))
         )}
+      </section>
+
+      {/* Editorial by-district section: contextual links down to the guides */}
+      <section className="max-w-[1400px] mx-auto px-4 lg:px-8 pb-16 lg:pb-20">
+        <div className="border-t border-border pt-10 max-w-[900px]">
+          <h2
+            className="font-serif text-2xl lg:text-3xl"
+            style={{ letterSpacing: "-0.01em" }}
+          >
+            Calgary luxury neighbourhoods, district by district
+          </h2>
+          <p className="mt-3 text-[15px] leading-relaxed">
+            Every district below has its own price ladder, lot sizes and build era.
+            These are the guides Spencer keeps current, grouped the way buyers
+            actually shop.
+          </p>
+
+          <h3 className="mt-8 font-serif text-xl">Heritage estate districts</h3>
+          <p className="mt-2 text-[15px] leading-relaxed">
+            Mount Royal, Elbow Park, Britannia and Rideau Park are the city's oldest
+            estate addresses, where lot and flood exposure matter more than
+            finishes. Start with the{" "}
+            <Link href="/blog/upper-mount-royal-and-elbow-park-a-buyers-guide-to-calgarys-heritage-estate-districts" className="underline underline-offset-4 hover:opacity-70">buyer's guide to the heritage estate districts</Link>,
+            then go deeper on{" "}
+            <Link href="/blog/upper-mount-royal-architecture-tudor-georgian-and-modern-estate-homes" className="underline underline-offset-4 hover:opacity-70">Upper Mount Royal architecture</Link>,{" "}
+            <Link href="/blog/elbow-park-calgary-real-estate" className="underline underline-offset-4 hover:opacity-70">Elbow Park prices and streets</Link>,{" "}
+            <Link href="/blog/britannia-real-estate-estate-lots-mid-century-homes-and-rebuild-economics" className="underline underline-offset-4 hover:opacity-70">Britannia estate lots and rebuild economics</Link>,{" "}
+            <Link href="/blog/britannia-vs-elbow-park-which-calgary-estate-district-suits-you" className="underline underline-offset-4 hover:opacity-70">Britannia versus Elbow Park</Link>,{" "}
+            <Link href="/blog/elbow-park-vs-upper-mount-royal-which-heritage-calgary-neighbourhood-suits-you" className="underline underline-offset-4 hover:opacity-70">Elbow Park versus Upper Mount Royal</Link>{" "}
+            and the{" "}
+            <Link href="/blog/rideau-park-ultimate-neighborhood-guide" className="underline underline-offset-4 hover:opacity-70">Rideau Park neighbourhood guide</Link>.
+          </p>
+
+          <h3 className="mt-8 font-serif text-xl">Glenmore Reservoir enclaves</h3>
+          <p className="mt-2 text-[15px] leading-relaxed">
+            The small pockets west and south of the reservoir trade on land, not
+            square footage. Read{" "}
+            <Link href="/blog/living-in-eagle-ridge-and-bayview-calgarys-glenmore-reservoir-estate-enclaves" className="underline underline-offset-4 hover:opacity-70">living in Eagle Ridge and Bayview</Link>,{" "}
+            <Link href="/blog/eagle-ridge-calgary-inside-the-citys-smallest-and-most-private-estate-community" className="underline underline-offset-4 hover:opacity-70">Eagle Ridge, the city's smallest estate community</Link>,{" "}
+            <Link href="/blog/bayview-calgary-real-estate-reservoir-lots-original-bungalows-and-the-rebuild-wave" className="underline underline-offset-4 hover:opacity-70">Bayview reservoir lots and the rebuild wave</Link>,{" "}
+            <Link href="/blog/bel-aire-real-estate-half-acre-lots-golf-course-frontage-and-teardown-value" className="underline underline-offset-4 hover:opacity-70">Bel-Aire half-acre lots and golf course frontage</Link>,{" "}
+            <Link href="/blog/living-in-bel-aire-and-mayfair-calgarys-quietest-estate-enclave" className="underline underline-offset-4 hover:opacity-70">living in Bel-Aire and Mayfair</Link>{" "}
+            and{" "}
+            <Link href="/blog/mayfair-real-estate-the-entry-point-to-calgarys-britannia-and-bel-aire-corridor" className="underline underline-offset-4 hover:opacity-70">Mayfair, the corridor's entry point</Link>.
+            Current listings sit on the{" "}
+            <Link href="/neighbourhoods/bayview" className="underline underline-offset-4 hover:opacity-70">Bayview</Link>,{" "}
+            <Link href="/neighbourhoods/pump-hill" className="underline underline-offset-4 hover:opacity-70">Pump Hill</Link>,{" "}
+            <Link href="/neighbourhoods/lakeview" className="underline underline-offset-4 hover:opacity-70">Lakeview</Link>{" "}
+            and{" "}
+            <Link href="/neighbourhoods/north-glenmore-park" className="underline underline-offset-4 hover:opacity-70">North Glenmore Park</Link>{" "}
+            pages.
+          </p>
+
+          <h3 className="mt-8 font-serif text-xl">West side and the ridge</h3>
+          <p className="mt-2 text-[15px] leading-relaxed">
+            Aspen Woods, Springbank Hill, West Springs and Discovery Ridge are
+            newer, view-driven and priced by lot position. See{" "}
+            <Link href="/blog/aspen-woods-real-estate-price-points-build-era-and-architecture" className="underline underline-offset-4 hover:opacity-70">Aspen Woods price points, build era and architecture</Link>,{" "}
+            <Link href="/blog/the-5-best-streets-in-aspen-woods-for-luxury-buyers" className="underline underline-offset-4 hover:opacity-70">the five best streets in Aspen Woods</Link>,{" "}
+            <Link href="/blog/living-in-aspen-woods-the-calgary-luxury-buyers-guide" className="underline underline-offset-4 hover:opacity-70">living in Aspen Woods</Link>,{" "}
+            <Link href="/blog/springbank-hill-estate-homes-lot-sizes-views-and-walk-outs" className="underline underline-offset-4 hover:opacity-70">Springbank Hill estate homes, lot sizes and walk-outs</Link>,{" "}
+            <Link href="/blog/living-in-springbank-hill-the-calgary-luxury-buyers-guide" className="underline underline-offset-4 hover:opacity-70">living in Springbank Hill</Link>,{" "}
+            <Link href="/blog/unveiling-the-charms-of-west-springs-calgary" className="underline underline-offset-4 hover:opacity-70">West Springs</Link>{" "}
+            and{" "}
+            <Link href="/blog/discovery-ridge-calgary" className="underline underline-offset-4 hover:opacity-70">Discovery Ridge</Link>.
+          </p>
+
+          <h3 className="mt-8 font-serif text-xl">Lake communities and outside the city</h3>
+          <p className="mt-2 text-[15px] leading-relaxed">
+            If water access is the brief, compare the options in{" "}
+            <Link href="/blog/calgary-lake-communities-compared" className="underline underline-offset-4 hover:opacity-70">Calgary lake communities compared</Link>,
+            then look at{" "}
+            <Link href="/neighbourhoods/mahogany" className="underline underline-offset-4 hover:opacity-70">Mahogany</Link>,{" "}
+            <Link href="/neighbourhoods/auburn-bay" className="underline underline-offset-4 hover:opacity-70">Auburn Bay</Link>,{" "}
+            <Link href="/neighbourhoods/lake-bonavista" className="underline underline-offset-4 hover:opacity-70">Lake Bonavista</Link>{" "}
+            and{" "}
+            <Link href="/neighbourhoods/bayside" className="underline underline-offset-4 hover:opacity-70">Bayside in Airdrie</Link>.
+            Further out, read the{" "}
+            <Link href="/blog/ultimate-guide-to-living-in-chestermere-lake" className="underline underline-offset-4 hover:opacity-70">guide to living on Chestermere Lake</Link>{" "}
+            and the{" "}
+            <Link href="/blog/canmore-neighborhood-guide-2022" className="underline underline-offset-4 hover:opacity-70">Canmore neighbourhood guide</Link>,
+            with listings on the{" "}
+            <Link href="/neighbourhoods/chestermere" className="underline underline-offset-4 hover:opacity-70">Chestermere</Link>{" "}
+            and{" "}
+            <Link href="/neighbourhoods/spring-creek" className="underline underline-offset-4 hover:opacity-70">Spring Creek</Link>{" "}
+            pages.
+          </p>
+
+          <h3 className="mt-8 font-serif text-xl">Rankings and price bands</h3>
+          <p className="mt-2 text-[15px] leading-relaxed">
+            For a view across the whole map, see{" "}
+            <Link href="/blog/top-11-luxury-neighbourhoods-in-calgary" className="underline underline-offset-4 hover:opacity-70">Calgary's most expensive neighbourhoods</Link>,{" "}
+            <Link href="/blog/top-20-best-calgary-neighbourhoods-2026" className="underline underline-offset-4 hover:opacity-70">the top 20 Calgary neighbourhoods to live in 2026</Link>,{" "}
+            <Link href="/blog/best-calgary-luxury-neighbourhoods-2026" className="underline underline-offset-4 hover:opacity-70">Calgary's most prestigious neighbourhoods</Link>{" "}
+            and{" "}
+            <Link href="/blog/the-3m-to-4m-sweet-spot-inside-calgarys-hottest-micro-market" className="underline underline-offset-4 hover:opacity-70">the $3M to $4M micro-market</Link>.
+          </p>
+        </div>
       </section>
 
       {/* Neighbourhood guides: crawlable links down to the blog posts */}
