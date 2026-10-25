@@ -36,6 +36,8 @@ const CONDO_GUIDES = [
   { text: "Calgary condo assignment sales", href: "/assignments" },
 ];
 
+const INLINE_LINK = "text-foreground underline underline-offset-4 hover:text-muted-foreground transition-colors";
+
 export default function CondosIndexPage() {
   const { data: buildings = [], isLoading } = useQuery<CondoBuilding[]>({
     queryKey: ["/api/public/condos"],
@@ -66,6 +68,60 @@ export default function CondosIndexPage() {
             inner-city addresses with pricing, condo fees and resale history for
             each. Spencer Rivers is a Certified Condo Specialist, and listings
             on this site can appear up to 48 hours before Realtor.ca.
+          </p>
+        </div>
+      </section>
+
+      {/* Choosing a condo */}
+      <section className="max-w-[1400px] mx-auto px-6 lg:px-10 pt-16 lg:pt-20">
+        <h2 className="font-serif text-2xl lg:text-3xl" style={{ letterSpacing: "-0.01em" }}>
+          Choosing a Calgary luxury condo
+        </h2>
+        <div className="mt-3 max-w-[680px] space-y-4 text-muted-foreground leading-relaxed">
+          <p>
+            Start with the district. Mission, Eau Claire and East Village price differently per square foot and suit different buyers — the{" "}
+            <Link href="/blog/calgarys-top-luxury-condo-districts-mission-eau-claire-and-east-village-compared" className={INLINE_LINK}>
+              district comparison
+            </Link>{" "}
+            sets the three side by side, with deeper reads on{" "}
+            <Link href="/blog/eau-claire-luxury-condos-buildings-views-and-price-per-square-foot" className={INLINE_LINK}>
+              Eau Claire luxury condos
+            </Link>{" "}
+            and{" "}
+            <Link href="/blog/east-village-luxury-condos-modern-towers-and-the-true-cost-of-ownership" className={INLINE_LINK}>
+              East Village luxury condos
+            </Link>
+            .
+          </p>
+          <p>
+            Then the carrying cost.{" "}
+            <Link href="/blog/calgary-condo-fees-what-they-cover" className={INLINE_LINK}>
+              What Calgary condo fees cover
+            </Link>{" "}
+            explains the per-square-foot ranges and the reserve fund questions behind them, and{" "}
+            <Link href="/blog/calgary-condo-document-review" className={INLINE_LINK}>
+              the condo document review
+            </Link>{" "}
+            covers what to read before you remove conditions.
+          </p>
+          <p>
+            If you want the top floor, see{" "}
+            <Link href="/blog/calgary-luxury-penthouses" className={INLINE_LINK}>
+              Calgary luxury penthouses
+            </Link>
+            . If you would rather buy new,{" "}
+            <Link href="/blog/calgary-new-construction-guide" className={INLINE_LINK}>
+              Calgary new construction condos
+            </Link>{" "}
+            covers what is being built and{" "}
+            <Link href="/assignments" className={INLINE_LINK}>
+              condo assignment sales
+            </Link>{" "}
+            explain how to take over a pre-construction contract before it completes.{" "}
+            <Link href="/blog/the-9-best-luxury-condos-in-calgary" className={INLINE_LINK}>
+              The nine best condo buildings in Calgary
+            </Link>{" "}
+            ranks the resale towers.
           </p>
         </div>
       </section>
