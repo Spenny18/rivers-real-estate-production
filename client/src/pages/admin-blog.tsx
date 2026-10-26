@@ -4,13 +4,23 @@
 // the other admin pages.
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, Plus, Image as ImageIcon } from "lucide-react";
+import { Save, Plus, Trash2, Image as ImageIcon } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { ImageField } from "@/components/image-field";
@@ -89,6 +99,10 @@ export default function AdminBlogPage() {
   const [creating, setCreating] = useState(false);
   // Until the slug is edited by hand, it follows the title.
   const [slugTouched, setSlugTouched] = useState(false);
+  // Delete confirmation. A published post defaults to redirecting to the
+  // journal so its indexed URL doesn't turn into a 404.
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [redirectTo, setRedirectTo] = useState("/blog");
 
   useEffect(() => {
     if (!selectedSlug && posts.length > 0) setSelectedSlug(posts[0].slug);
@@ -177,6 +191,34 @@ export default function AdminBlogPage() {
         variant: "destructive",
       }),
   });
+
+  const remove = useMutation({
+    mutationFn: async (vars: { slug: string; redirectTo: string }) => {
+      await apiRequest("DELETE", `/api/admin/blog/${vars.slug}`, { redirectTo: vars.redirectTo });
+      return vars;
+    },
+    onSuccess: ({ slug, redirectTo }) => {
+      const rest = posts.filter((p) => p.slug !== slug);
+      qc.setQueryData<AdminBlogPost[]>(["/api/admin/blog"], rest);
+      qc.removeQueries({ queryKey: ["/api/admin/blog", slug] });
+      setConfirmDelete(false);
+      setSelectedSlug(rest[0]?.slug ?? null);
+      toast({
+        title: "Post deleted",
+        description: redirectTo ? `/blog/${slug} now redirects to ${redirectTo}` : undefined,
+      });
+    },
+    onError: (e: any) => {
+      const raw = String(e?.message ?? "");
+      const msg = raw.match(/"message"\s*:\s*"([^"]+)"/)?.[1] ?? (raw || "Try again");
+      toast({ title: "Delete failed", description: msg, variant: "destructive" });
+    },
+  });
+
+  const openDelete = () => {
+    setRedirectTo((draft?.status ?? "published") === "published" ? "/blog" : "");
+    setConfirmDelete(true);
+  };
 
   const draftCount = posts.filter((p) => (p.status ?? "published") === "draft").length;
   const filtered = posts.filter((p) => {
@@ -346,6 +388,16 @@ export default function AdminBlogPage() {
                       Unpublish
                     </Button>
                   )}
+                  <Button
+                    variant="ghost"
+                    onClick={openDelete}
+                    disabled={save.isPending || remove.isPending}
+                    className="text-destructive hover:text-destructive"
+                    data-testid="btn-delete-post"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 mr-1.5" strokeWidth={1.6} />
+                    Delete
+                  </Button>
                   <Button
                     onClick={() => save.mutate(draft)}
                     disabled={save.isPending}
@@ -543,6 +595,50 @@ export default function AdminBlogPage() {
           )}
         </section>
       </div>
+
+      <AlertDialog open={confirmDelete} onOpenChange={(o) => !remove.isPending && setConfirmDelete(o)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this post?</AlertDialogTitle>
+            <AlertDialogDescription>
+              “{draft?.title || "Untitled"}” will be removed for good. This can’t be undone — to hide it
+              temporarily, use Unpublish instead.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {(draft?.status ?? "published") === "published" && (
+            <div>
+              <Label className="text-xs font-display tracking-[0.18em] text-muted-foreground">
+                REDIRECT /blog/{draft?.slug} TO
+              </Label>
+              <Input
+                value={redirectTo}
+                onChange={(e) => setRedirectTo(e.target.value)}
+                placeholder="/blog"
+                className="mt-1 h-9"
+                data-testid="input-delete-redirect"
+              />
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                The post is live, so Google and other sites may link to it. Visitors are sent here
+                instead of a “page not found”. Clear it to leave no redirect.
+              </p>
+            </div>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={remove.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault(); // stay open until the delete finishes
+                if (draft) remove.mutate({ slug: draft.slug, redirectTo: redirectTo.trim() });
+              }}
+              disabled={remove.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="btn-confirm-delete-post"
+            >
+              {remove.isPending ? "Deleting…" : "Delete post"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppShell>
   );
 }
