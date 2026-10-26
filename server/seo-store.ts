@@ -199,15 +199,61 @@ const parse = (s: string | null, fallback: any) => {
   try { return JSON.parse(s); } catch { return fallback; }
 };
 
+/** The page a change rewrites the title/description of, if it does. */
+function metaTarget(op: any): string | null {
+  if (op?.type === "set_meta") return op.path ?? null;
+  if (op?.type === "edit_blog" && (op.title || op.excerpt)) return `/blog/${op.slug}`;
+  return null;
+}
+
+/**
+ * Two title/description changes to one page can only be alternatives —
+ * applying both just overwrites the first. The model is asked to tag them
+ * with one variantGroup but doesn't always (fix #36 left the third
+ * penthouse title untagged, so two titles applied), so any page with an
+ * untagged one gets all its title/description changes put in one group.
+ */
+export function groupMetaAlternatives(changes: any[]): any[] {
+  const byTarget = new Map<string, any[]>();
+  for (const ch of changes) {
+    const t = metaTarget(ch.op);
+    if (t) byTarget.set(t, [...(byTarget.get(t) ?? []), ch]);
+  }
+  byTarget.forEach((group, target) => {
+    if (group.length < 2 || group.every((ch) => ch.variantGroup)) return;
+    const id = group.find((ch) => ch.variantGroup)?.variantGroup ?? `meta:${target}`;
+    for (const ch of group) ch.variantGroup = id;
+  });
+  return changes;
+}
+
+/**
+ * "Partly applied" means something the owner picked failed, or a change was
+ * left out. An alternative that wasn't picked doesn't count: its group still
+ * got one, so nothing is missing.
+ */
+export function appliedStatus(changes: any[]): FixStatus {
+  const ok = changes.filter((ch) => ch.applied === true).length;
+  if (ok === 0) return "ready";
+  const chosen = new Set(changes.filter((ch) => ch.applied === true && ch.variantGroup).map((ch) => ch.variantGroup));
+  const missing = changes.some((ch) =>
+    ch.applied === false || (ch.applied !== true && !(ch.variantGroup && chosen.has(ch.variantGroup))));
+  return missing ? "partially_applied" : "applied";
+}
+
 function rowToProposal(r: any): FixProposalRow {
+  // Grouping and the applied label are derived on read too, so fixes saved
+  // before either rule existed show and apply the same way as new ones.
+  const changes = groupMetaAlternatives(parse(r.changes, []));
+  const status: FixStatus = r.status === "partially_applied" ? appliedStatus(changes) : r.status;
   return {
     id: r.id,
     kind: r.kind,
     subject: parse(r.subject, {}),
-    status: r.status,
+    status,
     summary: r.summary,
     rationale: r.rationale,
-    changes: parse(r.changes, []),
+    changes,
     dropped: parse(r.dropped, []),
     snapshot: parse(r.snapshot, []),
     planned: parse(r.planned, []),

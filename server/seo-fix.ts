@@ -39,6 +39,8 @@ import {
   removeConsoleRedirect,
   setMetaOverride,
   updateFixProposal,
+  groupMetaAlternatives,
+  appliedStatus,
   type FixProposalRow,
   type MetaOverride,
 } from "./seo-store";
@@ -1227,6 +1229,8 @@ export function validateChanges(
     }
   }
 
+  groupMetaAlternatives(changes);
+
   // A "group" of one is just a change.
   const groupSizes = new Map<string, number>();
   for (const ch of changes) if (ch.variantGroup) groupSizes.set(ch.variantGroup, (groupSizes.get(ch.variantGroup) ?? 0) + 1);
@@ -1534,7 +1538,6 @@ export async function applyFix(id: number, indexes: number[]): Promise<FixPropos
   }
   const snapshot: SnapshotEntry[] = [];
   let ok = 0;
-  let failed = 0;
 
   for (const ch of changes) {
     if (!wanted.has(ch.index)) continue;
@@ -1547,11 +1550,10 @@ export async function applyFix(id: number, indexes: number[]): Promise<FixPropos
     } catch (e: any) {
       ch.applied = false;
       ch.result = { ok: false, message: String(e?.message ?? e) };
-      failed++;
     }
   }
 
-  const status = ok === 0 ? "ready" : failed || ok < changes.length ? "partially_applied" : "applied";
+  const status = appliedStatus(changes);
   updateFixProposal(id, {
     status,
     changes,
