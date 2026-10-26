@@ -2966,6 +2966,29 @@ export async function registerRoutes(
     }
   });
 
+  // DELETE — remove a post for good. A published post's URL may be indexed
+  // or linked, so the caller can pass { redirectTo } to 301 it somewhere
+  // instead of leaving a 404. The redirect is added first: if it is refused
+  // (a chain, a loop), the post is left in place.
+  app.delete("/api/admin/blog/:slug", requireAuth, async (req, res) => {
+    const existing = storage.getBlogBySlug(String(req.params.slug));
+    if (!existing) return res.status(404).json({ message: "Post not found" });
+    const from = `/blog/${existing.slug}`;
+    const redirectTo = typeof req.body?.redirectTo === "string" ? req.body.redirectTo.trim() : "";
+    try {
+      if (redirectTo) {
+        const { addConsoleRedirect } = await import("./seo-store");
+        addConsoleRedirect(from, redirectTo, `Post "${existing.title}" deleted from /admin/blog`.slice(0, 300));
+      }
+    } catch (err: any) {
+      return res.status(400).json({ message: err?.message ?? "Could not add the redirect" });
+    }
+    storage.deleteBlogPost(existing.slug);
+    invalidateSsrCache(from);
+    invalidateSsrCache("/blog");
+    res.json({ ok: true, slug: existing.slug, redirectTo: redirectTo || null });
+  });
+
   // -------------------- ADMIN: NEIGHBOURHOODS -----------------------------
   // Slug-keyed CRUD for the editorial neighbourhood pages.
   const neighbourhoodToJson = (n: any) => ({

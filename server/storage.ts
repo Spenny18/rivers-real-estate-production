@@ -3125,6 +3125,9 @@ export class DatabaseStorage implements IStorage {
   getBlogBySlug(slug: string): BlogPost | undefined {
     return db.select().from(blogPosts).where(eq(blogPosts.slug, slug)).get();
   }
+  deleteBlogPost(slug: string): boolean {
+    return sqlite.prepare("DELETE FROM blog_posts WHERE slug = ?").run(slug).changes > 0;
+  }
   upsertBlogPost(data: InsertBlogPost): BlogPost {
     if (typeof data.title === "string") data = { ...data, title: stripSiteName(data.title) };
     const existing = db.select().from(blogPosts).where(eq(blogPosts.slug, data.slug!)).get();
