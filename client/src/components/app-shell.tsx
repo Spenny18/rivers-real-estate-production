@@ -36,6 +36,8 @@ import {
   Workflow,
   FileText as TemplatesIcon,
   MessagesSquare,
+  Menu,
+  X,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -219,6 +221,17 @@ export function AppShell({
   }, [location]);
   useEffect(() => saveOpenGroups(openGroups), [openGroups]);
 
+  // Below md the sidebar is an off-canvas drawer. It starts closed and closes
+  // on navigation (each page mounts a fresh AppShell) or Escape.
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  useEffect(() => setMobileNavOpen(false), [location]);
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMobileNavOpen(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mobileNavOpen]);
+
   const toggleGroup = (label: string) =>
     setOpenGroups((prev) => {
       const next = new Set(prev);
@@ -330,14 +343,37 @@ export function AppShell({
   };
 
   return (
-    <div className="grid grid-cols-[260px_1fr] grid-rows-[auto_1fr] h-[100dvh] bg-background overflow-hidden">
+    <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] grid-rows-[auto_1fr] h-[100dvh] bg-background overflow-hidden">
+      {/* Mobile drawer backdrop */}
+      {mobileNavOpen ? (
+        <div
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          onClick={() => setMobileNavOpen(false)}
+          aria-hidden="true"
+          data-testid="mobile-nav-backdrop"
+        />
+      ) : null}
+
       {/* Sidebar — pure black, gold logo, Cinzel labels */}
       <aside
-        className="row-span-2 bg-sidebar text-sidebar-foreground flex flex-col"
+        className={`fixed inset-y-0 left-0 z-40 w-[260px] transition-transform duration-200 md:static md:z-auto md:w-auto md:translate-x-0 md:row-span-2 bg-sidebar text-sidebar-foreground flex flex-col ${
+          mobileNavOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
         style={{ overflowY: "auto", overscrollBehavior: "contain" }}
+        data-testid="admin-sidebar"
       >
-        <div className="px-5 pt-6 pb-5 border-b border-sidebar-border">
+        <div className="px-5 pt-6 pb-5 border-b border-sidebar-border flex items-center justify-between gap-2">
           <Logo layout="row" invert size={36} />
+          <Button
+            variant="ghost"
+            size="icon"
+            className="md:hidden w-8 h-8 text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent"
+            onClick={() => setMobileNavOpen(false)}
+            aria-label="Close menu"
+            data-testid="button-close-menu"
+          >
+            <X className="w-4 h-4" strokeWidth={1.6} />
+          </Button>
         </div>
 
         <nav className="flex-1 p-3 flex flex-col gap-0.5">
@@ -393,11 +429,22 @@ export function AppShell({
       </aside>
 
       {/* Header */}
-      <header className="sticky top-0 z-10 flex items-center gap-6 px-8 h-16 border-b border-border bg-background/85 backdrop-blur">
-        <div className="min-w-[180px]">
+      <header className="sticky top-0 z-10 flex items-center gap-3 md:gap-6 px-4 md:px-8 h-16 border-b border-border bg-background/85 backdrop-blur">
+        <div className="flex items-center gap-2 min-w-0 md:min-w-[180px]">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="md:hidden -ml-2 shrink-0"
+            onClick={() => setMobileNavOpen(true)}
+            aria-label="Open menu"
+            aria-expanded={mobileNavOpen}
+            data-testid="button-open-menu"
+          >
+            <Menu className="w-5 h-5" strokeWidth={1.6} />
+          </Button>
           {pageTitle && (
             <h1
-              className="font-display text-[13px] tracking-[0.22em] text-foreground"
+              className="font-display text-[13px] tracking-[0.22em] text-foreground truncate"
               style={{ fontWeight: 600 }}
             >
               {pageTitle.toUpperCase()}
@@ -405,7 +452,7 @@ export function AppShell({
           )}
         </div>
 
-        <div className="flex-1 flex justify-center max-w-xl mx-auto">
+        <div className="hidden sm:flex flex-1 justify-center max-w-xl mx-auto">
           <div className="relative w-full">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" strokeWidth={1.6} />
             <Input
@@ -419,7 +466,7 @@ export function AppShell({
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 ml-auto sm:ml-0 shrink-0">
           {pageActions}
           <Button
             variant="ghost"
