@@ -526,6 +526,56 @@ export async function registerRoutes(
     console.error("[seed] failed:", e);
   }
 
+  // Installed before any route is registered: the admin routes below fall back
+  // to the session cookie when the bearer token is missing (e.g. Safari clearing
+  // localStorage), and middleware only applies to routes registered after it.
+  // Sessions — cookie-based, no localStorage needed.
+  // The deployed site is loaded inside an iframe and the API is proxied
+  // through a different origin, so cookies must be SameSite=None+Secure to
+  // be accepted in that third-party context. In dev we use lax+insecure.
+  const isProd = process.env.NODE_ENV === "production";
+  if (isProd) app.set("trust proxy", 1);
+
+  // Resolve session secret. A hardcoded fallback must never ship to a live
+  // URL, so production either takes SESSION_SECRET from the environment or
+  // generates one — but that generated secret is now persisted, because a
+  // fresh secret per process invalidates every cookie on restart and would
+  // quietly undo the persistent store below.
+  let sessionSecret: string;
+  if (isProd) {
+    const resolved = persistentSessionSecret(() => randomBytes(48).toString("base64url"));
+    sessionSecret = resolved.secret;
+    if (resolved.source !== "env") {
+      console.warn(
+        `[auth] SESSION_SECRET not set — using a ${resolved.source} secret from the database. ` +
+          "Sessions survive restarts, but set it with `fly secrets set SESSION_SECRET=...` so it " +
+          "also survives the volume being rebuilt.",
+      );
+    }
+  } else {
+    sessionSecret = process.env.SESSION_SECRET || "rivers-dev-only-secret";
+  }
+
+  app.use(
+    session({
+      // Published *.pplx.app sites strip any cookie whose name doesn't
+      // start with __Host-. Use that prefix in production so the session
+      // cookie survives the proxy.
+      name: isProd ? "__Host-rivers-sid" : "rivers.sid",
+      store: new SqliteSessionStore(),
+      secret: sessionSecret,
+      resave: false,
+      saveUninitialized: false,
+      cookie: {
+        httpOnly: true,
+        sameSite: isProd ? "none" : "lax",
+        secure: isProd,
+        path: "/",
+        maxAge: 30 * 24 * 60 * 60 * 1000,
+      },
+    }),
+  );
+
   // Activity tracking — the site beacon, email open/click endpoints, and the
   // admin timeline. Registered first: it installs the middleware that ties a
   // browser to the email submitted through any public form, which has to sit
@@ -1203,53 +1253,6 @@ export async function registerRoutes(
     res.set("Cache-Control", "public, max-age=3600, stale-while-revalidate=300");
     res.send(lines.join("\n"));
   });
-
-  // Sessions — cookie-based, no localStorage needed.
-  // The deployed site is loaded inside an iframe and the API is proxied
-  // through a different origin, so cookies must be SameSite=None+Secure to
-  // be accepted in that third-party context. In dev we use lax+insecure.
-  const isProd = process.env.NODE_ENV === "production";
-  if (isProd) app.set("trust proxy", 1);
-
-  // Resolve session secret. A hardcoded fallback must never ship to a live
-  // URL, so production either takes SESSION_SECRET from the environment or
-  // generates one — but that generated secret is now persisted, because a
-  // fresh secret per process invalidates every cookie on restart and would
-  // quietly undo the persistent store below.
-  let sessionSecret: string;
-  if (isProd) {
-    const resolved = persistentSessionSecret(() => randomBytes(48).toString("base64url"));
-    sessionSecret = resolved.secret;
-    if (resolved.source !== "env") {
-      console.warn(
-        `[auth] SESSION_SECRET not set — using a ${resolved.source} secret from the database. ` +
-          "Sessions survive restarts, but set it with `fly secrets set SESSION_SECRET=...` so it " +
-          "also survives the volume being rebuilt.",
-      );
-    }
-  } else {
-    sessionSecret = process.env.SESSION_SECRET || "rivers-dev-only-secret";
-  }
-
-  app.use(
-    session({
-      // Published *.pplx.app sites strip any cookie whose name doesn't
-      // start with __Host-. Use that prefix in production so the session
-      // cookie survives the proxy.
-      name: isProd ? "__Host-rivers-sid" : "rivers.sid",
-      store: new SqliteSessionStore(),
-      secret: sessionSecret,
-      resave: false,
-      saveUninitialized: false,
-      cookie: {
-        httpOnly: true,
-        sameSite: isProd ? "none" : "lax",
-        secure: isProd,
-        path: "/",
-        maxAge: 30 * 24 * 60 * 60 * 1000,
-      },
-    }),
-  );
 
   // ---------- AUTH ----------
   // This is a single-tenant back-office for Spencer Rivers. Public sign-up
