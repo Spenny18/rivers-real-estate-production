@@ -21,6 +21,7 @@ import {
 import { Eye, FileDown, Loader2, Plus, Trash2, Layers, Image as ImageIcon, RefreshCw } from "lucide-react";
 import { apiErrorMessage, apiRequest, apiUrl } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useAuthedImage } from "@/lib/authed-blob";
 
 type Kind = "city" | "subdivision" | "district";
 const KIND_LABEL: Record<Kind, string> = { city: "City", subdivision: "Community", district: "District" };
@@ -92,36 +93,6 @@ function shift(p: string, n: number): string {
 }
 
 /** Fetch an authenticated image and hand back an object URL for an <img>. */
-function useAuthedImage(path: string | null) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let revoked: string | null = null;
-    let cancelled = false;
-    if (!path) {
-      setUrl(null);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    apiRequest("GET", path)
-      .then((r) => r.blob())
-      .then((b) => {
-        if (cancelled) return;
-        revoked = URL.createObjectURL(b);
-        setUrl(revoked);
-      })
-      .catch((e) => !cancelled && setError(apiErrorMessage(e)))
-      .finally(() => !cancelled && setLoading(false));
-    return () => {
-      cancelled = true;
-      if (revoked) URL.revokeObjectURL(revoked);
-    };
-  }, [path]);
-  return { url, loading, error };
-}
-
 export default function AdminMarketReportsPage() {
   const qc = useQueryClient();
   const { toast } = useToast();

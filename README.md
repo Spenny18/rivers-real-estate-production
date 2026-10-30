@@ -54,6 +54,8 @@ fly deploy
 | `HERO_IMAGE_QUALITY`     | Optional: `low` / `medium` (default) / `high` |
 | `BLOG_HERO_AI`           | Optional: `off` disables blog hero generation |
 | `PILLAR9_USER` / `_PASS` | RETS feed credentials          |
+| `PILLAR9_AGENT_ID`       | Optional. Agent ID whose listings show under Listings → My MLS® listings (default `CRIVERSP`); `MY_LISTINGS_SYNC_HOURS` sets how often they re-sync (default 6) |
+| `LISTING_ASSETS_MODEL`   | Optional. Claude model for listing copy (default `claude-sonnet-5-5`); needs `ANTHROPIC_API_KEY` |
 | `MAKE_WEBHOOK_URL`       | Social composer outbound hook  |
 | `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` | Calendar OAuth (bookings + free/busy) |
 | `PUBLIC_ORIGIN`          | Absolute origin used in booking links, signing links, emails and OAuth redirect |

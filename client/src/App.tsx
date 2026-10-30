@@ -68,6 +68,7 @@ import NotFound from "@/pages/not-found";
 const AuthPage = lazy(() => import("@/pages/auth"));
 const DashboardPage = lazy(() => import("@/pages/dashboard"));
 const ListingsPage = lazy(() => import("@/pages/listings"));
+const MyListingPage = lazy(() => import("@/pages/my-listing"));
 const ListingEditPage = lazy(() => import("@/pages/listing-edit"));
 import ListingPublicPage from "@/pages/listing-public";
 const LeadsPage = lazy(() => import("@/pages/leads"));
@@ -202,6 +203,12 @@ function AppRouter() {
       <Route
         path="/admin/listings"
         component={() => <ProtectedRoute component={ListingsPage} />}
+      />
+      <Route
+        path="/admin/listings/mls/:id"
+        component={(p: any) => (
+          <ProtectedRoute component={() => <MyListingPage {...p} />} />
+        )}
       />
       <Route
         path="/admin/listings/:id"
