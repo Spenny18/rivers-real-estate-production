@@ -184,6 +184,12 @@ app.use((req, res, next) => {
     console.error("[mls-sync] failed to start cron:", err);
   }
   try {
+    const { startMyListingsCron } = await import("./my-listings");
+    startMyListingsCron();
+  } catch (err) {
+    console.error("[my-listings] failed to start cron:", err);
+  }
+  try {
     const { startHistorySyncCron } = await import("./rets-history-sync");
     startHistorySyncCron();
   } catch (err) {

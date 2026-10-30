@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { formatPriceCompact, timeAgo } from "@/lib/mock-data";
 import type { PublicListing } from "@/lib/types";
+import { MyMlsListings } from "@/components/my-mls-listings";
 
 const STATUS_STYLES: Record<string, string> = {
   active: "bg-foreground text-background border-transparent",
@@ -34,7 +35,23 @@ const STATUS_STYLES: Record<string, string> = {
   pending: "bg-secondary text-foreground border-border",
 };
 
+const TAB_KEY = "rivers.listings.tab";
+
 export default function ListingsPage() {
+  // My Pillar 9 listings first; the site's hand-built listings on the other tab.
+  const [tab, setTabState] = useState<"mls" | "site">(() => {
+    try {
+      return window.localStorage.getItem(TAB_KEY) === "site" ? "site" : "mls";
+    } catch {
+      return "mls";
+    }
+  });
+  const setTab = (t: "mls" | "site") => {
+    setTabState(t);
+    try {
+      window.localStorage.setItem(TAB_KEY, t);
+    } catch {}
+  };
   const [view, setView] = useState<"grid" | "list">("grid");
   const [filter, setFilter] = useState<string>("all");
   const [query, setQuery] = useState("");
@@ -65,6 +82,31 @@ export default function ListingsPage() {
       }
     >
       <div className="px-8 py-7 space-y-6">
+        <div className="inline-flex p-1 bg-secondary rounded-sm gap-0.5" role="tablist">
+          {(
+            [
+              ["mls", "MY MLS® LISTINGS"],
+              ["site", "SITE LISTINGS"],
+            ] as const
+          ).map(([id, label]) => (
+            <Button
+              key={id}
+              role="tab"
+              aria-selected={tab === id}
+              variant={tab === id ? "default" : "ghost"}
+              className="h-8 rounded-sm font-display tracking-[0.14em] text-[11px]"
+              onClick={() => setTab(id)}
+              data-testid={`tab-listings-${id}`}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
+
+        {tab === "mls" ? (
+          <MyMlsListings />
+        ) : (
+        <>
         {/* Toolbar */}
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative flex-1 min-w-[240px]">
@@ -228,6 +270,8 @@ export default function ListingsPage() {
               <p className="text-sm text-muted-foreground">Try a different status or clear your search.</p>
             </CardContent>
           </Card>
+        )}
+        </>
         )}
       </div>
     </AppShell>

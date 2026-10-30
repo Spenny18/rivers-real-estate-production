@@ -636,6 +636,11 @@ export async function registerRoutes(
     const { registerLeadIntakeRoutes } = await import("./lead-intake-routes");
     registerLeadIntakeRoutes(app, { requireAuth });
 
+    // Spencer's own Pillar 9 listings (by agent ID) and the marketing assets
+    // built from them. See server/my-listings.ts and server/listing-assets.ts.
+    const { registerMyListingsRoutes } = await import("./my-listings-routes");
+    registerMyListingsRoutes(app, { requireAuth });
+
     // Automations / action plans: builder, approvals, tasks.
     // See server/automations.ts.
     const { registerAutomationRoutes } = await import("./automation-routes");

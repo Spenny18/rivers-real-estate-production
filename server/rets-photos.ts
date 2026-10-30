@@ -112,6 +112,8 @@ function lruSet(key: string, entry: CacheEntry) {
 export async function fetchListingPhoto(
   listingId: string,
   index: number,
+  /** ListingKeyNumeric, for a listing not in mls_listings (e.g. one of Spencer's sold listings). */
+  listingKey?: number | null,
 ): Promise<{ contentType: string; body: Buffer } | null> {
   if (!process.env.RETS_USERNAME || !process.env.RETS_PASSWORD) return null;
   const key = `${listingId}:${index}`;
@@ -121,7 +123,7 @@ export async function fetchListingPhoto(
   }
   const pending = inFlight.get(key);
   if (pending) return pending;
-  const p = withSlot(() => fetchListingPhotoUncached(listingId, index)).finally(() => inFlight.delete(key));
+  const p = withSlot(() => fetchListingPhotoUncached(listingId, index, listingKey)).finally(() => inFlight.delete(key));
   inFlight.set(key, p);
   return p;
 }
@@ -129,6 +131,7 @@ export async function fetchListingPhoto(
 async function fetchListingPhotoUncached(
   listingId: string,
   index: number,
+  knownKey?: number | null,
 ): Promise<{ contentType: string; body: Buffer } | null> {
   const key = `${listingId}:${index}`;
   // 1-based for RETS GetObject \u2014 the API accepts 0-based indexing externally
@@ -143,12 +146,12 @@ async function fetchListingPhotoUncached(
 
   // Pillar 9 RETS GetObject keys photos by ListingKeyNumeric, not the
   // alphanumeric ListingId. Look up the numeric key from the DB.
-  const listing = storage.getMlsListingById(listingId);
-  if (!listing || !listing.listingKey) {
+  const listingKey = knownKey ?? storage.getMlsListingById(listingId)?.listingKey;
+  if (!listingKey) {
     negativeCache.set(key, Date.now() + NEGATIVE_TTL_MS);
     return null;
   }
-  const retsListingId = String(listing.listingKey);
+  const retsListingId = String(listingKey);
 
   try {
     await ensureLogin();
