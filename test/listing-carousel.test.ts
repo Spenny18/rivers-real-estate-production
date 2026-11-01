@@ -147,3 +147,16 @@ test("the zip holds every file intact", () => {
   assert.equal(zip.subarray(30 + 5, 30 + 5 + a.length).toString(), "first file");
   assert.equal(zip.readUInt32LE(14), zlib.crc32(a) >>> 0);
 });
+
+test("long MLS remarks never make the carousel invalid", () => {
+  const long = "This remarkable home offers an extraordinary combination of space, light and craftsmanship, " + "with finishes throughout ".repeat(12) + "and more.";
+  upsertMyListing(normalizeMyListing({ ...row, ListingId: "A77", PublicRemarks: `${long} ${long} ${long} ${long}` }, "list")!);
+  const spec = defaultCarousel(getMyListing("A77")!, { occasion: "just-listed" });
+  const parsed = carouselSchema.safeParse(spec);
+  assert.ok(parsed.success, parsed.success ? "" : parsed.error.issues[0]?.message);
+  assert.ok(spec.slides.every((s) => s.points.every((p) => p.length <= 200) && s.body.length <= 400));
+  // A spec saved or sent with over-long text is trimmed, not refused.
+  const trimmed = carouselSchema.parse({ occasion: "just-listed", slides: [{ layout: "dark-list", points: ["x".repeat(500)], body: "y".repeat(900) }] });
+  assert.equal(trimmed.slides[0].points[0].length, 200);
+  assert.equal(trimmed.slides[0].body.length, 400);
+});

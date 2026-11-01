@@ -57,13 +57,26 @@ export const CAROUSEL_LAYOUTS = {
 export type CarouselLayout = keyof typeof CAROUSEL_LAYOUTS;
 const LAYOUT_KEYS = Object.keys(CAROUSEL_LAYOUTS) as [CarouselLayout, ...CarouselLayout[]];
 
+/** Text longer than a slide can hold is trimmed, never refused: one long MLS sentence mustn't break the carousel. */
+const clipped = (n: number) =>
+  z
+    .string()
+    .default("")
+    .transform((s) => s.slice(0, n));
+
 export const slideSchema = z.object({
   layout: z.enum(LAYOUT_KEYS),
-  eyebrow: z.string().max(80).default(""),
-  headline: z.string().max(140).default(""),
-  body: z.string().max(400).default(""),
-  points: z.array(z.string().max(200)).max(6).default([]),
-  photos: z.array(z.number().int().min(0).max(199)).max(2).default([]),
+  eyebrow: clipped(80),
+  headline: clipped(140),
+  body: clipped(400),
+  points: z
+    .array(z.string().transform((s) => s.slice(0, 200)))
+    .default([])
+    .transform((a) => a.slice(0, 6)),
+  photos: z
+    .array(z.number().int().min(0).max(199))
+    .default([])
+    .transform((a) => a.slice(0, 2)),
 });
 export type CarouselSlide = z.infer<typeof slideSchema>;
 
@@ -495,6 +508,12 @@ export function keyNumbers(l: MyListing, o: { occasion: Occasion; showSoldPrice?
   return out.slice(0, 4);
 }
 
+/** Cut at a word boundary to at most `n` characters, marking the cut. */
+export function clipWords(s: string, n: number): string {
+  if (s.length <= n) return s;
+  return s.slice(0, n - 1).replace(/[\s,.;:—-]+\S*$/, "") + "…";
+}
+
 function sentences(text: string | null): string[] {
   return (text ?? "")
     .replace(/\s+/g, " ")
@@ -547,13 +566,13 @@ export function defaultCarousel(l: MyListing, o: { occasion: Occasion; detail?: 
       layout: "overview",
       eyebrow: "",
       headline: kind && place ? `${kind} in ${place}.` : `${streetLine(l)}.`,
-      body: said[0] ?? "",
+      body: clipWords(said[0] ?? "", 140),
       points: keyNumbers(l, o),
       photos: [p(1)],
     },
   ];
   if (said.length > 1) {
-    slides.push({ layout: "dark-list", eyebrow: "The Highlights", headline: "A closer look.", body: "", points: said.slice(1, 4), photos: [p(2)] });
+    slides.push({ layout: "dark-list", eyebrow: "The Highlights", headline: "A closer look.", body: "", points: said.slice(1, 4).map((t) => clipWords(t, 110)), photos: [p(2)] });
   }
   if (n > 4) {
     const facts = [
