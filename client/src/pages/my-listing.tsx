@@ -1,5 +1,6 @@
 // /admin/listings/mls/:id — the asset studio for one of Spencer's Pillar 9
-// listings: branded social graphics, a feature sheet PDF, and copy written by
+// listings: branded social graphics, an Instagram carousel
+// (server/listing-carousel.ts), a feature sheet PDF, and copy written by
 // Claude (server/listing-assets.ts).
 
 import { useEffect, useMemo, useState } from "react";
@@ -20,6 +21,7 @@ import { apiErrorMessage, apiRequest } from "@/lib/queryClient";
 import { downloadAuthed, useAuthedImage } from "@/lib/authed-blob";
 import { formatPrice, timeAgoShort } from "@/lib/format";
 import { useToast } from "@/hooks/use-toast";
+import { CarouselPanel } from "@/components/listing-carousel";
 import { ListingPhoto, MY_STATUS_STYLES, ROLE_LABEL, placeOf, streetOf, type MyListing } from "@/components/my-mls-listings";
 
 interface Asset {
@@ -305,6 +307,8 @@ function StudioView({ data, queryKey }: { data: Studio; queryKey: string[] }) {
           {/* Copy */}
           <CopyPanel data={data} queryKey={queryKey} options={{ occasion, detail, showSoldPrice: showSoldPrice && canShowSoldPrice }} />
         </div>
+
+        <CarouselPanel listing={l} options={{ occasion, detail, showSoldPrice: showSoldPrice && canShowSoldPrice }} studioKey={queryKey} />
       </div>
     </AppShell>
   );
