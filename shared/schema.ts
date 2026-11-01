@@ -618,6 +618,7 @@ export const socialPosts = sqliteTable("social_posts", {
   listingId: text("listing_id"), // optional — when post is tied to a specific listing
   caption: text("caption").notNull(), // master/default caption (used when a platform variant is empty)
   imageUrl: text("image_url"), // master/default image
+  mediaUrls: text("media_urls").notNull().default("[]"), // JSON array of images, in order: more than one = an Instagram carousel
   linkUrl: text("link_url"), // master/default link (Facebook + X support clickable links; GBP CTA URL)
   channels: text("channels").notNull().default("[]"), // JSON array: ["instagram","facebook","x","linkedin","gbp","youtube"]
   variants: text("variants").notNull().default("{}"), // JSON map: {[platform]: {caption?, imageUrl?, linkUrl?, scheduledFor?}}

@@ -446,6 +446,7 @@ sqlite.exec(`
     link_url TEXT,
     channels TEXT NOT NULL DEFAULT '[]',
     variants TEXT NOT NULL DEFAULT '{}',
+    media_urls TEXT NOT NULL DEFAULT '[]',
     scheduled_for TEXT,
     status TEXT NOT NULL DEFAULT 'draft',
     posted_at TEXT,
@@ -1266,6 +1267,10 @@ try {
     if (!existing.has("variants")) {
       sqlite.exec("ALTER TABLE social_posts ADD COLUMN variants TEXT NOT NULL DEFAULT '{}'");
       console.log("[migration] added variants to social_posts");
+    }
+    if (!existing.has("media_urls")) {
+      sqlite.exec("ALTER TABLE social_posts ADD COLUMN media_urls TEXT NOT NULL DEFAULT '[]'");
+      console.log("[migration] added media_urls to social_posts");
     }
   }
 } catch (err) {
@@ -3945,14 +3950,18 @@ export class DatabaseStorage implements IStorage {
         linkUrl: (data as any).linkUrl ?? null,
         channels: typeof (data as any).channels === "string" ? (data as any).channels : JSON.stringify(data.channels ?? []),
         variants: typeof (data as any).variants === "string" ? (data as any).variants : JSON.stringify((data as any).variants ?? {}),
+        mediaUrls: typeof (data as any).mediaUrls === "string" ? (data as any).mediaUrls : JSON.stringify((data as any).mediaUrls ?? []),
         scheduledFor: data.scheduledFor ?? null,
         status: data.status ?? "draft",
       } as any)
       .returning()
       .get();
   }
-  updateSocialPost(id: number, patch: Partial<{ status: string; postedAt: string | null; caption: string; imageUrl: string | null; linkUrl: string | null; channels: any; variants: any; scheduledFor: string | null; listingId: string | null }>): SocialPost | undefined {
+  updateSocialPost(id: number, patch: Partial<{ status: string; postedAt: string | null; caption: string; imageUrl: string | null; linkUrl: string | null; channels: any; variants: any; mediaUrls: any; scheduledFor: string | null; listingId: string | null }>): SocialPost | undefined {
     const update: any = { ...patch };
+    if (update.mediaUrls && typeof update.mediaUrls !== "string") {
+      update.mediaUrls = JSON.stringify(update.mediaUrls);
+    }
     if (update.channels && typeof update.channels !== "string") {
       update.channels = JSON.stringify(update.channels);
     }

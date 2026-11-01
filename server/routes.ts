@@ -43,6 +43,7 @@ const execFileAsync = promisify(execFile);
 // we fall back to a local folder under client/public/ so the dev server
 // can serve them too.
 import { UPLOADS_ROOT, ensureUploadsDir } from "./uploads";
+import { dispatchSocialPost, socialPostView } from "./social-posts";
 import { heroImageGenerationEnabled, queueHeroImage, keepGeneratedHero, regenerateHeroImage } from "./hero-image";
 import { linksForPost, nearbyCondos, nearbyNeighbourhoods, postsNaming } from "./related-links";
 
@@ -3602,16 +3603,11 @@ export async function registerRoutes(
   // ---------- SOCIAL POSTS (auth) ----------
   app.get("/api/social-posts", requireAuth, (req, res) => {
     const userId = (req as any).authUserId as number;
-    const items = storage.listSocialPosts(userId).map((p) => ({
-      ...p,
-      channels: (() => { try { return JSON.parse(p.channels); } catch { return []; } })(),
-      variants: (() => { try { return JSON.parse((p as any).variants ?? "{}"); } catch { return {}; } })(),
-    }));
-    res.json(items);
+    res.json(storage.listSocialPosts(userId).map((p) => socialPostView(p)));
   });
   app.post("/api/social-posts", requireAuth, (req, res) => {
     const userId = (req as any).authUserId as number;
-    const { caption, imageUrl, linkUrl, channels, variants, scheduledFor, status, listingId } = req.body ?? {};
+    const { caption, imageUrl, mediaUrls, linkUrl, channels, variants, scheduledFor, status, listingId } = req.body ?? {};
     if (!caption || typeof caption !== "string") {
       return res.status(400).json({ message: "Caption required" });
     }
@@ -3619,6 +3615,7 @@ export async function registerRoutes(
       userId,
       caption,
       imageUrl: imageUrl ?? null,
+      mediaUrls: Array.isArray(mediaUrls) ? mediaUrls.filter((u: unknown) => typeof u === "string").slice(0, 10) : [],
       linkUrl: linkUrl ?? null,
       channels: Array.isArray(channels) ? channels : [],
       variants: typeof variants === "object" && variants !== null ? variants : {},
@@ -3626,11 +3623,7 @@ export async function registerRoutes(
       status: status ?? "draft",
       listingId: listingId ?? null,
     } as any);
-    res.json({
-      ...created,
-      channels: (() => { try { return JSON.parse(created.channels); } catch { return []; } })(),
-      variants: (() => { try { return JSON.parse((created as any).variants ?? "{}"); } catch { return {}; } })(),
-    });
+    res.json(socialPostView(created));
   });
   app.patch("/api/social-posts/:id", requireAuth, (req, res) => {
     const id = parseInt(req.params.id, 10);
@@ -3639,6 +3632,7 @@ export async function registerRoutes(
     const b = req.body ?? {};
     if (typeof b.caption === "string") patch.caption = b.caption;
     if ("imageUrl" in b) patch.imageUrl = b.imageUrl;
+    if (Array.isArray(b.mediaUrls)) patch.mediaUrls = b.mediaUrls.filter((u: unknown) => typeof u === "string").slice(0, 10);
     if ("linkUrl" in b) patch.linkUrl = b.linkUrl;
     if ("scheduledFor" in b) patch.scheduledFor = b.scheduledFor;
     if ("status" in b) patch.status = b.status;
@@ -3647,63 +3641,17 @@ export async function registerRoutes(
     if (b.variants && typeof b.variants === "object") patch.variants = b.variants;
     const updated = storage.updateSocialPost(id, patch);
     if (!updated) return res.status(404).json({ message: "Not found" });
-    res.json(updated);
+    res.json(socialPostView(updated));
   });
+  // Send to the auto-poster (server/social-posts.ts): the Make scenario
+  // behind MAKE_SOCIAL_WEBHOOK_URL, one entry per platform, with several
+  // images going to Instagram as a carousel.
   app.post("/api/social-posts/:id/post", requireAuth, async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid id" });
-    const post: any = storage.getSocialPost(id);
-    if (!post) return res.status(404).json({ message: "Not found" });
-
-    // Resolve channels + variants. Each platform gets {caption, imageUrl,
-    // linkUrl, scheduledFor} merged from master + variant overrides.
-    const channels = (() => { try { return JSON.parse(post.channels); } catch { return []; } })() as string[];
-    const variants = (() => { try { return JSON.parse(post.variants ?? "{}"); } catch { return {}; } })() as Record<string, any>;
-    const posts: Record<string, any> = {};
-    for (const ch of channels) {
-      const v = variants[ch] ?? {};
-      posts[ch] = {
-        caption: typeof v.caption === "string" && v.caption.trim() ? v.caption : post.caption,
-        imageUrl: v.imageUrl ?? post.imageUrl ?? null,
-        linkUrl: v.linkUrl ?? post.linkUrl ?? null,
-        scheduledFor: v.scheduledFor ?? post.scheduledFor ?? null,
-      };
-    }
-
-    // Fire the Make webhook (if configured) with a per-platform payload.
-    const url = process.env.MAKE_SOCIAL_WEBHOOK_URL;
-    let dispatched = false;
-    let webhookError: string | null = null;
-    if (url && channels.length > 0) {
-      try {
-        const r = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            postId: post.id,
-            listingId: post.listingId,
-            platforms: channels, // backwards-compat with router filters
-            posts,
-            // backwards-compat top-level master fields
-            caption: post.caption,
-            imageUrl: post.imageUrl,
-            linkUrl: post.linkUrl,
-          }),
-        });
-        dispatched = r.ok;
-        if (!r.ok) webhookError = `Webhook ${r.status}: ${await r.text()}`;
-      } catch (e: any) {
-        webhookError = e?.message ?? "fetch failed";
-      }
-    } else if (!url) {
-      webhookError = "MAKE_SOCIAL_WEBHOOK_URL not set";
-    }
-
-    const updated = storage.updateSocialPost(id, {
-      status: dispatched ? "posted" : "failed",
-      postedAt: dispatched ? new Date().toISOString() : null,
-    } as any);
-    res.json({ ...updated, dispatched, webhookError, channels, posts });
+    const result = await dispatchSocialPost(id);
+    if (!result) return res.status(404).json({ message: "Not found" });
+    res.json(result);
   });
   app.delete("/api/social-posts/:id", requireAuth, (req, res) => {
     const id = parseInt(req.params.id, 10);

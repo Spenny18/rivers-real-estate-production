@@ -12,12 +12,18 @@
 //
 // Every slide carries the brokerage in its footer (RECA advertising rules).
 
+import fs from "node:fs";
+import path from "node:path";
 import zlib from "node:zlib";
 import Anthropic from "@anthropic-ai/sdk";
+import { Resvg } from "@resvg/resvg-js";
+import jpeg from "jpeg-js";
 import { z } from "zod";
 import { sqlite } from "./storage";
 import { AGENT } from "./brand";
 import { fetchListingPhoto } from "./rets-photos";
+import { fontFiles } from "./report-pages";
+import { ensureUploadsDir } from "./uploads";
 import {
   OCCASIONS,
   listingFacts,
@@ -25,6 +31,7 @@ import {
   photoDataUri,
   placeLine,
   publicListingUrl,
+  listAssets,
   rasterise,
   saveAsset,
   streetLine,
@@ -479,11 +486,60 @@ export function slideSvg(l: MyListing, spec: CarouselSpec, index: number, photos
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${SLIDE_W}" height="${SLIDE_H}" viewBox="0 0 ${SLIDE_W} ${SLIDE_H}">\n${body}\n</svg>`;
 }
 
-export async function renderSlide(l: MyListing, spec: CarouselSpec, index: number, width = SLIDE_W): Promise<Buffer> {
-  const s = spec.slides[index];
+async function slidePhotos(l: MyListing, s: CarouselSlide): Promise<Array<string | null>> {
   const want = s.photos.slice(0, CAROUSEL_LAYOUTS[s.layout].photos);
-  const photos = await Promise.all(want.map((i) => photoDataUri(l, i)));
-  return rasterise(slideSvg(l, spec, index, photos), width, WHITE);
+  return Promise.all(want.map((i) => photoDataUri(l, i)));
+}
+
+export async function renderSlide(l: MyListing, spec: CarouselSpec, index: number, width = SLIDE_W): Promise<Buffer> {
+  return rasterise(slideSvg(l, spec, index, await slidePhotos(l, spec.slides[index])), width, WHITE);
+}
+
+/** An SVG as a JPEG: Instagram's publishing API takes JPEG only. */
+export function svgToJpeg(svg: string, width: number, quality = 90): Buffer {
+  const r = new Resvg(svg, {
+    fitTo: { mode: "width", value: width },
+    font: { fontFiles: fontFiles(), loadSystemFonts: false, defaultFontFamily: SANS },
+    background: WHITE,
+  });
+  const img = r.render();
+  return Buffer.from(jpeg.encode({ data: img.pixels, width: img.width, height: img.height }, quality).data);
+}
+
+export async function renderSlideJpeg(l: MyListing, spec: CarouselSpec, index: number): Promise<Buffer> {
+  return svgToJpeg(slideSvg(l, spec, index, await slidePhotos(l, spec.slides[index])), SLIDE_W);
+}
+
+/**
+ * Every slide written as a JPEG under /uploads/carousels/<listing>/, where the
+ * site serves it publicly, so the social auto-poster (Make → Instagram) can
+ * fetch it. Returns the site-relative paths in slide order.
+ */
+export async function publishCarouselImages(l: MyListing, spec: CarouselSpec): Promise<string[]> {
+  const folder = `carousels/${l.id.replace(/[^A-Za-z0-9_-]/g, "") || "listing"}`;
+  const dir = ensureUploadsDir(folder);
+  const stamp = Date.now().toString(36);
+  const urls: string[] = [];
+  for (let i = 0; i < spec.slides.length; i++) {
+    const name = `${stamp}-${String(i + 1).padStart(2, "0")}.jpg`;
+    fs.writeFileSync(path.join(dir, name), await renderSlideJpeg(l, spec, i));
+    urls.push(`/uploads/${folder}/${name}`);
+  }
+  return urls;
+}
+
+/** The newest Instagram caption written for this listing, else a plain one. */
+export function carouselCaption(l: MyListing, occasion: Occasion): string {
+  const written = listAssets(l.id).find((a) => a.kind === "instagram");
+  if (written) return written.content;
+  const where = placeLine(l);
+  return [
+    `${OCCASIONS[occasion]} · ${streetLine(l)}${where ? `, ${where}` : ""}`,
+    "",
+    "Swipe through for the details, and send me a message to book a showing.",
+    "",
+    `${AGENT.name} · ${AGENT.brokerage}`,
+  ].join("\n");
 }
 
 // ---- The plain carousel -------------------------------------------------------------

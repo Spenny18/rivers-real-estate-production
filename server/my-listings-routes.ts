@@ -17,6 +17,8 @@
 //   POST   /api/admin/my-listings/:id/carousel/write     Claude plans it and writes its caption {occasion, detail?, notes?, showSoldPrice?}
 //   POST   /api/admin/my-listings/:id/carousel/slide     PNG of one slide {spec, index, width?}
 //   POST   /api/admin/my-listings/:id/carousel/zip       every slide as PNGs in a zip {spec}
+//   POST   /api/admin/my-listings/:id/carousel/social    publish the slides as JPEGs and make a Marketing social post
+//                                                        {spec, caption?, channels?, postNow?}; postNow sends it to the auto-poster
 
 import type { Express, Request, Response, NextFunction } from "express";
 import { z } from "zod";
@@ -40,13 +42,17 @@ import {
   type Occasion,
 } from "./listing-assets";
 import { fetchListingPhoto } from "./rets-photos";
+import { storage } from "./storage";
+import { dispatchSocialPost, socialPostView } from "./social-posts";
 import {
   CAROUSEL_LAYOUTS,
+  carouselCaption,
   carouselSchema,
   defaultCarousel,
   deleteCarousel,
   getCarousel,
   renderCarouselZip,
+  publishCarouselImages,
   renderSlide,
   saveCarousel,
   writeCarousel,
@@ -275,6 +281,47 @@ export function registerMyListingsRoutes(app: Express, { requireAuth }: { requir
     } catch (e: any) {
       console.error("[listing-carousel] zip failed:", e);
       res.status(500).json({ message: e?.message ?? "Could not build the carousel" });
+    }
+  });
+
+  const socialBody = z.object({
+    spec: carouselSchema,
+    caption: z.string().max(2200).optional(),
+    channels: z.array(z.enum(["instagram", "facebook"])).min(1).default(["instagram"]),
+    postNow: z.boolean().optional(),
+  });
+
+  // The carousel into Marketing's social posts: the slides are written as
+  // JPEGs where the site serves them publicly, then a post is made with all of
+  // them (mediaUrls), which the auto-poster sends to Instagram as a carousel.
+  app.post("/api/admin/my-listings/:id/carousel/social", requireAuth, async (req, res) => {
+    const l = getMyListing(String(req.params.id));
+    if (!l) return res.status(404).json({ message: "Listing not found" });
+    const body = socialBody.safeParse(req.body ?? {});
+    if (!body.success) return res.status(400).json({ message: body.error.issues[0]?.message ?? "Invalid request" });
+    const { spec, channels, postNow } = body.data;
+    if (spec.slides.length < 2) return res.status(400).json({ message: "A carousel needs at least two slides" });
+    try {
+      saveCarousel(l.id, spec);
+      const mediaUrls = await publishCarouselImages(l, spec);
+      const created = storage.createSocialPost({
+        userId: (req as any).authUserId as number,
+        caption: body.data.caption?.trim() || carouselCaption(l, spec.occasion),
+        imageUrl: mediaUrls[0],
+        mediaUrls,
+        linkUrl: publicListingUrl(l.id),
+        channels,
+        variants: {},
+        scheduledFor: null,
+        status: "draft",
+        listingId: l.id,
+      } as any);
+      if (!postNow) return res.json({ post: socialPostView(created), dispatched: false });
+      const sent = await dispatchSocialPost(created.id);
+      res.json({ post: sent, dispatched: !!sent?.dispatched, webhookError: sent?.webhookError ?? null });
+    } catch (e: any) {
+      console.error("[listing-carousel] social post failed:", e);
+      res.status(500).json({ message: e?.message ?? "Could not make the social post" });
     }
   });
 }
