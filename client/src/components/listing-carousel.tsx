@@ -6,7 +6,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, CopyPlus, Download, Loader2, Plus, RotateCcw, Sparkles, Trash2 } from "lucide-react";
+import { Link } from "wouter";
+import { ArrowLeft, ArrowRight, CopyPlus, Download, ExternalLink, Instagram, Loader2, Plus, RotateCcw, Send, Sparkles, Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -274,6 +275,7 @@ export function CarouselPanel({
   const [notes, setNotes] = useState("");
   const [zipBusy, setZipBusy] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [sent, setSent] = useState<{ posted: boolean; error: string | null } | null>(null);
 
   useEffect(() => {
     if (!data) return;
@@ -328,6 +330,31 @@ export function CarouselPanel({
       toast({ title: "Carousel planned", description: "The caption is with your copy below." });
     },
     onError: (e) => toast({ title: "Couldn't plan the carousel", description: apiErrorMessage(e), variant: "destructive" }),
+  });
+
+  // To Marketing's social posts, and from there the auto-poster (Make → Instagram).
+  const social = useMutation({
+    mutationFn: async (postNow: boolean) =>
+      (await apiRequest("POST", `${base}/carousel/social`, { spec, channels: ["instagram"], postNow })).json() as Promise<{
+        dispatched: boolean;
+        webhookError?: string | null;
+      }>,
+    onSuccess: (r, postNow) => {
+      setDirty(false);
+      setSaved(true);
+      qc.invalidateQueries({ queryKey: ["/api/social-posts"] });
+      if (!postNow) {
+        setSent({ posted: false, error: null });
+        toast({ title: "Carousel saved as a draft in Marketing" });
+      } else if (r.dispatched) {
+        setSent({ posted: true, error: null });
+        toast({ title: "Sent to Instagram", description: "The auto-poster is publishing the carousel." });
+      } else {
+        setSent({ posted: false, error: r.webhookError ?? "The auto-poster didn't accept it" });
+        toast({ title: "Couldn't send it to Instagram", description: r.webhookError ?? undefined, variant: "destructive" });
+      }
+    },
+    onError: (e) => toast({ title: "Couldn't make the social post", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
   const reset = useMutation({
@@ -439,6 +466,49 @@ export function CarouselPanel({
           </Button>
         </div>
         {!data.copy.ok && <div className="text-xs text-destructive">{data.copy.reason}</div>}
+
+        <div className="border border-border rounded-sm p-3 flex flex-col md:flex-row md:items-center gap-3" data-testid="carousel-autopost">
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium flex items-center gap-1.5">
+              <Instagram className="w-4 h-4" /> Auto-post
+            </div>
+            <div className="text-xs text-muted-foreground">
+              Publishes the slides as images and makes an Instagram carousel post with your newest Instagram caption for this listing (write one under Copy, or
+              "Plan with Claude" writes it).
+            </div>
+            {sent && (
+              <div className={`text-xs mt-1 ${sent.error ? "text-destructive" : "text-muted-foreground"}`}>
+                {sent.error ? `Not posted: ${sent.error}. It's saved in Marketing to retry. ` : sent.posted ? "Sent to the auto-poster. " : "Draft saved. "}
+                <Link href="/admin/marketing" className="underline underline-offset-2 inline-flex items-center gap-0.5">
+                  Open Marketing <ExternalLink className="w-3 h-3" />
+                </Link>
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2 shrink-0">
+            <Button
+              variant="outline"
+              className="rounded-sm text-xs"
+              onClick={() => social.mutate(false)}
+              disabled={social.isPending || slides.length < 2}
+              data-testid="button-carousel-draft"
+            >
+              {social.isPending && social.variables === false ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Send className="w-3.5 h-3.5 mr-1" />}
+              Save to Marketing
+            </Button>
+            <Button
+              className="rounded-sm text-xs"
+              onClick={() => {
+                if (window.confirm(`Post this ${slides.length}-slide carousel to Instagram now?`)) social.mutate(true);
+              }}
+              disabled={social.isPending || slides.length < 2}
+              data-testid="button-carousel-post"
+            >
+              {social.isPending && social.variables === true ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Instagram className="w-3.5 h-3.5 mr-1" />}
+              Post to Instagram now
+            </Button>
+          </div>
+        </div>
         {write.isPending && <div className="text-xs text-muted-foreground">Claude is looking through the photos and writing each slide. This takes up to a minute.</div>}
 
         <div className="flex gap-2 overflow-x-auto pb-1">

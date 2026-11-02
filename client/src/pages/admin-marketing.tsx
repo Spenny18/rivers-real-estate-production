@@ -61,6 +61,7 @@ interface SocialPost {
   id: number;
   caption: string;
   imageUrl: string | null;
+  mediaUrls?: string[];
   linkUrl: string | null;
   channels: string[];
   variants: Record<string, PlatformVariant>;
@@ -468,13 +469,20 @@ function PostRow({
     <Card>
       <CardContent className="p-4">
         <div className="flex items-start gap-3">
-          {post.imageUrl ? (
-            <img
-              src={apiUrl(post.imageUrl)}
-              alt=""
-              className="w-14 h-14 rounded-sm object-cover border border-border shrink-0"
-              onError={(e) => ((e.target as HTMLImageElement).style.display = "none")}
-            />
+          {post.imageUrl || post.mediaUrls?.length ? (
+            <div className="relative shrink-0">
+              <img
+                src={apiUrl(post.imageUrl ?? post.mediaUrls![0])}
+                alt=""
+                className="w-14 h-14 rounded-sm object-cover border border-border"
+                onError={(e) => ((e.target as HTMLImageElement).style.display = "none")}
+              />
+              {(post.mediaUrls?.length ?? 0) > 1 && (
+                <span className="absolute -bottom-1 -right-1 bg-foreground text-background text-[9px] font-display tracking-[0.08em] px-1 rounded-sm">
+                  1/{post.mediaUrls!.length}
+                </span>
+              )}
+            </div>
           ) : (
             <div className="w-14 h-14 rounded-sm bg-secondary flex items-center justify-center shrink-0">
               <ImageIcon className="w-5 h-5 text-muted-foreground" strokeWidth={1.4} />
@@ -487,6 +495,11 @@ function PostRow({
               >
                 {post.status}
               </Badge>
+              {(post.mediaUrls?.length ?? 0) > 1 && (
+                <Badge variant="outline" className="rounded-sm font-display text-[9px] tracking-[0.1em] uppercase">
+                  Carousel · {post.mediaUrls!.length}
+                </Badge>
+              )}
               {post.channels.map((c) => (
                 <Badge key={c} variant="outline" className="rounded-sm font-display text-[9px] tracking-[0.1em] uppercase">
                   {c}
