@@ -12,7 +12,7 @@
 //     it dials the client with the business line as caller ID.
 //   - from his cell: he calls the business line, is asked for a number (or *
 //     for whoever last called or texted), and is connected the same way.
-// Calls are recorded; the other party hears a short notice first.
+// Answered calls are recorded, with no recording notice played.
 
 import { sqlite, storage } from "./storage";
 import { publicOrigin } from "./origin";
