@@ -173,6 +173,7 @@ const CONTACT_REFERENCES: Array<[table: string, column: string]> = [
   ["automation_runs", "contact_fub_id"],
   ["automation_fired", "contact_fub_id"],
   ["contact_tags", "contact_fub_id"],
+  ["new_lead_texts", "contact_fub_id"],
 ];
 
 function tableExists(name: string): boolean {
@@ -240,7 +241,7 @@ export function reconcileNativeContacts(): number {
 // Every lead the app creates gets a contact, and starts any new-lead
 // automations (server/automations.ts). See storage.createLead.
 storage.onLeadCreated = (lead) => {
-  let contact: { id: string } | null = null;
+  let contact: { id: string; created: boolean } | null = null;
   try {
     contact = ensureContactForLead(lead);
   } catch (e: any) {
@@ -252,4 +253,10 @@ storage.onLeadCreated = (lead) => {
   } catch (e: any) {
     console.error("[automations] couldn't start plans for lead", lead.id, e?.message ?? e);
   }
+  // A text to Spencer's cell (lead-alerts.ts). Loaded lazily: it pulls in sms.ts, which imports this file.
+  const id = contact.id;
+  const created = contact.created;
+  import("./lead-alerts")
+    .then((m) => m.alertForLead(lead, id, created))
+    .catch((e) => console.error("[lead-alerts] couldn't alert for lead", lead.id, e?.message ?? e));
 };

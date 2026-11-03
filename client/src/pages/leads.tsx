@@ -1,3 +1,4 @@
+import { LeadTextsCard } from "@/components/lead-texts";
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
@@ -120,6 +121,8 @@ export default function LeadsPage() {
           </div>
           <NewLeadButton />
         </div>
+        {/* A text to Spencer's cell for each new lead (server/lead-alerts.ts) */}
+        <LeadTextsCard />
         {/* Summary */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {[
