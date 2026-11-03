@@ -711,6 +711,11 @@ export async function syncResource(
         : spec.resource === "deals"
           ? storage.upsertCrmDeals(mapped)
           : storage.upsertCrmPipelines(mapped);
+    // Tasks completed in the app stay completed (notes-tasks.ts).
+    if (activityMapper) {
+      const { applyTaskCompletions } = await import("./notes-tasks");
+      applyTaskCompletions();
+    }
     inserted = r.inserted;
     updated = r.updated;
     // Contacts the app created for new leads come back from FUB once FUB has
