@@ -30,7 +30,7 @@ export function isNativeContact(fubId: string): boolean {
   return fubId.startsWith(NATIVE_PREFIX);
 }
 
-function cleanEmail(v: string | null | undefined): string | null {
+export function cleanEmail(v: string | null | undefined): string | null {
   const e = (v ?? "").trim().toLowerCase();
   return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e) ? e : null;
 }
@@ -40,7 +40,7 @@ function last10(v: string | null | undefined): string | null {
   return d.length === 10 ? d : null;
 }
 
-function splitName(name: string): { first: string | null; last: string | null } {
+export function splitName(name: string): { first: string | null; last: string | null } {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return { first: null, last: null };
   return { first: parts[0], last: parts.length > 1 ? parts.slice(1).join(" ") : null };

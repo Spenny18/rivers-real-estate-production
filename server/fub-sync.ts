@@ -695,6 +695,11 @@ export async function syncResource(
   }
   // A record with no id can't be upserted or de-duplicated.
   mapped = mapped.filter((m) => (m.fubId ?? m.uid) && m.fubId !== "");
+  // Fields edited in the app win over FUB's copy (server/contact-edits.ts).
+  if (spec.resource === "people" && mapped.length > 0) {
+    const { applyContactOverrides } = await import("./contact-edits");
+    mapped = applyContactOverrides(mapped);
+  }
 
   let inserted = 0;
   let updated = 0;
@@ -713,6 +718,9 @@ export async function syncResource(
     if (spec.resource === "people") {
       const { reconcileNativeContacts } = await import("./contacts");
       reconcileNativeContacts();
+      // Edits made in the app that FUB hasn't taken yet (contact-edits.ts).
+      const { retryPendingPushes } = await import("./contact-edits");
+      await retryPendingPushes().catch((e) => console.warn("[fub-sync] retrying contact edits:", e?.message ?? e));
       // New people FUB brought in (leads that never touched the app) start
       // any new-lead automations. After the fold, so the app's own leads
       // aren't started twice.

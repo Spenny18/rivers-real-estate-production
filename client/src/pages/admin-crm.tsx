@@ -143,6 +143,9 @@ interface CrmContact {
   assignedTo: string | null;
   fubCreatedAt: string | null;
   lastActivityAt: string | null;
+  // On the detail view: fields edited in the app, which the FUB sync keeps.
+  editedFields?: string[];
+  fubPushError?: string | null;
 }
 
 interface CrmActivity {
@@ -1244,14 +1247,34 @@ export default function AdminCrmPage() {
                 >
                   Open in Inbox
                 </Link>
-                {detail.contact.origin === "app" && !editingContact && (
-                  <button onClick={() => setEditingContact(true)} className="underline underline-offset-2 text-muted-foreground hover:text-foreground">
+                {!editingContact && (
+                  <button
+                    onClick={() => setEditingContact(true)}
+                    className="underline underline-offset-2 text-muted-foreground hover:text-foreground"
+                    data-testid="button-edit-contact"
+                  >
                     Edit contact
                   </button>
                 )}
               </div>
-              {editingContact && detail.contact.origin === "app" && (
-                <EditContactForm contact={detail.contact} onDone={() => setEditingContact(false)} />
+              {detail.contact.origin !== "app" && (detail.contact.editedFields?.length ?? 0) > 0 && (
+                <div className="text-[12px] text-muted-foreground -mt-2" data-testid="contact-edited-fields">
+                  Edited here: {detail.contact.editedFields!.join(", ")}. The Follow Up Boss sync keeps these.
+                  {detail.contact.fubPushError && (
+                    <span className="text-destructive"> Couldn't update Follow Up Boss: {detail.contact.fubPushError}</span>
+                  )}
+                </div>
+              )}
+              {editingContact && (
+                <div className="space-y-1.5">
+                  {detail.contact.origin !== "app" && (
+                    <div className="text-[12px] text-muted-foreground">
+                      Changes are kept here, and the Follow Up Boss sync won't overwrite them. While Follow Up Boss is running they're sent
+                      there too.
+                    </div>
+                  )}
+                  <EditContactForm contact={detail.contact} onDone={() => setEditingContact(false)} />
+                </div>
               )}
               {/* ---- Compose ----
                   Sends from Spencer's own mailbox, so a reply threads against
