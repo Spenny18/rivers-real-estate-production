@@ -2,6 +2,7 @@ import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
 import { RecentActivity } from "@/components/recent-activity";
+import { TasksDueCard } from "@/components/notes-tasks";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -182,6 +183,9 @@ export default function DashboardPage() {
             );
           })}
         </div>
+
+        {/* Overdue and due-today tasks (server/notes-tasks.ts) */}
+        <TasksDueCard />
 
         {/* Who's active right now: site visits, email opens and clicks, enquiries */}
         <RecentActivity />

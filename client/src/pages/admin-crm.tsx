@@ -10,6 +10,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
 import { RecentlyActiveList, WebActivityPanel } from "@/components/web-activity";
 import { EditContactForm, NewContactDialog } from "@/components/contact-forms";
+import { ContactNotesTasks, ExportCard, NoteActions, TaskBoard } from "@/components/notes-tasks";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -150,6 +151,7 @@ interface CrmContact {
 
 interface CrmActivity {
   id: number;
+  uid?: string;
   kind: string;
   contactFubId: string | null;
   title: string | null;
@@ -682,7 +684,11 @@ export default function AdminCrmPage() {
             <Loader2 className="h-4 w-4 animate-spin" /> Loading CRM…
           </div>
         ) : (
-          <Tabs defaultValue="pipeline">
+          <Tabs
+            defaultValue={
+              typeof window !== "undefined" && new URLSearchParams(window.location.search).get("tab") === "tasks" ? "tasks" : "pipeline"
+            }
+          >
             <TabsList className="mb-5">
               <TabsTrigger value="pipeline" data-testid="tab-crm-pipeline">Pipeline</TabsTrigger>
               <TabsTrigger value="contacts" data-testid="tab-crm-contacts">Contacts</TabsTrigger>
@@ -909,45 +915,14 @@ export default function AdminCrmPage() {
 
             {/* ================= TASKS ================= */}
             <TabsContent value="tasks">
-              {(overview?.openTasks.length ?? 0) === 0 ? (
-                <Card>
-                  <CardContent className="p-10 text-center">
-                    <p className="text-sm text-muted-foreground">No open tasks or appointments.</p>
-                  </CardContent>
-                </Card>
-              ) : (
-                <div className="space-y-1.5" data-testid="crm-task-list">
-                  {overview!.openTasks.map((t) => {
-                    const overdue = t.dueAt ? Date.parse(t.dueAt) < Date.now() : false;
-                    return (
-                      <Card key={t.id}>
-                        <CardContent className="p-3.5 flex items-center gap-3">
-                          {t.kind === "appointment" ? (
-                            <CalendarClock className="h-4 w-4 text-muted-foreground shrink-0" />
-                          ) : (
-                            <CheckCircle2 className="h-4 w-4 text-muted-foreground shrink-0" />
-                          )}
-                          <div className="min-w-0 flex-1">
-                            <div className="text-[14px]">{t.title ?? "Untitled"}</div>
-                            <div className="text-[12px] text-muted-foreground">
-                              {contactName(t.contactFubId) ?? "Unlinked"}
-                            </div>
-                          </div>
-                          <span
-                            className={`text-[12px] shrink-0 ${overdue ? "text-destructive" : "text-muted-foreground"}`}
-                          >
-                            {when(t.dueAt)}
-                          </span>
-                        </CardContent>
-                      </Card>
-                    );
-                  })}
-                </div>
-              )}
+              <TaskBoard onOpenContact={setOpenContact} />
             </TabsContent>
 
             {/* ================= SYNC ================= */}
             <TabsContent value="sync">
+              <div className="mb-4">
+                <ExportCard />
+              </div>
               <div className="flex flex-wrap items-center gap-3 mb-3">
                 <Button
                   variant="outline"
@@ -1276,6 +1251,7 @@ export default function AdminCrmPage() {
                   <EditContactForm contact={detail.contact} onDone={() => setEditingContact(false)} />
                 </div>
               )}
+              <ContactNotesTasks contactId={detail.contact.fubId} />
               {/* ---- Compose ----
                   Sends from Spencer's own mailbox, so a reply threads against
                   it and Follow Up Boss mirrors it straight back. */}
@@ -1430,9 +1406,12 @@ export default function AdminCrmPage() {
                               {duration(a.durationSeconds) ? ` · ${duration(a.durationSeconds)}` : ""}
                             </div>
                             {a.body && (
-                              <p className="text-[12.5px] text-foreground/75 leading-relaxed">{a.body}</p>
+                              <p className="text-[12.5px] text-foreground/75 leading-relaxed whitespace-pre-line">{a.body}</p>
                             )}
-                            <div className="text-[11.5px] text-muted-foreground">{when(a.occurredAt)}</div>
+                            <div className="text-[11.5px] text-muted-foreground">
+                              {when(a.occurredAt)}
+                              {a.kind === "note" && a.uid && <NoteActions uid={a.uid} body={a.body} />}
+                            </div>
                           </div>
                         </div>
                       );

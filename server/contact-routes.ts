@@ -8,6 +8,8 @@ import { z } from "zod";
 import { storage } from "./storage";
 import { createNativeContact, findContact } from "./contacts";
 import { contactEditState, editContact } from "./contact-edits";
+import { addNote, addTask, deleteNote, deleteTask, editNote, editTask, listTasks, setTaskDone, taskCounts } from "./notes-tasks";
+import { exportSummary, writeExport } from "./crm-export";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
 
@@ -78,5 +80,101 @@ export function registerContactRoutes(app: Express, deps: { requireAuth: Middlew
     // FUB's contacts too: the edit is kept over the sync and sent on to FUB (contact-edits.ts).
     const r = editContact(fubId, b);
     res.json({ ok: true, changed: r?.changed ?? [], ...contactEditState(fubId) });
+  });
+
+  // ---- Notes (notes-tasks.ts) ---------------------------------------------------------
+
+  const noteBody = z.object({ body: z.string().trim().min(1, "Write something first").max(10_000) });
+
+  app.post("/api/admin/crm/contacts/:fubId/notes", requireAuth, (req, res) => {
+    const fubId = String(req.params.fubId);
+    if (!storage.getCrmContact(fubId)) return res.status(404).json({ message: "Contact not found" });
+    const b = noteBody.safeParse(req.body ?? {});
+    if (!b.success) return res.status(400).json({ message: b.error.issues[0]?.message ?? "Invalid note" });
+    res.json({ uid: addNote(fubId, b.data.body) });
+  });
+
+  app.patch("/api/admin/crm/notes", requireAuth, (req, res) => {
+    const b = noteBody.extend({ uid: z.string() }).safeParse(req.body ?? {});
+    if (!b.success) return res.status(400).json({ message: b.error.issues[0]?.message ?? "Invalid note" });
+    if (!editNote(b.data.uid, b.data.body)) return res.status(404).json({ message: "Only notes written in the app can be edited." });
+    res.json({ ok: true });
+  });
+
+  app.delete("/api/admin/crm/notes", requireAuth, (req, res) => {
+    if (!deleteNote(String(req.query.uid ?? ""))) return res.status(404).json({ message: "Only notes written in the app can be deleted." });
+    res.json({ ok: true });
+  });
+
+  // ---- Tasks ----------------------------------------------------------------------------
+
+  const isoDate = z.string().refine((v) => !Number.isNaN(Date.parse(v)), "Pick a due date");
+
+  app.get("/api/admin/crm/tasks", requireAuth, (req, res) => {
+    const status = ["open", "done", "all"].includes(String(req.query.status)) ? (String(req.query.status) as "open" | "done" | "all") : "open";
+    res.json({
+      tasks: listTasks({ status, contactId: typeof req.query.contact === "string" ? req.query.contact : undefined }),
+      counts: taskCounts(),
+    });
+  });
+
+  app.post("/api/admin/crm/tasks", requireAuth, (req, res) => {
+    const b = z
+      .object({
+        title: z.string().trim().min(1, "What's the task?").max(300),
+        dueAt: isoDate,
+        contactId: z.string().optional().nullable(),
+        note: z.string().max(4000).optional().nullable(),
+      })
+      .safeParse(req.body ?? {});
+    if (!b.success) return res.status(400).json({ message: b.error.issues[0]?.message ?? "Invalid task" });
+    if (b.data.contactId && !storage.getCrmContact(b.data.contactId)) return res.status(404).json({ message: "Contact not found" });
+    res.json({ uid: addTask(b.data) });
+  });
+
+  app.patch("/api/admin/crm/tasks", requireAuth, (req, res) => {
+    const b = z
+      .object({
+        uid: z.string(),
+        title: z.string().trim().max(300).optional(),
+        dueAt: isoDate.optional(),
+        note: z.string().max(4000).optional().nullable(),
+        completed: z.boolean().optional(),
+      })
+      .safeParse(req.body ?? {});
+    if (!b.success) return res.status(400).json({ message: b.error.issues[0]?.message ?? "Invalid task" });
+    const { uid, completed, ...edit } = b.data;
+    if (completed !== undefined && !setTaskDone(uid, completed)) return res.status(404).json({ message: "Task not found" });
+    if (Object.keys(edit).length && !editTask(uid, edit)) {
+      return res.status(400).json({ message: "Only tasks made in the app can be edited; Follow Up Boss's can be completed." });
+    }
+    res.json({ ok: true });
+  });
+
+  app.delete("/api/admin/crm/tasks", requireAuth, (req, res) => {
+    if (!deleteTask(String(req.query.uid ?? ""))) return res.status(404).json({ message: "Only tasks made in the app can be deleted." });
+    res.json({ ok: true });
+  });
+
+  // ---- Export (crm-export.ts) ----------------------------------------------------------
+
+  app.get("/api/admin/crm/export/summary", requireAuth, (_req, res) => {
+    res.json({ tables: exportSummary() });
+  });
+
+  app.get("/api/admin/crm/export", requireAuth, async (_req, res) => {
+    const day = new Date().toISOString().slice(0, 10);
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("Content-Disposition", `attachment; filename="rivers-crm-export-${day}.zip"`);
+    try {
+      await writeExport(res);
+      res.end();
+    } catch (e: any) {
+      console.error("[crm-export] failed:", e);
+      // Headers are gone once the zip has started; cutting it short is all that's left.
+      if (!res.headersSent) res.status(500).json({ message: e?.message ?? "Export failed" });
+      else res.destroy(e);
+    }
   });
 }

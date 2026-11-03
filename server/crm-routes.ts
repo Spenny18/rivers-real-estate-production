@@ -82,6 +82,8 @@ function dtoDeal(d: any) {
 function dtoActivity(a: any) {
   return {
     id: a.id,
+    // Notes and tasks are edited and completed by uid (notes-tasks.ts).
+    uid: a.uid,
     kind: a.kind,
     contactFubId: a.contactFubId,
     title: a.title,
