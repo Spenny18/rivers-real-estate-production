@@ -11,6 +11,7 @@ import { AppShell } from "@/components/app-shell";
 import { RecentlyActiveList, WebActivityPanel } from "@/components/web-activity";
 import { EditContactForm, NewContactDialog } from "@/components/contact-forms";
 import { ContactNotesTasks, ExportCard, NoteActions, TaskBoard } from "@/components/notes-tasks";
+import { SmartListContacts, SmartListsBar } from "@/components/smart-lists";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -272,6 +273,8 @@ export default function AdminCrmPage() {
   const [search, setSearch] = useState("");
   // ?contact=<fubId> opens that contact straight away — the link in a
   // "back on the site" alert email lands here.
+  // The smart list showing on the Contacts tab; null is "All contacts".
+  const [smartList, setSmartList] = useState<number | null>(null);
   const [openContact, setOpenContact] = useState<string | null>(() =>
     typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("contact"),
   );
@@ -508,7 +511,7 @@ export default function AdminCrmPage() {
             <p className="text-sm text-muted-foreground mt-1.5 max-w-2xl">
               Your contacts. New website leads, bookings and portal sign-ups are added here
               automatically, and you can add people by hand. Follow Up Boss is still mirrored
-              hourly; its contacts stay read-only here, and a lead FUB also has is merged into one.
+              hourly: any contact can be edited here, and your edits win over the sync. A lead FUB also has is merged into one.
             </p>
           </div>
           <div className="flex gap-2">
@@ -757,6 +760,11 @@ export default function AdminCrmPage() {
 
                         {/* ================= CONTACTS ================= */}
             <TabsContent value="contacts">
+              <SmartListsBar selected={smartList} onSelect={setSmartList} />
+              {smartList !== null ? (
+                <SmartListContacts listId={smartList} onOpenContact={setOpenContact} />
+              ) : (
+              <>
               <div className="flex flex-wrap items-center gap-3 mb-4">
               <Button
                 size="sm"
@@ -837,6 +845,8 @@ export default function AdminCrmPage() {
                     </p>
                   )}
                 </div>
+              )}
+              </>
               )}
             </TabsContent>
 

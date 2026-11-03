@@ -41,7 +41,12 @@ function useRefresh() {
     qc.invalidateQueries({
       predicate: (q) => {
         const k = String(q.queryKey[0]);
-        return k.startsWith(TASKS_KEY) || k.startsWith("/api/admin/crm/contacts/") || k === "/api/admin/crm/overview";
+        return (
+          k.startsWith(TASKS_KEY) ||
+          k.startsWith("/api/admin/crm/contacts/") ||
+          k.startsWith("/api/admin/crm/smart-lists") || // task filters
+          k === "/api/admin/crm/overview"
+        );
       },
     });
 }

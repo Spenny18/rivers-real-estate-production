@@ -10,6 +10,21 @@ import { createNativeContact, findContact } from "./contacts";
 import { contactEditState, editContact } from "./contact-edits";
 import { addNote, addTask, deleteNote, deleteTask, editNote, editTask, listTasks, setTaskDone, taskCounts } from "./notes-tasks";
 import { exportSummary, writeExport } from "./crm-export";
+import {
+  createSmartList,
+  deleteSmartList,
+  filterOptions,
+  filtersSchema,
+  getSmartList,
+  listSchema,
+  reorderSmartLists,
+  runFilters,
+  seedStarterLists,
+  smartListsWithCounts,
+  updateSmartList,
+  SORTS,
+  type SmartListSort,
+} from "./smart-lists";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
 
@@ -176,5 +191,54 @@ export function registerContactRoutes(app: Express, deps: { requireAuth: Middlew
       if (!res.headersSent) res.status(500).json({ message: e?.message ?? "Export failed" });
       else res.destroy(e);
     }
+  });
+
+  // ---- Smart lists (smart-lists.ts) ------------------------------------------------------
+
+  app.get("/api/admin/crm/smart-lists", requireAuth, (_req, res) => {
+    seedStarterLists();
+    res.json({ lists: smartListsWithCounts(), options: filterOptions() });
+  });
+
+  app.post("/api/admin/crm/smart-lists", requireAuth, (req, res) => {
+    const b = listSchema.safeParse(req.body ?? {});
+    if (!b.success) return res.status(400).json({ message: b.error.issues[0]?.message ?? "Invalid list" });
+    res.json(createSmartList(b.data));
+  });
+
+  app.put("/api/admin/crm/smart-lists/:id", requireAuth, (req, res) => {
+    const b = listSchema.safeParse(req.body ?? {});
+    if (!b.success) return res.status(400).json({ message: b.error.issues[0]?.message ?? "Invalid list" });
+    const l = updateSmartList(Number(req.params.id), b.data);
+    if (!l) return res.status(404).json({ message: "List not found" });
+    res.json(l);
+  });
+
+  app.delete("/api/admin/crm/smart-lists/:id", requireAuth, (req, res) => {
+    if (!deleteSmartList(Number(req.params.id))) return res.status(404).json({ message: "List not found" });
+    res.json({ ok: true });
+  });
+
+  app.post("/api/admin/crm/smart-lists/reorder", requireAuth, (req, res) => {
+    const ids = z.array(z.number().int()).max(500).safeParse(req.body?.ids);
+    if (!ids.success) return res.status(400).json({ message: "ids required" });
+    reorderSmartLists(ids.data);
+    res.json({ ok: true });
+  });
+
+  app.get("/api/admin/crm/smart-lists/:id/contacts", requireAuth, (req, res) => {
+    const l = getSmartList(Number(req.params.id));
+    if (!l) return res.status(404).json({ message: "List not found" });
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? "200"), 10) || 200, 1), 1000);
+    const offset = Math.max(parseInt(String(req.query.offset ?? "0"), 10) || 0, 0);
+    res.json({ list: l, ...runFilters(l.filters, l.sort, { limit, offset }) });
+  });
+
+  /** Try filters before saving: the count and the first few matches. */
+  app.post("/api/admin/crm/smart-lists/preview", requireAuth, (req, res) => {
+    const f = filtersSchema.safeParse(req.body?.filters ?? {});
+    if (!f.success) return res.status(400).json({ message: f.error.issues[0]?.message ?? "Invalid filters" });
+    const sort = (String(req.body?.sort ?? "") in SORTS ? req.body.sort : "last_contact_asc") as SmartListSort;
+    res.json(runFilters(f.data, sort, { limit: 8 }));
   });
 }
