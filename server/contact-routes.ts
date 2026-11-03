@@ -10,6 +10,7 @@ import { createNativeContact, findContact } from "./contacts";
 import { contactEditState, editContact } from "./contact-edits";
 import { addNote, addTask, deleteNote, deleteTask, editNote, editTask, listTasks, setTaskDone, taskCounts } from "./notes-tasks";
 import { exportSummary, writeExport } from "./crm-export";
+import { buildReport } from "./crm-reports";
 import { alertSettings, recentAlerts, saveAlertSettings, sendTestAlert } from "./lead-alerts";
 import { prettyPhone, smsConfig, smsConfigured } from "./sms";
 import {
@@ -268,5 +269,12 @@ export function registerContactRoutes(app: Express, deps: { requireAuth: Middlew
     const r = await sendTestAlert();
     if (!r.ok) return res.status(400).json({ message: r.error ?? "Couldn't send" });
     res.json({ ok: true });
+  });
+
+  // ---- Reports (crm-reports.ts) ------------------------------------------------------------
+
+  app.get("/api/admin/crm/reports", requireAuth, (req, res) => {
+    const days = [7, 30, 90, 365].includes(Number(req.query.days)) ? Number(req.query.days) : 30;
+    res.json(buildReport(days));
   });
 }
