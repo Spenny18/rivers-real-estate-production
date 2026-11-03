@@ -15,7 +15,6 @@
 //   POST /api/twilio/voice/outbound-connect dial the client
 //   POST /api/twilio/voice/outbound-agent-status  his leg ended (never connected?)
 //   POST /api/twilio/voice/outbound-after  how the client leg ended
-//   POST /api/twilio/voice/client-notice   heard by the client on answer: recording notice
 // Admin (requireAuth):
 //   GET  /api/admin/sms/status         configured? webhook URLs to paste into Twilio
 //   POST /api/admin/sms/test           text Spencer's cell from the business line
@@ -103,8 +102,8 @@ function voicemailTwiml(callId: number | null): string {
 }
 
 /**
- * Bridge to a client from the business line, recorded from answer. The client
- * hears the recording notice (client-notice) before they're connected.
+ * Bridge to a client from the business line, recorded from answer. No
+ * recording notice is played.
  */
 function dialClientTwiml(callId: number, to: string, intro?: string): string {
   const from = smsConfig().from!;
@@ -114,7 +113,7 @@ function dialClientTwiml(callId: number, to: string, intro?: string): string {
     `<Dial timeout="30" answerOnBridge="true" callerId="${xmlEscape(from)}" record="record-from-answer-dual" ` +
     `recordingStatusCallback="/api/twilio/voice/call-recording?call=${callId}" recordingStatusCallbackMethod="POST" recordingStatusCallbackEvent="completed" ` +
     `action="/api/twilio/voice/outbound-after?call=${callId}" method="POST">` +
-    `<Number url="/api/twilio/voice/client-notice" method="POST">${xmlEscape(to)}</Number>` +
+    `<Number>${xmlEscape(to)}</Number>` +
     `</Dial></Response>`
   );
 }
@@ -180,7 +179,7 @@ export function registerTwilioRoutes(app: Express, deps: { requireAuth: Middlewa
     twiml(
       res,
       `<?xml version="1.0" encoding="UTF-8"?><Response>` +
-        say(`Thanks for calling ${AGENT.business}. This call may be recorded.`) +
+        say(`Thanks for calling ${AGENT.business}.`) +
         `<Dial timeout="22" answerOnBridge="true"${callerId} record="record-from-answer-dual" ` +
         `recordingStatusCallback="/api/twilio/voice/call-recording?call=${call.id}" recordingStatusCallbackMethod="POST" recordingStatusCallbackEvent="completed" ` +
         `action="/api/twilio/voice/after-dial?call=${call.id}" method="POST">` +
@@ -338,10 +337,6 @@ export function registerTwilioRoutes(app: Express, deps: { requireAuth: Middlewa
     twiml(res, hangup());
   });
 
-  // Played to the client when they pick up, before they're connected.
-  app.post("/api/twilio/voice/client-notice", requireTwilio, (_req, res) => {
-    twiml(res, `<?xml version="1.0" encoding="UTF-8"?><Response>${say("This call may be recorded.")}</Response>`);
-  });
 
   // ---- Admin ---------------------------------------------------------------------
 

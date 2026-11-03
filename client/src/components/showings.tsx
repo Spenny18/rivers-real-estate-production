@@ -783,7 +783,7 @@ export function BusinessLineCard() {
           </p>
           <p>
             To call out from your cell, call the business line from it: enter the number and press #, or * then # to call whoever last called or
-            texted. Calls are recorded; the other person hears a short notice first.
+            texted. Calls are recorded.
           </p>
         </div>
       )}
