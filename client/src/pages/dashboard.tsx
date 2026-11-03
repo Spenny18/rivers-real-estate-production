@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
 import { RecentActivity } from "@/components/recent-activity";
 import { TasksDueCard } from "@/components/notes-tasks";
+import { PushNotificationsCard } from "@/components/push-notifications";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -185,6 +186,8 @@ export default function DashboardPage() {
         </div>
 
         {/* Overdue and due-today tasks (server/notes-tasks.ts) */}
+        {/* A prompt to turn on notifications, only when this device can and hasn't */}
+        <PushNotificationsCard compact />
         <TasksDueCard />
 
         {/* Who's active right now: site visits, email opens and clicks, enquiries */}

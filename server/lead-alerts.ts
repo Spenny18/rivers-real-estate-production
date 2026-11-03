@@ -27,6 +27,7 @@
 import { sqlite } from "./storage";
 import { publicOrigin } from "./origin";
 import { prettyPhone, sendSms, smsConfig, smsConfigured, toE164 } from "./sms";
+import { notifyLater } from "./push";
 
 sqlite.exec(`
   CREATE TABLE IF NOT EXISTS new_lead_text_settings (
@@ -169,6 +170,13 @@ async function deliver(key: string, body: string): Promise<boolean> {
  */
 export async function queueAlert(key: string, facts: AlertFacts, now = new Date()): Promise<string> {
   if (sqlite.prepare(`SELECT 1 FROM new_lead_texts WHERE key = ?`).get(key)) return "duplicate";
+  // A push notification too (push.ts), whatever the text-alert settings say: it has its own switch.
+  notifyLater("lead", {
+    title: `${facts.again ? "Enquiry again" : "New lead"}: ${facts.name?.trim() || "No name"}`,
+    body: [facts.source, facts.message ? excerpt(facts.message, 140) : null].filter(Boolean).join(" · ") || "Tap to open",
+    url: facts.contactId ? `/admin/crm?contact=${encodeURIComponent(facts.contactId)}` : "/admin/leads",
+    tag: `lead:${key}`,
+  });
   const settings = alertSettings();
   const body = alertBody(facts);
   const contactId = facts.contactId ?? null;
