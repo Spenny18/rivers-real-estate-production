@@ -6,7 +6,8 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import { storage } from "./storage";
-import { createNativeContact, findContact, isNativeContact, updateNativeContact } from "./contacts";
+import { createNativeContact, findContact } from "./contacts";
+import { contactEditState, editContact } from "./contact-edits";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
 
@@ -64,9 +65,6 @@ export function registerContactRoutes(app: Express, deps: { requireAuth: Middlew
   app.patch("/api/admin/crm/contacts/:fubId", requireAuth, (req, res) => {
     const fubId = String(req.params.fubId);
     if (!storage.getCrmContact(fubId)) return res.status(404).json({ message: "Contact not found" });
-    if (!isNativeContact(fubId)) {
-      return res.status(400).json({ message: "This contact comes from Follow Up Boss; edit it there, or it'll be overwritten on the next sync." });
-    }
     const parsed = patchSchema.safeParse(req.body ?? {});
     if (!parsed.success) return res.status(400).json({ message: parsed.error.issues[0]?.message ?? "Please check the form." });
     const b = parsed.data;
@@ -77,7 +75,8 @@ export function registerContactRoutes(app: Express, deps: { requireAuth: Middlew
         return res.status(409).json({ message: `${storage.getCrmContact(other)?.name ?? "Another contact"} already has that email or phone.`, fubId: other });
       }
     }
-    updateNativeContact(fubId, b);
-    res.json({ ok: true });
+    // FUB's contacts too: the edit is kept over the sync and sent on to FUB (contact-edits.ts).
+    const r = editContact(fubId, b);
+    res.json({ ok: true, changed: r?.changed ?? [], ...contactEditState(fubId) });
   });
 }

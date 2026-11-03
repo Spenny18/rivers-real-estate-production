@@ -3,6 +3,7 @@
 // All of it is behind requireAuth: this is Spencer's whole contact database,
 // not public data. Nothing here is exposed on a public route.
 
+import { contactEditState } from "./contact-edits";
 import type { Express, Request, Response, NextFunction } from "express";
 import { storage } from "./storage";
 import { fubConfigured, probe, testConnection } from "./fub-client";
@@ -46,7 +47,7 @@ function qs(req: Request, name: string): string | undefined {
 function dtoContact(c: any) {
   return {
     fubId: c.fubId,
-    // "app": created here (server/contacts.ts), editable; "fub": mirrored.
+    // "app": created here (server/contacts.ts); "fub": mirrored. Both are editable (contact-edits.ts).
     origin: String(c.fubId).startsWith("app-") ? "app" : "fub",
     name: c.name,
     firstName: c.firstName,
@@ -275,7 +276,8 @@ export function registerCrmRoutes(app: Express, deps: { requireAuth: Middleware 
 
     res.json({
       texts,
-      contact: dtoContact(contact),
+      // editedFields: fields edited here, which the sync no longer overwrites (contact-edits.ts).
+      contact: { ...dtoContact(contact), ...contactEditState(fubId) },
       activities: storage.listCrmActivities({ contactFubId: fubId, limit: 200 }).map(dtoActivity),
       // Filtered in the query rather than after a global limit — otherwise a
       // contact whose deals fall outside the newest N account-wide shows an

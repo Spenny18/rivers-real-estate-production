@@ -136,12 +136,21 @@ export async function fubGet<T = any>(
  * duplicate note is worse than a missing one. Callers log and move on.
  */
 export async function fubPost<T = any>(path: string, body: unknown, opts: { timeoutMs?: number } = {}): Promise<FubResponse<T>> {
+  return fubWrite<T>("POST", path, body, opts);
+}
+
+/** One PUT (an update), with fubPost's no-retry rule. */
+export async function fubPut<T = any>(path: string, body: unknown, opts: { timeoutMs?: number } = {}): Promise<FubResponse<T>> {
+  return fubWrite<T>("PUT", path, body, opts);
+}
+
+async function fubWrite<T>(method: "POST" | "PUT", path: string, body: unknown, opts: { timeoutMs?: number }): Promise<FubResponse<T>> {
   if (!fubConfigured()) return { ok: false, status: 0, error: "FUB_API_KEY not set" };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 20_000);
   try {
     const res = await fetch(`${BASE}${path.startsWith("/") ? path : `/${path}`}`, {
-      method: "POST",
+      method,
       headers: authHeaders(),
       body: JSON.stringify(body),
       signal: controller.signal,
