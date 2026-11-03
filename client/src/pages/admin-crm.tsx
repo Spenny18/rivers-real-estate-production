@@ -12,6 +12,7 @@ import { RecentlyActiveList, WebActivityPanel } from "@/components/web-activity"
 import { EditContactForm, NewContactDialog } from "@/components/contact-forms";
 import { ContactNotesTasks, ExportCard, NoteActions, TaskBoard } from "@/components/notes-tasks";
 import { SmartListContacts, SmartListsBar } from "@/components/smart-lists";
+import { CrmReports } from "@/components/crm-reports";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -689,7 +690,9 @@ export default function AdminCrmPage() {
         ) : (
           <Tabs
             defaultValue={
-              typeof window !== "undefined" && new URLSearchParams(window.location.search).get("tab") === "tasks" ? "tasks" : "pipeline"
+              (typeof window !== "undefined"
+                ? (["tasks", "reports"] as const).find((t) => t === new URLSearchParams(window.location.search).get("tab"))
+                : undefined) ?? "pipeline"
             }
           >
             <TabsList className="mb-5">
@@ -698,6 +701,7 @@ export default function AdminCrmPage() {
               <TabsTrigger value="activity" data-testid="tab-crm-activity">Activity</TabsTrigger>
               <TabsTrigger value="website" data-testid="tab-crm-website">Website</TabsTrigger>
               <TabsTrigger value="tasks" data-testid="tab-crm-tasks">Tasks</TabsTrigger>
+              <TabsTrigger value="reports" data-testid="tab-crm-reports">Reports</TabsTrigger>
               <TabsTrigger value="sync" data-testid="tab-crm-sync">Sync</TabsTrigger>
             </TabsList>
 
@@ -926,6 +930,11 @@ export default function AdminCrmPage() {
             {/* ================= TASKS ================= */}
             <TabsContent value="tasks">
               <TaskBoard onOpenContact={setOpenContact} />
+            </TabsContent>
+
+            {/* ================= REPORTS (server/crm-reports.ts) ================= */}
+            <TabsContent value="reports">
+              <CrmReports onOpenContact={setOpenContact} />
             </TabsContent>
 
             {/* ================= SYNC ================= */}
