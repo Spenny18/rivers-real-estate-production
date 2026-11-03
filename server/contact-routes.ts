@@ -10,6 +10,8 @@ import { createNativeContact, findContact } from "./contacts";
 import { contactEditState, editContact } from "./contact-edits";
 import { addNote, addTask, deleteNote, deleteTask, editNote, editTask, listTasks, setTaskDone, taskCounts } from "./notes-tasks";
 import { exportSummary, writeExport } from "./crm-export";
+import { alertSettings, recentAlerts, saveAlertSettings, sendTestAlert } from "./lead-alerts";
+import { prettyPhone, smsConfig, smsConfigured } from "./sms";
 import {
   createSmartList,
   deleteSmartList,
@@ -240,5 +242,31 @@ export function registerContactRoutes(app: Express, deps: { requireAuth: Middlew
     if (!f.success) return res.status(400).json({ message: f.error.issues[0]?.message ?? "Invalid filters" });
     const sort = (String(req.body?.sort ?? "") in SORTS ? req.body.sort : "last_contact_asc") as SmartListSort;
     res.json(runFilters(f.data, sort, { limit: 8 }));
+  });
+
+  // ---- New-lead texts to Spencer's cell (lead-alerts.ts) ---------------------------------
+
+  app.get("/api/admin/lead-texts", requireAuth, (_req, res) => {
+    const cfg = smsConfig();
+    const conf = smsConfigured();
+    res.json({
+      settings: alertSettings(),
+      configured: conf.ok && !!cfg.agentCell,
+      missing: cfg.agentCell ? conf.missing : [...conf.missing, "AGENT_CELL_NUMBER"],
+      cell: cfg.agentCell ? prettyPhone(cfg.agentCell) : null,
+      recent: recentAlerts(10),
+    });
+  });
+
+  app.put("/api/admin/lead-texts", requireAuth, (req, res) => {
+    const b = z.object({ enabled: z.boolean().optional(), quietHours: z.boolean().optional() }).safeParse(req.body ?? {});
+    if (!b.success) return res.status(400).json({ message: "Invalid settings" });
+    res.json(saveAlertSettings(b.data));
+  });
+
+  app.post("/api/admin/lead-texts/test", requireAuth, async (_req, res) => {
+    const r = await sendTestAlert();
+    if (!r.ok) return res.status(400).json({ message: r.error ?? "Couldn't send" });
+    res.json({ ok: true });
   });
 }

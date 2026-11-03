@@ -103,7 +103,7 @@ export function smsConfigured(): { ok: boolean; missing: string[] } {
 // ---- Sending ----------------------------------------------------------------------
 
 export interface SmsLogFields {
-  kind: "client" | "relay" | "forward" | "reminder" | "test";
+  kind: "client" | "relay" | "forward" | "reminder" | "test" | "alert";
   contactFubId?: string | null;
   tourId?: number | null;
 }

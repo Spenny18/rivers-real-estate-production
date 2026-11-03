@@ -723,6 +723,9 @@ export async function syncResource(
     if (spec.resource === "people") {
       const { reconcileNativeContacts } = await import("./contacts");
       reconcileNativeContacts();
+      // A text to Spencer for people FUB brought in that the app never saw (lead-alerts.ts).
+      const { alertForSyncedContacts } = await import("./lead-alerts");
+      await alertForSyncedContacts().catch((e) => console.warn("[fub-sync] lead alerts:", e?.message ?? e));
       // Edits made in the app that FUB hasn't taken yet (contact-edits.ts).
       const { retryPendingPushes } = await import("./contact-edits");
       await retryPendingPushes().catch((e) => console.warn("[fub-sync] retrying contact edits:", e?.message ?? e));

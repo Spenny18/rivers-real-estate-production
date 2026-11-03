@@ -213,6 +213,13 @@ app.use((req, res, next) => {
     console.error("[lead-alerts] failed to start cron:", err);
   }
   try {
+    // Texts to Spencer's cell for new leads: sends ones held for quiet hours (lead-alerts.ts).
+    const { startNewLeadTextCron } = await import("./lead-alerts");
+    startNewLeadTextCron();
+  } catch (err) {
+    console.error("[new-lead-texts] failed to start:", err);
+  }
+  try {
     const { startReturnAlertCron } = await import("./return-alerts");
     startReturnAlertCron();
   } catch (err) {
