@@ -23,6 +23,7 @@
 //   GET  /api/admin/calls/:id/recording  stream a call's recording (mp3)
 //   GET  /api/admin/business-line/activity  recent calls and texts, newest first
 
+import { notifyLater } from "./push";
 import type { Express, Request, Response, NextFunction } from "express";
 import {
   ensureContactForPhone,
@@ -212,6 +213,16 @@ export function registerTwilioRoutes(app: Express, deps: { requireAuth: Middlewa
     if (callId) {
       const err = req.body?.ErrorCode ? `Twilio ${req.body.ErrorCode}: ${String(req.body?.ErrorMessage ?? "").slice(0, 200)}` : undefined;
       updateCall(callId, { status: "missed", error: err, endedAt: now });
+      const call = getCall(callId);
+      if (call && call.direction === "inbound") {
+        const name = call.contactFubId ? whoIs(call.clientNumber).name : null;
+        notifyLater("call", {
+          title: `Missed call from ${name ?? prettyPhone(call.clientNumber)}`,
+          body: "They're being sent to voicemail.",
+          url: call.contactFubId ? `/admin/inbox?contact=${encodeURIComponent(call.contactFubId)}` : "/admin/inbox",
+          tag: `call:${call.clientNumber}`,
+        });
+      }
     }
     twiml(res, voicemailTwiml(callId));
   });
@@ -256,6 +267,12 @@ export function registerTwilioRoutes(app: Express, deps: { requireAuth: Middlewa
       const mp3 = audio.ok ? Buffer.from(await audio.arrayBuffer()) : null;
       const label = who.name ? `${who.name} · ${prettyPhone(caller)}` : caller ? prettyPhone(caller) : "Unknown caller";
       const seconds = Number(b.RecordingDuration ?? 0);
+      notifyLater("call", {
+        title: `Voicemail from ${who.name ?? (caller ? prettyPhone(caller) : "unknown caller")}`,
+        body: `${seconds ? `${seconds} seconds. ` : ""}It's in your email.`,
+        url: who.contactFubId ? `/admin/inbox?contact=${encodeURIComponent(who.contactFubId)}` : "/admin/inbox",
+        tag: caller ? `call:${caller}` : "voicemail",
+      });
       await sendEmail({
         to: process.env.SPENCER_NOTIFY_EMAIL || AGENT.email,
         cc: "",

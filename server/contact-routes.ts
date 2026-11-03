@@ -11,6 +11,7 @@ import { contactEditState, editContact } from "./contact-edits";
 import { addNote, addTask, deleteNote, deleteTask, editNote, editTask, listTasks, setTaskDone, taskCounts } from "./notes-tasks";
 import { exportSummary, writeExport } from "./crm-export";
 import { buildReport } from "./crm-reports";
+import { PUSH_KINDS, listDevices, notify, pushSettings, removeSubscription, saveSubscription, savePushSettings, vapidKeys } from "./push";
 import { alertSettings, recentAlerts, saveAlertSettings, sendTestAlert } from "./lead-alerts";
 import { prettyPhone, smsConfig, smsConfigured } from "./sms";
 import {
@@ -276,5 +277,38 @@ export function registerContactRoutes(app: Express, deps: { requireAuth: Middlew
   app.get("/api/admin/crm/reports", requireAuth, (req, res) => {
     const days = [7, 30, 90, 365].includes(Number(req.query.days)) ? Number(req.query.days) : 30;
     res.json(buildReport(days));
+  });
+
+  // ---- Push notifications (push.ts) ----------------------------------------------------------
+
+  app.get("/api/admin/push", requireAuth, (_req, res) => {
+    res.json({ publicKey: vapidKeys().publicKey, settings: pushSettings(), kinds: PUSH_KINDS, devices: listDevices() });
+  });
+
+  app.post("/api/admin/push/subscribe", requireAuth, (req, res) => {
+    const b = z
+      .object({
+        subscription: z.object({ endpoint: z.string().url().max(2000), keys: z.object({ p256dh: z.string().max(200), auth: z.string().max(100) }) }),
+        label: z.string().max(80).optional().nullable(),
+      })
+      .safeParse(req.body ?? {});
+    if (!b.success) return res.status(400).json({ message: "That isn't a push subscription" });
+    saveSubscription(b.data.subscription, b.data.label ?? null);
+    res.json({ ok: true, devices: listDevices() });
+  });
+
+  app.post("/api/admin/push/unsubscribe", requireAuth, (req, res) => {
+    const endpoint = typeof req.body?.endpoint === "string" ? req.body.endpoint : "";
+    res.json({ ok: removeSubscription(endpoint), devices: listDevices() });
+  });
+
+  app.put("/api/admin/push/settings", requireAuth, (req, res) => {
+    res.json(savePushSettings(req.body ?? {}));
+  });
+
+  app.post("/api/admin/push/test", requireAuth, async (_req, res) => {
+    const r = await notify("test", { title: "Notifications are on", body: "This is how new leads, texts, emails and calls will show up.", url: "/admin/dashboard", tag: "test" });
+    if (r.sent === 0) return res.status(400).json({ message: r.failed ? "The push service refused it. Turn notifications off and on again on that device." : "No device has notifications turned on yet." });
+    res.json(r);
   });
 }

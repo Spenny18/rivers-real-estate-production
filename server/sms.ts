@@ -25,6 +25,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { sqlite, storage } from "./storage";
 import { publicOrigin } from "./origin";
 import { createNativeContact } from "./contacts";
+import { notifyLater } from "./push";
 
 sqlite.exec(`
   CREATE TABLE IF NOT EXISTS sms_messages (
@@ -397,6 +398,13 @@ export async function handleInboundSms(from: string, body: string, sid: string |
   logMessage({ direction: "inbound", kind: "client", from: sender, to: cfg.from ?? "", body, sid, contactFubId: who.contactFubId });
   logOnContact(who.contactFubId, "inbound", body, sid);
   const opt = optKeyword(body);
+  // A push notification to the admin app (push.ts); one per conversation, replaced by the next text.
+  notifyLater("text", {
+    title: `Text from ${who.name ?? prettyPhone(sender)}`,
+    body: body.trim() || "(no text)",
+    url: who.contactFubId ? `/admin/inbox?contact=${encodeURIComponent(who.contactFubId)}` : "/admin/inbox",
+    tag: `text:${sender}`,
+  });
   if (opt === "stop") recordOptOut(sender, `Replied "${body.trim().slice(0, 20)}"`, who.contactFubId);
   if (opt === "start") clearOptOut(sender);
   if (cfg.agentCell) {

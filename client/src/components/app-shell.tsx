@@ -1,3 +1,4 @@
+import { applyAdminAppIdentity } from "@/lib/push";
 import { ReactNode, useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { Logo } from "@/components/logo";
@@ -220,6 +221,8 @@ export function AppShell({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location]);
   useEffect(() => saveOpenGroups(openGroups), [openGroups]);
+  // The admin's own Home Screen app and its service worker, for push notifications (lib/push.ts).
+  useEffect(() => applyAdminAppIdentity(), []);
 
   // Below md the sidebar is an off-canvas drawer. It starts closed and closes
   // on navigation (each page mounts a fresh AppShell) or Escape.

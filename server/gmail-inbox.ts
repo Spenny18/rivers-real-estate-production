@@ -14,6 +14,7 @@
 //
 // Read-only: nothing is labelled, moved, archived or marked read in Gmail.
 
+import { notifyLater } from "./push";
 import { sqlite, storage } from "./storage";
 import { getValidAccessToken } from "./google-calendar";
 import { inboxReadiness } from "./deal-inbox";
@@ -229,6 +230,17 @@ export function storeEmail(row: {
   hasAttachments: boolean;
   occurredAt: string;
 }) {
+  // A push for a new, recent email from a contact (push.ts); not for re-syncs or a backfill.
+  const isNew = !sqlite.prepare(`SELECT 1 FROM inbox_emails WHERE gmail_id = ?`).get(row.gmailId);
+  if (isNew && row.direction === "inbound" && Date.now() - Date.parse(row.occurredAt) < 2 * 3600_000) {
+    const who = (sqlite.prepare(`SELECT name FROM crm_contacts WHERE fub_id = ?`).get(row.contactFubId) as { name: string | null } | undefined)?.name;
+    notifyLater("email", {
+      title: `Email from ${who ?? row.from.replace(/<.*>/, "").trim() ?? "a contact"}`,
+      body: row.subject || row.body.slice(0, 140),
+      url: `/admin/inbox?contact=${encodeURIComponent(row.contactFubId)}`,
+      tag: `email:${row.threadId ?? row.gmailId}`,
+    });
+  }
   sqlite
     .prepare(
       `INSERT INTO inbox_emails (gmail_id, thread_id, contact_fub_id, direction, from_addr, to_addrs, subject, body_text,

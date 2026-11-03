@@ -1,3 +1,4 @@
+import { PushNotificationsCard } from "@/components/push-notifications";
 import { LeadTextsCard } from "@/components/lead-texts";
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -123,6 +124,8 @@ export default function LeadsPage() {
         </div>
         {/* A text to Spencer's cell for each new lead (server/lead-alerts.ts) */}
         <LeadTextsCard />
+        {/* Push notifications on this device (server/push.ts) */}
+        <PushNotificationsCard />
         {/* Summary */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {[

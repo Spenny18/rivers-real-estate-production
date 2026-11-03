@@ -220,6 +220,13 @@ app.use((req, res, next) => {
     console.error("[new-lead-texts] failed to start:", err);
   }
   try {
+    // Push notifications for tasks coming due (push.ts).
+    const { startPushCron } = await import("./push");
+    startPushCron();
+  } catch (err) {
+    console.error("[push] failed to start:", err);
+  }
+  try {
     const { startReturnAlertCron } = await import("./return-alerts");
     startReturnAlertCron();
   } catch (err) {
