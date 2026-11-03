@@ -44,6 +44,7 @@ import {
   type FixProposalRow,
   type MetaOverride,
 } from "./seo-store";
+import { META_TOKENS, fillTokens, isMetaToken, supportsMetaTokens, tokensIn, tokenValuesForPath } from "./seo-tokens";
 import { cachedSeoReport, invalidateSeoReport } from "./seo-report-cache";
 import {
   containsKeyword,
@@ -397,6 +398,9 @@ function describePage(page: PageAnalysis, locked: string | null = null): string 
           ];
       const factLine = facts.filter(Boolean).join("; ");
       if (factLine) lines.push(`Facts you may cite: ${factLine}.`);
+      if (home.type === "neighbourhood") {
+        lines.push(`Live placeholders for this page's set_meta title/description (use these instead of typing the listing count or average price, which change daily): ${Object.entries(META_TOKENS).map(([k, d]) => `{${k}} = ${d}`).join("; ")}. Today they read: ${Object.entries(tokenValuesForPath(page.path)).map(([k, v]) => `{${k}} → ${v}`).join(", ") || "(no active listings — avoid placeholders on this page)"}.`);
+      }
       lines.push(`Editable ${home.type} fields (plain text; array fields are lists of paragraphs, no markdown or links):`);
       for (const f of fields) {
         const v = f === "tagline" ? String(row?.[f] ?? "") : JSON.stringify(jsonArray(row?.[f]));
@@ -629,6 +633,7 @@ Titles and meta descriptions are ads in the search results. Their only job is to
 - Title: at most 60 characters. The query near the front in natural word order, then a hook: a real number (active listings, a price point), a specific that competitors can't claim, or an access angle. Keep the page's existing brand suffix exactly as it is; do not add one where there is none.
 - Brand: "Luxury Homes Calgary" in neighbourhood, condo and listing titles is deliberate (that format carries rankings from the old site). Never replace it with "Rivers Real Estate" or remove it.
 - Description: 140–155 characters. Open with what the searcher gets, include one concrete detail or number, and end with a soft call to action ("See today's listings.", "Book a private showing.", "Get the building's sales history.").
+- Live numbers: in a neighbourhood page's set_meta title/description, never type the listing count or average price as a literal — write the placeholder ({activeCount}, {avgPrice}, {avgPriceShort}) listed for that page and it is filled with the current figure every time the page renders. Count lengths using today's values. Placeholders work only in set_meta on /neighbourhoods/<slug>; everywhere else (body copy, other pages) there are none, so don't quote numbers that go stale. If a placeholder can't be filled (too few active listings), the page's default title/description shows instead.
 - Banned: comma-lists of amenities ("schools, parks and lifestyle"), and the words nestled, boasts, wonderland, luxurious living, look no further, dream home.
 - Proof points you may use (all stated on the site already): Spencer Rivers, REALTOR®, holds the CLHMS, CNE, CIPS, CCS (Certified Condo Specialist) and LLS designations and is a Million Dollar Guild member; 12 years in Calgary's luxury market, top 1% in Canada, $200M+ in career sales; listings on this site can appear up to 48 hours before Realtor.ca. Never "correct" any of these facts where a page states them.
 - luxuryhomescalgary.ca is Spencer's own sister site — the same person, the same business, linked to this site in the schema (sameAs). Never describe it as a different brand, a competitor or a split entity. Repointing a link to it is optional housekeeping, only where this site has the equivalent page (it keeps the reader here); never present it as the reason a page fails to rank or get cited.
@@ -975,13 +980,27 @@ export function validateChanges(
           const title = str(c.title);
           const description = str(c.description);
           if (!title && !description) throw new Error("no title or description given");
-          if (title && (title.length < 15 || title.length > 80)) throw new Error(`title is ${title.length} characters`);
-          if (description && (description.length < 50 || description.length > 200)) {
-            throw new Error(`description is ${description.length} characters`);
+          const used = [...tokensIn(title), ...tokensIn(description)];
+          const unknown = used.filter((t) => !isMetaToken(t));
+          if (unknown.length) throw new Error(`unknown placeholder ${unknown.map((t) => `{${t}}`).join(", ")}`);
+          if (used.length && !supportsMetaTokens(path)) throw new Error(`placeholders only work on neighbourhood pages, not ${path}`);
+          // Length rules apply to what searchers will see today.
+          const values = used.length ? tokenValuesForPath(path) : {};
+          const liveTitle = title && used.length ? fillTokens(title, values) : title;
+          const liveDescription = description && used.length ? fillTokens(description, values) : description;
+          if (title && !liveTitle) throw new Error("title uses a placeholder that has no value today");
+          if (description && !liveDescription) throw new Error("description uses a placeholder that has no value today");
+          if (liveTitle && (liveTitle.length < 15 || liveTitle.length > 80)) throw new Error(`title is ${liveTitle.length} characters`);
+          if (liveDescription && (liveDescription.length < 50 || liveDescription.length > 200)) {
+            throw new Error(`description is ${liveDescription.length} characters`);
           }
           const rows: PreviewRow[] = [];
           if (title) rows.push({ label: "Title", before: page.title, after: title });
+          if (title && liveTitle !== title) rows.push({ label: "Title as it reads today (updates with the market)", before: "", after: liveTitle! });
           if (description) rows.push({ label: "Meta description", before: page.description, after: description });
+          if (description && liveDescription !== description) {
+            rows.push({ label: "Meta description as it reads today (updates with the market)", before: "", after: liveDescription! });
+          }
           changes.push({
             index, destructive: false, rows,
             heading: `Title & description — ${path}`,

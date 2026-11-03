@@ -25,6 +25,7 @@ import { findYouTubeReferences, isYouTubeThumbnailFor } from "@shared/youtube";
 import { extractBlogFaqs } from "@shared/blog-faq";
 import { publicOrigin } from "./origin";
 import { getMetaOverride, getMetaOverrides } from "./seo-store";
+import { resolveMetaOverride } from "./seo-tokens";
 
 const ORIGIN = publicOrigin();
 const SITE_NAME = "Rivers Real Estate";
@@ -286,7 +287,11 @@ export function metaForPath(path: string): SeoMeta | null {
   if (!meta || meta.noindex) return meta;
   let o: ReturnType<typeof getMetaOverride> = null;
   try {
-    o = getMetaOverride(path === "/" ? "/" : path.replace(/\/$/, ""));
+    const key = path === "/" ? "/" : path.replace(/\/$/, "");
+    const raw = getMetaOverride(key);
+    // Fill {activeCount}-style placeholders with today's numbers; a field
+    // that can't be filled comes back null and the page default is used.
+    o = raw ? resolveMetaOverride(key, raw) : null;
   } catch {
     // The override table is an enhancement; never fail a render over it.
   }
@@ -944,7 +949,10 @@ export function injectMetaIntoHtml(html: string, meta: SeoMeta): string {
 function overridesScript(): string {
   let map: ReturnType<typeof getMetaOverrides> = {};
   try {
-    map = getMetaOverrides();
+    // Resolved here too, so client-side navigation shows the same live
+    // numbers the server rendered (never the raw "{avgPrice}" template).
+    const raw = getMetaOverrides();
+    for (const [p, o] of Object.entries(raw)) map[p] = resolveMetaOverride(p, o);
   } catch {
     map = {};
   }
