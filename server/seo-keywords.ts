@@ -415,7 +415,11 @@ export function derivedKeyword(page: CrawledPage): string {
 }
 
 export function normalize(kw: string): string {
-  return kw.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+  // Apostrophes join rather than split: "Calgary's" is "calgarys", the same
+  // token a slug-derived keyword carries ("...-in-calgarys-luxury-market").
+  // Splitting it into "calgary s" made those posts fail "keyword in title"
+  // against their own title.
+  return kw.toLowerCase().replace(/['’]/g, "").replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
 }
 
 /** Tokens that mark a genuinely different place or audience. If one keyword

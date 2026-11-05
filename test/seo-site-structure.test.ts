@@ -146,3 +146,12 @@ test("the derived focus keyword of the new title is the real-estate phrase", () 
   assert.equal(derivedKeyword(crawled(neighbourhoodSeoTitle("Bayside (Airdrie)"), "/neighbourhoods/bayside")), "bayside airdrie real estate");
   assert.equal(derivedKeyword(crawled("Elbow Park Homes for Sale - Luxury Homes Calgary", "/neighbourhoods/elbow-park")), "elbow park homes sale");
 });
+
+test("a possessive in the title matches the slug-derived keyword", async () => {
+  const { containsKeyword, normalize } = await import("../server/seo-keywords");
+  assert.equal(normalize("Calgary’s Luxury Market"), "calgarys luxury market");
+  assert.ok(containsKeyword(
+    "Conditional vs Firm Offers in Calgary's Luxury Market",
+    "conditional vs firm offers calgarys luxury market",
+  ));
+});
