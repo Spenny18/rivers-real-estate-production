@@ -12,9 +12,15 @@
 //   - every enquiry the app takes (website forms, bookings, portal sign-ups,
 //     lead-source emails): one alert per enquiry, so a past contact enquiring
 //     again is flagged too. Hooked in at storage.onLeadCreated (contacts.ts).
+//   - lead-source emails the app read but couldn't import on its own (no
+//     phone or email in them, e.g. ReferralExchange's "a referral is waiting",
+//     or Claude wasn't sure): a "Lead to review" alert, once per email,
+//     linking to Needs review on the Enquiries page.
 //   - people Follow Up Boss brings in that never touched the app (its own
 //     lead sources), once each, when the sync first sees them, if they were
-//     created after alerts were switched on and within the last day.
+//     created after alerts were switched on and within the last day. Each of
+//     these is a lead the app missed; fubOnlyLeads() lists them by source so
+//     those sources can be repointed before FUB is switched off.
 //
 // Quiet hours (optional, 10 pm to 7 am Calgary): alerts wait and go out at
 // 7 am. Bursts (more than 6 in an hour, e.g. a backlog of lead emails) are
@@ -116,6 +122,17 @@ export interface AlertFacts {
   message?: string | null;
   contactId?: string | null;
   again?: boolean;
+  /** A lead-source email waiting under Needs review, not a lead yet. */
+  review?: boolean;
+}
+
+function heading(f: AlertFacts): string {
+  return f.review ? "Lead to review" : f.again ? "Enquiry again" : "New lead";
+}
+
+/** Where the alert opens: the contact, or the Enquiries page. */
+function alertPath(f: AlertFacts): string {
+  return f.contactId ? `/admin/crm?contact=${encodeURIComponent(f.contactId)}` : "/admin/leads";
 }
 
 function excerpt(s: string, n: number): string {
@@ -127,11 +144,11 @@ function excerpt(s: string, n: number): string {
 export function alertBody(f: AlertFacts): string {
   const phone = toE164(f.phone);
   const lines = [
-    `${f.again ? "Enquiry again" : "New lead"}${f.source ? ` · ${f.source}` : ""}`,
+    `${heading(f)}${f.source ? ` · ${f.source}` : ""}`,
     [f.name?.trim() || "No name", phone ? prettyPhone(phone) : null, f.email?.trim() || null].filter(Boolean).join(" · "),
   ];
   if (f.message?.trim()) lines.push(`"${excerpt(f.message, 180)}"`);
-  if (f.contactId) lines.push(`${publicOrigin()}/admin/crm?contact=${encodeURIComponent(f.contactId)}`);
+  if (f.contactId || f.review) lines.push(`${publicOrigin()}${alertPath(f)}`);
   if (phone) lines.push(`Text them: reply "${phone.replace(/^\+1/, "")}: your message"`);
   return lines.join("\n");
 }
@@ -172,9 +189,9 @@ export async function queueAlert(key: string, facts: AlertFacts, now = new Date(
   if (sqlite.prepare(`SELECT 1 FROM new_lead_texts WHERE key = ?`).get(key)) return "duplicate";
   // A push notification too (push.ts), whatever the text-alert settings say: it has its own switch.
   notifyLater("lead", {
-    title: `${facts.again ? "Enquiry again" : "New lead"}: ${facts.name?.trim() || "No name"}`,
+    title: `${heading(facts)}: ${facts.name?.trim() || "No name"}`,
     body: [facts.source, facts.message ? excerpt(facts.message, 140) : null].filter(Boolean).join(" · ") || "Tap to open",
-    url: facts.contactId ? `/admin/crm?contact=${encodeURIComponent(facts.contactId)}` : "/admin/leads",
+    url: alertPath(facts),
     tag: `lead:${key}`,
   });
   const settings = alertSettings();
@@ -216,6 +233,60 @@ export async function alertForLead(
     contactId,
     again: !wasNewContact,
   });
+}
+
+/**
+ * A lead-source email that couldn't become a lead on its own and is waiting
+ * under Needs review (lead-intake.ts). Without this, a source whose emails
+ * carry no contact details only ever reaches Spencer through Follow Up Boss.
+ */
+export async function alertForReview(
+  intake: { id: number; source: string; name: string | null; email: string | null; phone: string | null; note: string | null },
+): Promise<string> {
+  return queueAlert(`intake:${intake.id}`, {
+    name: intake.name ?? `${intake.source} lead`,
+    phone: intake.phone,
+    email: intake.email,
+    source: intake.source,
+    message: intake.note,
+    review: true,
+  });
+}
+
+/**
+ * Leads the app missed: people Follow Up Boss brought in that the app had no
+ * enquiry for (the "via Follow Up Boss" alerts), by source, over the last
+ * `days`. Any source listed here still delivers only into FUB and needs
+ * repointing (to the Gmail inbox the app reads) before FUB is switched off.
+ * `alsoInApp` marks people whose enquiry did reach the app too, later.
+ */
+export function fubOnlyLeads(days = 90, now = new Date()) {
+  const since = new Date(now.getTime() - days * 86400_000).toISOString();
+  const rows = sqlite
+    .prepare(
+      `SELECT a.contact_fub_id AS contactId, c.name, c.source, a.created_at AS createdAt,
+              EXISTS (SELECT 1 FROM new_lead_texts b WHERE b.contact_fub_id = a.contact_fub_id AND b.key LIKE 'lead:%') AS alsoInApp
+       FROM new_lead_texts a LEFT JOIN crm_contacts c ON c.fub_id = a.contact_fub_id
+       WHERE a.key LIKE 'contact:%' AND a.created_at >= ?
+       ORDER BY a.created_at DESC`,
+    )
+    .all(since) as Array<{ contactId: string; name: string | null; source: string | null; createdAt: string; alsoInApp: number }>;
+  const leads = rows.map((r) => ({ ...r, source: r.source?.trim() || "No source in Follow Up Boss", alsoInApp: !!r.alsoInApp }));
+  const bySource = new Map<string, { source: string; count: number; missed: number; last: string }>();
+  for (const l of leads) {
+    const g = bySource.get(l.source) ?? { source: l.source, count: 0, missed: 0, last: l.createdAt };
+    g.count++;
+    if (!l.alsoInApp) g.missed++;
+    if (l.createdAt > g.last) g.last = l.createdAt;
+    bySource.set(l.source, g);
+  }
+  return {
+    days,
+    // Alerts (and so this list) only cover FUB people created since alerts were switched on.
+    since: [alertSettings().enabledAt, since].sort().pop()!,
+    sources: Array.from(bySource.values()).sort((a, b) => b.missed - a.missed || b.count - a.count),
+    leads: leads.slice(0, 25),
+  };
 }
 
 /**

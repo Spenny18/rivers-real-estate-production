@@ -136,3 +136,46 @@ test("people only Follow Up Boss has alert once; the FUB copy of an app lead doe
   await la.alertForSyncedContacts(new Date(now.getTime() + 4 * 60_000));
   assert.equal(sent.length, before);
 });
+
+test("a lead-source email waiting for review alerts once, linking to the Enquiries page", async () => {
+  const intake = { id: 77, source: "ReferralExchange", name: null, email: null, phone: null, note: "No email or phone in the email. Referral details are only on ReferralExchange's site" };
+  assert.equal(await la.alertForReview(intake), "sent");
+  assert.equal(sent.length, 1);
+  const lines = sent[0].body.split("\n");
+  assert.equal(lines[0], "Lead to review · ReferralExchange");
+  assert.equal(lines[1], "ReferralExchange lead");
+  assert.match(lines[2], /only on ReferralExchange's site/);
+  assert.equal(lines[3], "https://riversrealestate.ca/admin/leads");
+  // Re-reading the same email doesn't alert again.
+  assert.equal(await la.alertForReview(intake), "duplicate");
+  assert.equal(sent.length, 1);
+});
+
+test("leads only Follow Up Boss caught are listed by source", async () => {
+  sqlite.exec(`DELETE FROM crm_contacts`); // earlier tests' people
+  const now = new Date();
+  const t = (mins: number) => new Date(now.getTime() + mins * 60_000).toISOString();
+  const row = (id: string, name: string, email: string, source: string) => ({
+    fubId: id, name, firstName: null, lastName: null, email, phone: null, stage: "Lead", source, assignedTo: null,
+    tags: "[]", fubCreatedAt: t(1), fubUpdatedAt: t(1), lastActivityAt: null, raw: "{}", syncedAt: t(1),
+  });
+  storage.upsertCrmContacts([
+    row("951", "Rex One", "rex1@x.test", "ReferralExchange"),
+    row("952", "Rex Two", "rex2@x.test", "ReferralExchange"),
+    row("953", "Zed Zillow", "zed@x.test", "Zillow"),
+  ]);
+  await la.alertForSyncedContacts(new Date(now.getTime() + 2 * 60_000));
+  // Zed's enquiry reached the app too, later (folded into FUB's copy).
+  const lead = storage.createLead({ name: "Zed Zillow", email: "zed2@x.test", message: "Hi", source: "Zillow" } as any);
+  await settle();
+  mergeContactInto(la.alertRow(`lead:${lead.id}`).contact_fub_id as string, "953");
+
+  const r = la.fubOnlyLeads(90, new Date(now.getTime() + 5 * 60_000));
+  const by = Object.fromEntries(r.sources.map((s: any) => [s.source, s]));
+  assert.deepEqual([by.ReferralExchange.count, by.ReferralExchange.missed], [2, 2]);
+  assert.deepEqual([by.Zillow.count, by.Zillow.missed], [1, 0]);
+  assert.equal(r.sources[0].source, "ReferralExchange", "most-missed source first");
+  assert.equal(r.leads.find((l: any) => l.contactId === "953")!.alsoInApp, true);
+  // App leads and review alerts aren't on the list.
+  assert.ok(r.leads.every((l: any) => ["951", "952", "953"].includes(l.contactId)));
+});

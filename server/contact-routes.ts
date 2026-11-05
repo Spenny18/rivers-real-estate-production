@@ -12,7 +12,7 @@ import { addNote, addTask, deleteNote, deleteTask, editNote, editTask, listTasks
 import { exportSummary, writeExport } from "./crm-export";
 import { buildReport } from "./crm-reports";
 import { PUSH_KINDS, listDevices, notify, pushSettings, removeSubscription, saveSubscription, savePushSettings, vapidKeys } from "./push";
-import { alertSettings, recentAlerts, saveAlertSettings, sendTestAlert } from "./lead-alerts";
+import { alertSettings, fubOnlyLeads, recentAlerts, saveAlertSettings, sendTestAlert } from "./lead-alerts";
 import { prettyPhone, smsConfig, smsConfigured } from "./sms";
 import {
   createSmartList,
@@ -264,6 +264,12 @@ export function registerContactRoutes(app: Express, deps: { requireAuth: Middlew
     const b = z.object({ enabled: z.boolean().optional(), quietHours: z.boolean().optional() }).safeParse(req.body ?? {});
     if (!b.success) return res.status(400).json({ message: "Invalid settings" });
     res.json(saveAlertSettings(b.data));
+  });
+
+  // Leads only Follow Up Boss caught, by source: what to repoint before switching it off.
+  app.get("/api/admin/lead-texts/fub-only", requireAuth, (req, res) => {
+    const days = [30, 90, 365].includes(Number(req.query.days)) ? Number(req.query.days) : 90;
+    res.json(fubOnlyLeads(days));
   });
 
   app.post("/api/admin/lead-texts/test", requireAuth, async (_req, res) => {

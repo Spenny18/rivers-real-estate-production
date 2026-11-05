@@ -436,7 +436,14 @@ export async function readIntake(id: number, mode: "live" | "sample" = "live"): 
   }
   if (!data.confident || !data.name || (!data.email && !data.phone)) {
     const missing = !data.email && !data.phone ? "No email or phone in the email. " : "";
-    return updateIntake(id, { status: "needs_review", reason: `${missing}${data.note}`.trim(), extracted: data, model });
+    const reason = `${missing}${data.note}`.trim();
+    updateIntake(id, { status: "needs_review", reason, extracted: data, model });
+    // Alert now, so a lead the app can't import itself doesn't wait for
+    // Follow Up Boss to announce it. Once per email (re-reads don't repeat it).
+    await import("./lead-alerts")
+      .then((m) => m.alertForReview({ id, source: source.label, name: data.name, email: data.email, phone: data.phone, note: reason }))
+      .catch((e) => console.warn("[lead-intake] review alert:", e?.message ?? e));
+    return;
   }
   const made = createLeadFromIntake(source, {
     name: data.name,
