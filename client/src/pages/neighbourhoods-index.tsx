@@ -123,6 +123,12 @@ export default function NeighbourhoodsIndexPage() {
             schools, and cul-de-sacs. The right home depends on which community
             fits the way you actually live.
           </p>
+          {/* Same sources every neighbourhood page cites. */}
+          <p className="mt-4 max-w-2xl text-sm leading-relaxed text-white/65">
+            Official sources: the <a href="https://www.calgary.ca/communities/profiles.html" target="_blank" rel="noopener" className="underline underline-offset-2">City of Calgary community profiles</a>{" "}
+            for community boundaries and statistics, and <a href="https://www.creb.com/Housing_Statistics/" target="_blank" rel="noopener" className="underline underline-offset-2">CREB® housing statistics</a>{" "}
+            for city-wide price benchmarks.
+          </p>
         </div>
       </section>
 

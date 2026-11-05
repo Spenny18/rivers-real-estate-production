@@ -69,6 +69,12 @@ export default function CondosIndexPage() {
             each. Spencer Rivers is a Certified Condo Specialist, and listings
             on this site can appear up to 48 hours before Realtor.ca.
           </p>
+          {/* Outbound citations: what the numbers on these pages can be checked against. */}
+          <p className="mt-4 max-w-[680px] text-sm text-background/70 leading-relaxed">
+            Official sources: <a href="https://www.calgary.ca/property-owners/assessment-tax.html" target="_blank" rel="noopener" className="underline underline-offset-2">City of Calgary property assessments</a>{" "}
+            for unit assessed values and tax levies, and <a href="https://www.creb.com/Housing_Statistics/" target="_blank" rel="noopener" className="underline underline-offset-2">CREB® housing statistics</a>{" "}
+            for city-wide apartment benchmarks. Active listings and prices come from MLS® data and update daily.
+          </p>
         </div>
       </section>
 

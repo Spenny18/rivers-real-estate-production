@@ -55,6 +55,12 @@ export default function BlogIndexPage() {
           , then browse the market notes, neighbourhood deep-dives and condo
           building guides below.
         </p>
+        <p className="mt-3 max-w-2xl text-muted-foreground text-[13px] leading-relaxed">
+          For the official numbers behind these posts, see{" "}
+          <a href="https://www.creb.com/Housing_Statistics/" target="_blank" rel="noopener" className="underline underline-offset-2">CREB® housing statistics</a>
+          {" "}and the{" "}
+          <a href="https://www.calgary.ca/communities/profiles.html" target="_blank" rel="noopener" className="underline underline-offset-2">City of Calgary community profiles</a>.
+        </p>
         <p className="mt-5 max-w-2xl text-muted-foreground text-[15px] leading-relaxed">
           Start here:{" "}
           <Link href="/blog/how-to-choose-a-luxury-real-estate-agent-in-calgary">
