@@ -391,12 +391,17 @@ const STOP = new Set([
 
 /** Derive the keyword a page is currently targeting from its own title. The
  *  brand suffix after the last separator is stripped — it is not the target. */
+/** Listing pages whose first image belongs to a card, not the page. */
+const INDEX_PAGES = new Set(["/blog", "/neighbourhoods", "/condos", "/mls"]);
+
 export function derivedKeyword(page: CrawledPage): string {
   const t = (page.title || page.h1 || "").trim();
   if (!t) return "";
   // "A & B" titles lead with the target and add a secondary phrase after the
   // ampersand ("Rosedale Calgary Real Estate & Homes for Sale").
-  const head = t.split(/\s+[|–—-]\s+/)[0].split(/\s+&\s+/)[0].trim();
+  // "Britannia vs Elbow Park: Lots, Flood Risk and Price" targets the part
+  // before the colon; the rest is the hook.
+  const head = t.split(/\s+[|–—-]\s+/)[0].split(/:\s/)[0].split(/\s+&\s+/)[0].trim();
   const words = head
     .replace(/[?!.,:]+$/g, "")
     .replace(/[()]/g, "")
@@ -514,8 +519,11 @@ export function containsKeyword(haystack: string, keyword: string): boolean {
 export function mentionsSubject(haystack: string, keyword: string): boolean {
   const subject = subjectTokens(keyword);
   if (!subject.length) return containsKeyword(haystack, keyword);
-  const hay = new Set(normalize(haystack).split(" "));
-  return subject.every((t) => hay.has(t));
+  // Singular and plural are the same subject: alt text describing "a condo
+  // building" names "condo buildings".
+  const stem = (w: string) => w.replace(/(?<=..)(ies|es|s)$/, "");
+  const hay = new Set(normalize(haystack).split(" ").map(stem));
+  return subject.every((t) => hay.has(stem(t)));
 }
 
 /** Occurrences of the keyword's rarest token — a proxy for how often the page
@@ -898,7 +906,9 @@ export async function buildSeoReport(opts: {
         ? {
             src: firstImg.src,
             alt: firstImg.alt ?? "",
-            hasKeyword: Boolean(nk && firstImg.alt && mentionsSubject(firstImg.alt, kw)),
+            // On an index the first image is the newest card's photo, not
+            // the page's own; its alt describes that card, rightly.
+            hasKeyword: INDEX_PAGES.has(page.path) || Boolean(nk && firstImg.alt && mentionsSubject(firstImg.alt, kw)),
             ...(heroAltSource ? { source: heroAltSource } : {}),
           }
         : null,

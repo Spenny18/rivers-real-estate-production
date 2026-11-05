@@ -155,3 +155,15 @@ test("a possessive in the title matches the slug-derived keyword", async () => {
     "conditional vs firm offers calgarys luxury market",
   ));
 });
+
+test("a title's colon ends the keyword, and plural alt text names a singular subject", async () => {
+  const { mentionsSubject } = await import("../server/seo-keywords");
+  const crawled = (title: string, p: string) => ({ title, h1: "", path: p }) as any;
+  assert.equal(
+    derivedKeyword(crawled("Britannia vs Elbow Park: Lots, Flood Risk and Price — Rivers Real Estate", "/blog/x")),
+    "britannia vs elbow park",
+  );
+  assert.ok(mentionsSubject("A brick tower, one of the best luxury condos in Calgary", "best luxury condo buildings in calgary") === false,
+    "a word the alt never says still fails");
+  assert.ok(mentionsSubject("Luxury condo building lit at night in downtown Calgary", "luxury condo buildings calgary"));
+});
