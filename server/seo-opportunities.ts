@@ -163,6 +163,10 @@ export interface Opportunity {
   quickWin: boolean;
   /** Where the estimate came from, so the UI can be honest about it. */
   basis: "search-console" | "on-page";
+  /** A fix already changed this page recently and the task rests on Search
+   *  Console history, which lags by weeks: re-doing it now just churns the
+   *  page. Set by markAwaitingGoogle(). */
+  awaitingGoogle?: { at: string; proposalId: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -326,7 +330,37 @@ export function gainOf(e: GainEstimate): number {
 
 /** Most clicks first; ties (e.g. every zero-estimate task) by best value. */
 export function sortOpportunities(list: Opportunity[]): Opportunity[] {
-  return list.sort((a, b) => b.estClicksGain - a.estClicksGain || b.priority - a.priority);
+  return list.sort((a, b) =>
+    Number(!!a.awaitingGoogle) - Number(!!b.awaitingGoogle) ||
+    b.estClicksGain - a.estClicksGain || b.priority - a.priority);
+}
+
+/** Tasks measured by Search Console rankings. A re-crawl shows an on-page fix
+ *  (alt text, links, headings) at once, so those stay live until fixed; these
+ *  only clear once Google re-ranks the page, which takes weeks. */
+const RANKING_TYPES = new Set<OpportunityType>([
+  "striking_distance", "ctr_gap", "keyword_mismatch", "cannibalization", "content_gap", "prune",
+]);
+
+/**
+ * Flags ranking-based tasks on pages a fix changed recently, so the console
+ * shows "fixed, waiting on Google" instead of asking for the same rewrite
+ * again (Rosedale was rewritten three times in a fortnight this way). Their
+ * clicks stay out of the headline total until the window passes.
+ */
+export function markAwaitingGoogle(
+  list: Opportunity[],
+  fixed: Map<string, { at: string; proposalId: number }>,
+): Opportunity[] {
+  for (const o of list) {
+    if (!RANKING_TYPES.has(o.type) || !o.paths.length) continue;
+    // Cannibalization and prune are settled by changing either page.
+    const hits = o.paths.map((p) => fixed.get(p)).filter(Boolean) as Array<{ at: string; proposalId: number }>;
+    if (!hits.length) continue;
+    o.awaitingGoogle = hits.sort((a, b) => b.at.localeCompare(a.at))[0];
+    o.quickWin = false;
+  }
+  return list;
 }
 
 // ---------------------------------------------------------------------------
@@ -725,7 +759,9 @@ export function buildOpportunities(opts: {
           why: `${problems.join("; ").replace(/^./, (c) => c.toUpperCase())}. Alt text is what Google Images ranks a photo on, and screen readers read it aloud.`,
           action: page.path.startsWith("/blog/")
             ? `Set the featured image's alt text to describe the photo in a sentence that names “${page.focusKeyword}”.`
-            : `Give each image a short description that names “${page.focusKeyword}” where it fits naturally.`,
+            : page.path === "/"
+              ? "Describe what the hero photo actually shows in its alt text, in /admin/home (hero block → background image alt text). It's CMS content, so this one is a manual edit."
+              : `Give each image a short description that names “${page.focusKeyword}” where it fits naturally.`,
           queries: rows.slice(0, 5).map((r) => asQuery(r)),
           metrics: pageMetrics(page.path, rows),
           estimate: rows.length
@@ -894,6 +930,9 @@ export function buildOpportunities(opts: {
       .filter((r) => r.impressions / total >= 0.15)
       .sort((a, b) => b.impressions - a.impressions);
     if (sharers.length < 2) continue;
+    // Same page twice (URL variants that slipped past the merge) is not a
+    // conflict between two pages.
+    if (sharers[0].path === sharers[1].path) continue;
     const key = pairKey(sharers[0].path, sharers[1].path);
     const entry = cannibalByPair.get(key) ?? { paths: [sharers[0].path, sharers[1].path], rows: [] };
     entry.rows.push(...sharers.slice(0, 2));

@@ -5,7 +5,7 @@
 // was worked out, can be filtered by the kind of work it is, and can be
 // handed to Claude.
 import { useMemo, useState } from "react";
-import { Sparkles, Zap, TrendingUp, ChevronDown, Calculator, LayoutTemplate } from "lucide-react";
+import { Sparkles, Zap, TrendingUp, ChevronDown, Calculator, LayoutTemplate, Hourglass } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   EFFORT_LABELS,
@@ -58,7 +58,7 @@ export function OpportunitiesSection({
     for (const o of opportunities) {
       const k = categoryOf(o);
       const cur = c[k] ?? { count: 0, clicks: 0 };
-      c[k] = { count: cur.count + 1, clicks: cur.clicks + o.estClicksGain };
+      c[k] = { count: cur.count + 1, clicks: cur.clicks + (o.awaitingGoogle ? 0 : o.estClicksGain) };
     }
     return c;
   }, [opportunities]);
@@ -67,15 +67,19 @@ export function OpportunitiesSection({
     let l = opportunities;
     if (category !== "all") l = l.filter((o) => categoryOf(o) === category);
     if (quickOnly) l = l.filter((o) => o.quickWin);
+    // Tasks already fixed and waiting on Google to re-rank go last: redoing
+    // them now only churns the page.
     return l.slice().sort((a, b) =>
-      sort === "clicks"
+      Number(!!a.awaitingGoogle) - Number(!!b.awaitingGoogle) ||
+      (sort === "clicks"
         ? b.estClicksGain - a.estClicksGain || b.priority - a.priority
-        : b.priority - a.priority);
+        : b.priority - a.priority));
   }, [opportunities, category, quickOnly, sort]);
 
   const shown = showAll ? list : list.slice(0, 12);
   const quickWins = opportunities.filter((o) => o.quickWin).length;
-  const listClicks = list.reduce((s, o) => s + o.estClicksGain, 0);
+  const listClicks = list.reduce((s, o) => s + (o.awaitingGoogle ? 0 : o.estClicksGain), 0);
+  const waiting = opportunities.filter((o) => o.awaitingGoogle).length;
   const activeHint = TASK_CATEGORIES.find((c) => c.id === category)?.hint;
 
   return (
@@ -88,6 +92,7 @@ export function OpportunitiesSection({
           <div className="text-sm text-muted-foreground tabular-nums">
             ≈ <span className="font-serif text-2xl text-foreground">{fmtInt(estClicksAvailable)}</span>{" "}
             extra clicks / month on the table · {quickWins} quick win{quickWins === 1 ? "" : "s"}
+            {waiting > 0 && <> · {waiting} fixed, waiting on Google</>}
           </div>
         )}
       </div>
@@ -204,6 +209,15 @@ function OpportunityRow({
             {o.quickWin && (
               <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 border border-emerald-500/40 text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
                 <Zap className="w-2.5 h-2.5" /> Quick win
+              </span>
+            )}
+            {o.awaitingGoogle && (
+              <span
+                className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 border border-sky-500/40 text-sky-700 dark:text-sky-400 flex items-center gap-1"
+                title="A fix changed this page recently. This task is measured on Search Console rankings, which take weeks to catch up — give it time before reworking the page again."
+                data-testid={`badge-awaiting-${o.id}`}
+              >
+                <Hourglass className="w-2.5 h-2.5" /> Fixed {new Date(o.awaitingGoogle.at).toLocaleDateString()} · waiting on Google
               </span>
             )}
             {o.template && (
