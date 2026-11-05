@@ -237,6 +237,13 @@ export default function AboutPage() {
               </div>
             ))}
           </div>
+          {/* Where each credential and licence can be checked. */}
+          <p className="mt-10 text-[13px] leading-[1.7] text-muted-foreground" data-testid="text-credential-sources">
+            The CLHMS and Million Dollar Guild are awarded by the{" "}
+            <a href="https://www.luxuryhomemarketing.com/" target="_blank" rel="noopener" className="underline underline-offset-2">Institute for Luxury Home Marketing</a>
+            , and real estate professionals in Alberta are licensed by the{" "}
+            <a href="https://www.reca.ca/" target="_blank" rel="noopener" className="underline underline-offset-2">Real Estate Council of Alberta (RECA)</a>.
+          </p>
         </div>
       </section>
 

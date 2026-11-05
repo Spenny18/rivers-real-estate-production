@@ -1090,6 +1090,17 @@ export default function WorkWithDetailPage() {
         </div>
       </section>
 
+      {/* Outbound citations, shared by every Work With page. */}
+      <section className="max-w-[1400px] mx-auto px-6 lg:px-10 pb-10" data-testid="section-segment-sources">
+        <p className="border-t border-border pt-4 text-sm text-muted-foreground">
+          Official sources:{" "}
+          <a href="https://www.creb.com/Housing_Statistics/" target="_blank" rel="noopener" className="underline underline-offset-2">CREB® housing statistics</a>{" "}
+          for Calgary market benchmarks, and the{" "}
+          <a href="https://www.reca.ca/" target="_blank" rel="noopener" className="underline underline-offset-2">Real Estate Council of Alberta (RECA)</a>{" "}
+          for how Alberta real estate professionals are licensed and what they owe their clients.
+        </p>
+      </section>
+
       {/* FAQ */}
       <FaqAccordion
         items={segment.faq}
