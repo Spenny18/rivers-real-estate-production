@@ -2153,6 +2153,21 @@ export async function registerRoutes(
   // GET /api/public/neighbourhoods (list). Counts and averages are refreshed
   // after MLS sync, so this hot directory endpoint must not rescan thousands
   // of listings once or twice for every neighbourhood on every page view.
+  // Pillar ↔ child links for a public page, from the SEO console's cluster
+  // map (server/cluster-links.ts). /api/public/cluster-links/neighbourhoods/rosedale
+  // answers for /neighbourhoods/rosedale; the bare endpoint answers for "/".
+  app.get(["/api/public/cluster-links", "/api/public/cluster-links/*splat"], async (req, res) => {
+    const splat = (req.params as any).splat;
+    const rest = Array.isArray(splat) ? splat.join("/") : typeof splat === "string" ? splat : "";
+    const pagePath = "/" + rest.replace(/^\/+|\/+$/g, "");
+    try {
+      const { liveClusterLinks } = await import("./cluster-links");
+      res.set("Cache-Control", "public, max-age=300").json(await liveClusterLinks(pagePath));
+    } catch (e: any) {
+      res.json({ up: [], guides: [] });
+    }
+  });
+
   app.get("/api/public/neighbourhoods", (_req, res) => {
     res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
     const items = storage.listNeighbourhoods().map((n) => ({

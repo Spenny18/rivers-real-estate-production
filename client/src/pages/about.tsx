@@ -105,15 +105,16 @@ export default function AboutPage() {
       <section className="max-w-[1400px] mx-auto px-4 lg:px-8 pt-12 lg:pt-16 pb-16 lg:pb-24">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-16">
           <div className="lg:col-span-7 lg:pt-12">
-            <div className="font-display text-[11px] tracking-[0.32em] text-muted-foreground">
-              ABOUT SPENCER RIVERS
-            </div>
-            <h1 className="mt-5 font-serif text-[44px] lg:text-[80px] leading-[0.98]">
+            {/* The kicker sits inside the H1 so the heading names the page's subject. */}
+            <h1>
+              <span className="block font-display text-[11px] tracking-[0.32em] text-muted-foreground uppercase">About Spencer Rivers, Calgary realtor</span>
+              <span className="block mt-5 font-serif text-[44px] lg:text-[80px] leading-[0.98]">
               Calgary's most established
               <br />
               <em className="not-italic font-normal">luxury communities,</em>
               <br />
               represented properly.
+              </span>
             </h1>
             <p className="mt-8 max-w-[620px] text-[17px] lg:text-[18px] leading-[1.7] text-foreground/85">
               Spencer Rivers leads Rivers Real Estate at Synterra Realty —

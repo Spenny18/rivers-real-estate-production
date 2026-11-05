@@ -1,6 +1,7 @@
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { PublicLayout } from "@/components/public-layout";
+import { useMergedGuides } from "@/components/cluster-links";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowRight, Building2 } from "lucide-react";
 
@@ -37,6 +38,7 @@ const CONDO_GUIDES = [
 ];
 
 export default function CondosIndexPage() {
+  const guides = useMergedGuides("/condos", CONDO_GUIDES.map((g) => ({ href: g.href, label: g.text })));
   const { data: buildings = [], isLoading } = useQuery<CondoBuilding[]>({
     queryKey: ["/api/public/condos"],
   });
@@ -138,10 +140,10 @@ export default function CondosIndexPage() {
           Start with the district comparison, then go deeper on the buildings, the costs and the new-build pipeline.
         </p>
         <ul className="mt-6 space-y-2">
-          {CONDO_GUIDES.map((g) => (
+          {guides.map((g) => (
             <li key={g.href}>
               <Link href={g.href} className="text-foreground underline underline-offset-4 hover:text-muted-foreground transition-colors">
-                {g.text}
+                {g.label}
               </Link>
             </li>
           ))}

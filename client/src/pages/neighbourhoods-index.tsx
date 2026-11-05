@@ -3,6 +3,7 @@ import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, MapPin } from "lucide-react";
 import { PublicLayout } from "@/components/public-layout";
+import { useMergedGuides } from "@/components/cluster-links";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatPriceCompact } from "@/lib/format";
 import type { PublicNeighbourhood } from "@/lib/mls-types";
@@ -60,6 +61,7 @@ const NEIGHBOURHOOD_GUIDES: Array<{ href: string; label: string }> = [
 ];
 
 export default function NeighbourhoodsIndexPage() {
+  const guides = useMergedGuides("/neighbourhoods", NEIGHBOURHOOD_GUIDES);
   const { data, isLoading } = useQuery<PublicNeighbourhood[]>({
     queryKey: ["/api/public/neighbourhoods"],
   });
@@ -221,7 +223,7 @@ export default function NeighbourhoodsIndexPage() {
             Longer reads on the communities buyers ask about most.
           </p>
           <ul className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3 text-[15px]">
-            {NEIGHBOURHOOD_GUIDES.map((g) => (
+            {guides.map((g) => (
               <li key={g.href}>
                 <Link href={g.href} className="underline underline-offset-4 hover:opacity-70">
                   {g.label}

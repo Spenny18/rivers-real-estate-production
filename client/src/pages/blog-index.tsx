@@ -37,11 +37,12 @@ export default function BlogIndexPage() {
     <PublicLayout>
       {/* Page header */}
       <section className="max-w-[1300px] mx-auto px-6 lg:px-10 pt-12 lg:pt-20 pb-10">
-        <div className="font-display text-[11px] tracking-[0.32em] text-muted-foreground">
-          THE JOURNAL
-        </div>
-        <h1 className="mt-5 font-serif text-[44px] lg:text-[72px] leading-[1.02] max-w-[1000px]">
+        {/* The kicker sits inside the H1 so the heading names the page's subject. */}
+        <h1>
+          <span className="block font-display text-[11px] tracking-[0.32em] text-muted-foreground uppercase">The Calgary luxury real estate journal</span>
+          <span className="block mt-5 font-serif text-[44px] lg:text-[72px] leading-[1.02] max-w-[1000px]">
           Calgary luxury real estate, from someone who actually works it.
+          </span>
         </h1>
         <p className="mt-5 max-w-2xl text-muted-foreground text-[15px] leading-relaxed">
           Written by Spencer Rivers, REALTOR®, CLHMS — a Calgary luxury real

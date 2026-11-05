@@ -139,7 +139,7 @@ const ASSIGNMENT_UNITS: AssignmentUnit[] = [
 const SEO_TITLE =
   "Calgary Condo Assignment Sales | Buy or Sell a Pre-Construction Assignment | Spencer Rivers";
 const SEO_DESCRIPTION =
-  "Buy or sell a pre-construction condo assignment in Calgary with Spencer Rivers. Current assignments at the Lincoln (Beltline) and Sovereign (Mission), plus developer consent, deposits, and GST handled properly.";
+  "Calgary condo assignment sales with Spencer Rivers: current assignments at the Lincoln (Beltline) and Sovereign (Mission), with developer consent, deposits and GST handled properly.";
 
 const FAQ_ITEMS = [
   {
@@ -410,13 +410,14 @@ export default function AssignmentsPage() {
       {/* Hero */}
       <section className="max-w-[1400px] mx-auto px-6 lg:px-10 pt-12 lg:pt-16 pb-16 lg:pb-20">
         <div className="max-w-[860px]">
-          <div className="font-display text-[11px] tracking-[0.32em] text-muted-foreground">
-            ASSIGNMENT SALES — CALGARY
-          </div>
-          <h1 className="mt-5 font-serif text-[40px] lg:text-[68px] leading-[1.02] tracking-tight">
+          {/* The kicker sits inside the H1 so the heading names the page's subject. */}
+          <h1>
+            <span className="block font-display text-[11px] tracking-[0.32em] text-muted-foreground uppercase">Calgary condo assignment sales</span>
+            <span className="block mt-5 font-serif text-[40px] lg:text-[68px] leading-[1.02] tracking-tight">
             Pre-construction contracts,
             <br />
             <em className="not-italic font-normal">bought and sold properly.</em>
+            </span>
           </h1>
           <p className="mt-8 max-w-[680px] text-[17px] lg:text-[18px] leading-[1.7] text-foreground/85">
             An assignment sale moves a pre-construction condo contract from its

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { MLS_H1 } from "@shared/page-meta";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { MapContainer, Marker, useMap } from "react-leaflet";
@@ -1499,8 +1500,9 @@ export default function MlsSearchPage() {
           {/* Results header */}
           <div className="px-5 pt-5 pb-3 flex items-center justify-between flex-wrap gap-2 border-b border-border/50">
             <div>
+              {/* Same heading crawlers get from the server shell (shared/page-meta.ts). */}
               <h1 className="font-serif text-xl text-foreground" style={{ letterSpacing: "-0.01em" }}>
-                Properties
+                {MLS_H1}
               </h1>
               <div className="text-[13px] text-muted-foreground mt-0.5" style={{ fontFamily: "Manrope, sans-serif" }}>
                 {isLoading ? "Searching…" : data?.soldLocked && total === 0 ? (
