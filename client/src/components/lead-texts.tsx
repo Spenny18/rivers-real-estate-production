@@ -83,7 +83,8 @@ export function LeadTextsCard() {
             </label>
             <p className="text-muted-foreground leading-relaxed">
               Each text has the lead's name, number, email, source and message, and a link to them in the CRM. Replying to the alert doesn't text the
-              lead: start your reply with their number and a colon ("4035551234: Hi…") to text them from the business line. Leads Follow Up Boss
+              lead: start your reply with their number and a colon ("4035551234: Hi…") to text them from the business line. Lead-source emails the app
+              can't import on its own (no phone or email in them) send a "Lead to review" text linking to Needs review. Leads Follow Up Boss
               brings in alert too, once, when the sync first sees them. More than 6 in an hour are rolled into one summary text.
             </p>
             {data.recent.length > 0 && (

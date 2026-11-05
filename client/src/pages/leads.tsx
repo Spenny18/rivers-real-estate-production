@@ -1,5 +1,6 @@
 import { PushNotificationsCard } from "@/components/push-notifications";
 import { LeadTextsCard } from "@/components/lead-texts";
+import { FubOnlyLeadsCard } from "@/components/fub-only-leads";
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/app-shell";
@@ -124,6 +125,8 @@ export default function LeadsPage() {
         </div>
         {/* A text to Spencer's cell for each new lead (server/lead-alerts.ts) */}
         <LeadTextsCard />
+        {/* Leads only Follow Up Boss caught, by source: what to repoint before switching it off */}
+        <FubOnlyLeadsCard />
         {/* Push notifications on this device (server/push.ts) */}
         <PushNotificationsCard />
         {/* Summary */}
