@@ -43,6 +43,21 @@ export type RenderFn = (
  */
 export function queriesForPath(path: string): unknown[][] | null {
   const p = path === "/" ? "/" : path.replace(/\/$/, "");
+  const keys = baseQueriesForPath(p);
+  // Pillar ↔ child links (client/src/components/cluster-links.tsx) on every
+  // page of a topic cluster, so they are in the HTML Google reads.
+  if (keys && CLUSTER_LINK_PAGE.test(p)) keys.push(clusterLinksKey(p));
+  return keys;
+}
+
+const CLUSTER_LINK_PAGE = /^\/(neighbourhoods|condos|work-with)(\/[^/]+)?$|^\/blog\/[^/]+$/;
+
+/** Must equal clusterLinksKey() in client/src/components/cluster-links.tsx. */
+export function clusterLinksKey(p: string): string[] {
+  return ["/api/public/cluster-links", ...p.split("/").filter(Boolean)];
+}
+
+function baseQueriesForPath(p: string): unknown[][] | null {
 
   if (p === "/")
     return [

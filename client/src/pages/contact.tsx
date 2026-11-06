@@ -129,13 +129,14 @@ export default function ContactPage() {
     <PublicLayout>
       {/* Header */}
       <section className="max-w-[1300px] mx-auto px-6 lg:px-10 pt-12 lg:pt-20 pb-12">
-        <div className="font-display text-[11px] tracking-[0.32em] text-muted-foreground">
-          GET IN TOUCH
-        </div>
-        <h1 className="mt-5 font-serif text-[44px] lg:text-[80px] leading-[1.0]">
+        {/* The kicker sits inside the H1 so the heading names the page's subject. */}
+        <h1>
+          <span className="block font-display text-[11px] tracking-[0.32em] text-muted-foreground uppercase">Contact Spencer Rivers</span>
+          <span className="block mt-5 font-serif text-[44px] lg:text-[80px] leading-[1.0]">
           The first conversation is
           <br />
           where every good move starts.
+          </span>
         </h1>
         <p className="mt-6 max-w-2xl text-[16px] lg:text-[17px] leading-relaxed text-muted-foreground">
           Whether you're a year out from selling, six months out from buying,

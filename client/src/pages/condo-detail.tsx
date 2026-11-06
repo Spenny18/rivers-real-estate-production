@@ -6,6 +6,7 @@ import "leaflet/dist/leaflet.css";
 import { ChevronLeft, MapPin, ArrowRight, Building2, Layers, Calendar } from "lucide-react";
 import { PublicLayout } from "@/components/public-layout";
 import { ExploreMore } from "@/components/related-links";
+import { PillarUpLink } from "@/components/cluster-links";
 import type { PlaceLink, PostLink } from "@/lib/mls-types";
 import { NeighbourhoodPois } from "@/components/neighbourhood-pois";
 import { ClientOnly } from "@/components/client-only";
@@ -233,6 +234,7 @@ export default function CondoDetailPage() {
             </div>
           </div>
         )}
+        <PillarUpLink path={`/condos/${data.slug}`} className="mt-10" />
       </section>
 
       {/* The Building stat strip */}

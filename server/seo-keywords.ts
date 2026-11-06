@@ -22,7 +22,7 @@ import { metaForPath } from "./seo-inject";
 
 import { publicOrigin } from "./origin";
 import type { Ga4PageMetrics } from "./seo-stats";
-import { buildOpportunities, sortOpportunities, type Opportunity } from "./seo-opportunities";
+import { buildOpportunities, markAwaitingGoogle, sortOpportunities, type Opportunity } from "./seo-opportunities";
 import { buildArchitecture, type ArchitectureReport } from "./seo-architecture";
 import { getStoredClusters } from "./seo-store";
 const ORIGIN = publicOrigin();
@@ -391,15 +391,23 @@ const STOP = new Set([
 
 /** Derive the keyword a page is currently targeting from its own title. The
  *  brand suffix after the last separator is stripped — it is not the target. */
+/** Listing pages whose first image belongs to a card, not the page. */
+const INDEX_PAGES = new Set(["/blog", "/neighbourhoods", "/condos", "/mls"]);
+
 export function derivedKeyword(page: CrawledPage): string {
   const t = (page.title || page.h1 || "").trim();
   if (!t) return "";
-  const head = t.split(/\s+[|–—-]\s+/)[0].trim();
+  // "A & B" titles lead with the target and add a secondary phrase after the
+  // ampersand ("Rosedale Calgary Real Estate & Homes for Sale").
+  // "Britannia vs Elbow Park: Lots, Flood Risk and Price" targets the part
+  // before the colon; the rest is the hook.
+  const head = t.split(/\s+[|–—-]\s+/)[0].split(/:\s/)[0].split(/\s+&\s+/)[0].trim();
   const words = head
     .replace(/[?!.,:]+$/g, "")
+    .replace(/[()]/g, "")
     .toLowerCase()
     .split(/\s+/)
-    .filter((w) => !STOP.has(w));
+    .filter((w) => w && !STOP.has(w));
 
   // A title written as a full sentence is not a keyword. Fall back to the slug,
   // which is a truer statement of what the page is about.
@@ -412,7 +420,11 @@ export function derivedKeyword(page: CrawledPage): string {
 }
 
 export function normalize(kw: string): string {
-  return kw.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+  // Apostrophes join rather than split: "Calgary's" is "calgarys", the same
+  // token a slug-derived keyword carries ("...-in-calgarys-luxury-market").
+  // Splitting it into "calgary s" made those posts fail "keyword in title"
+  // against their own title.
+  return kw.toLowerCase().replace(/['’]/g, "").replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
 }
 
 /** Tokens that mark a genuinely different place or audience. If one keyword
@@ -507,8 +519,11 @@ export function containsKeyword(haystack: string, keyword: string): boolean {
 export function mentionsSubject(haystack: string, keyword: string): boolean {
   const subject = subjectTokens(keyword);
   if (!subject.length) return containsKeyword(haystack, keyword);
-  const hay = new Set(normalize(haystack).split(" "));
-  return subject.every((t) => hay.has(t));
+  // Singular and plural are the same subject: alt text describing "a condo
+  // building" names "condo buildings".
+  const stem = (w: string) => w.replace(/(?<=..)(ies|es|s)$/, "");
+  const hay = new Set(normalize(haystack).split(" ").map(stem));
+  return subject.every((t) => hay.has(stem(t)));
 }
 
 /** Occurrences of the keyword's rarest token — a proxy for how often the page
@@ -669,12 +684,50 @@ async function fetchGscPageQueries(days: number): Promise<GscPageRow[]> {
     dimensions: ["page", "query"],
     rowLimit: 5000,
   });
-  return (json.rows || []).map((r: any) => ({
+  return mergeGscUrlVariants((json.rows || []).map((r: any) => ({
     page: r.keys[0],
     query: r.keys[1],
     clicks: r.clicks || 0,
     impressions: r.impressions || 0,
     position: r.position || 0,
+  })));
+}
+
+/**
+ * One row per (page path, query).
+ *
+ * The property is a domain property, so Search Console reports
+ * http://, https://www., trailing-slash and ?query variants of a URL as
+ * separate pages even though they all 301 or canonicalise to one. Keyed by
+ * full URL, those rows reached the report as two pages with the same path —
+ * which surfaced as "/ and / split Google's attention", a CTR gap measured on
+ * the variant that by definition never gets the click, and doubled query
+ * lines. Merged here once, every consumer sees what Google actually ranks.
+ * Clicks and impressions add up; position is impression-weighted.
+ */
+export function mergeGscUrlVariants(rows: GscPageRow[]): GscPageRow[] {
+  const merged = new Map<string, GscPageRow & { _posWeight: number; _w: number }>();
+  for (const r of rows) {
+    let url: URL;
+    try { url = new URL(r.page); } catch { continue; }
+    const path = url.pathname.replace(/\/+$/, "") || "/";
+    const host = url.host.replace(/^www\./, "");
+    const page = `https://${host}${path === "/" ? "/" : path}`;
+    const key = `${page}\u0000${r.query}`;
+    const cur = merged.get(key);
+    const weight = Math.max(r.impressions, 1);
+    if (!cur) {
+      merged.set(key, { ...r, page, _posWeight: r.position * weight, _w: weight });
+      continue;
+    }
+    cur.clicks += r.clicks;
+    cur.impressions += r.impressions;
+    cur._posWeight += r.position * weight;
+    cur._w += weight;
+  }
+  return Array.from(merged.values()).map(({ _posWeight, _w, ...r }) => ({
+    ...r,
+    position: _posWeight / _w,
   }));
 }
 
@@ -853,7 +906,9 @@ export async function buildSeoReport(opts: {
         ? {
             src: firstImg.src,
             alt: firstImg.alt ?? "",
-            hasKeyword: Boolean(nk && firstImg.alt && mentionsSubject(firstImg.alt, kw)),
+            // On an index the first image is the newest card's photo, not
+            // the page's own; its alt describes that card, rightly.
+            hasKeyword: INDEX_PAGES.has(page.path) || Boolean(nk && firstImg.alt && mentionsSubject(firstImg.alt, kw)),
             ...(heroAltSource ? { source: heroAltSource } : {}),
           }
         : null,
@@ -1087,7 +1142,14 @@ export async function buildSeoReport(opts: {
     ga4: ga4Pages,
     days: opts.gscDays ?? 90,
   });
-  const opportunities = sortOpportunities([...pageOpportunities, ...architecture.opportunities]);
+  let recentlyFixed = new Map<string, { at: string; proposalId: number }>();
+  try {
+    const { recentlyFixedPaths } = await import("./seo-store");
+    recentlyFixed = recentlyFixedPaths(28);
+  } catch { /* no fix history yet */ }
+  const opportunities = sortOpportunities(
+    markAwaitingGoogle([...pageOpportunities, ...architecture.opportunities], recentlyFixed),
+  );
 
   // The fix generator needs the raw query rows and the link graph for the
   // pages it is asked to work on; the report itself only carries rollups.
@@ -1117,7 +1179,7 @@ export async function buildSeoReport(opts: {
     opportunities,
     architecture: architecture.report,
     summary: {
-      estClicksAvailable: Math.round(opportunities.reduce((s, o) => s + o.estClicksGain, 0)),
+      estClicksAvailable: Math.round(opportunities.filter((o) => !o.awaitingGoogle).reduce((s, o) => s + o.estClicksGain, 0)),
       quickWins: opportunities.filter((o) => o.quickWin).length,
       avgScore: analyses.length
         ? Math.round(analyses.reduce((s, p) => s + p.score, 0) / analyses.length) : 0,

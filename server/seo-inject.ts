@@ -16,6 +16,10 @@
  * For dynamic routes (/condos/:slug, /neighbourhoods/:slug, /blog/:slug,
  * /mls/:id) we hit the storage layer to look up the actual page data.
  */
+import { neighbourhoodSeoDescription, neighbourhoodSeoTitle } from "@shared/neighbourhood-seo";
+import { MLS_DESCRIPTION, MLS_H1, MLS_TITLE, WORK_WITH_INDEX_DESCRIPTION, WORK_WITH_INDEX_TITLE } from "@shared/page-meta";
+import { cachedSeoReport } from "./seo-report-cache";
+import { clusterLinksFor } from "./cluster-links";
 import { storage } from "./storage";
 import { buildGraph, IDS, type SchemaNode } from "./schema/entities";
 import { getPublicPageContent } from "./page-content";
@@ -78,6 +82,10 @@ export interface SeoMeta {
   // see server/schema/entities.ts) in a single @graph, deduped by @id.
   // Reference shared entities by @id — never restate them inline.
   jsonLd?: SchemaNode[];
+  /** Static HTML for #root on a page that stays client-rendered, so crawlers
+   *  that don't run JS see a heading, copy and links. React replaces it on
+   *  mount (createRoot, not hydrate). */
+  shellBody?: string;
 }
 
 function escapeHtml(s: string): string {
@@ -104,14 +112,14 @@ const WORK_WITH_META: Record<
     title:
       "Luxury Home Buyers | Calgary Estates, Penthouses & Villas | Spencer Rivers",
     description:
-      "Buy in Calgary's $1M+ market with Spencer Rivers, CLHMS. Private showings, off-market access, and data-driven negotiation across Springbank Hill, Aspen Woods, Mount Royal, and more.",
+      "For Calgary luxury home buyers in the $1M+ market: Spencer Rivers, CLHMS, with private showings, off-market access and negotiation built on sales data.",
     image:
       `${ORIGIN}/img/work-with/luxury-properties.jpg`,
   },
   "first-time-home-sellers": {
     title: "First-Time Home Sellers in Calgary | Spencer Rivers, Rivers Real Estate",
     description:
-      "Selling your first home in Calgary? Spencer Rivers handles pricing, prep, marketing, and every form — with a written plan and a net-proceeds estimate before you list.",
+      "First-time home sellers in Calgary get a written plan from Spencer Rivers: pricing, prep, marketing, every form, and a net-proceeds estimate before you list.",
     image:
       `${ORIGIN}/img/work-with/first-time-home-sellers.jpg`,
   },
@@ -148,7 +156,7 @@ const WORK_WITH_META: Record<
     title:
       "Move-Up Buyers in Calgary | Sell & Buy Without Two Mortgages | Spencer Rivers",
     description:
-      "Trading up to your forever home? Spencer Rivers coordinates the sell-and-buy sequence — pricing, bridge financing, and possession dates — so you move once, without carrying two mortgages.",
+      "Move-up buyers in Calgary: Spencer Rivers coordinates the sell-and-buy sequence — pricing, bridge financing and possession dates — so you move once, without two mortgages.",
     image:
       `${ORIGIN}/img/work-with/move-ups.jpg`,
   },
@@ -163,7 +171,7 @@ const WORK_WITH_META: Record<
   "urban-properties": {
     title: "Urban Condos, Lofts & Townhomes in Calgary | Spencer Rivers",
     description:
-      "Buy urban Calgary with a Certified Condo Specialist. Spencer Rivers vets buildings — reserve funds, boards, construction — across Beltline, Mission, Kensington, Inglewood, and East Village.",
+      "Urban condos, lofts and townhomes in Calgary, vetted by a Certified Condo Specialist: Spencer Rivers checks reserve funds, boards and construction in Beltline, Mission and East Village.",
     image:
       `${ORIGIN}/img/neighbourhoods/beltline.jpg`,
   },
@@ -382,11 +390,13 @@ function baseMetaForPath(path: string): SeoMeta | null {
   }
   if (p === "/mls") {
     return {
-      title: "MLS Search — Live Calgary Luxury Listings | Rivers Real Estate",
-      description:
-        "Browse live Calgary MLS® listings from the Pillar 9 feed. Filter by neighbourhood, price, type. Spencer Rivers represents buyers across the city.",
+      title: MLS_TITLE,
+      description: MLS_DESCRIPTION,
       canonical: `${ORIGIN}/mls`,
       jsonLd: [crumbs(HOME_CRUMB, ["MLS Search", `${ORIGIN}/mls`])],
+      // The search is client-rendered (server/ssr.ts), so without this the
+      // crawl saw an empty page: no H1, no copy, no links.
+      shellBody: mlsShellBody(),
     };
   }
   if (p === "/neighbourhoods") {
@@ -411,7 +421,7 @@ function baseMetaForPath(path: string): SeoMeta | null {
     return {
       title: `About Spencer Rivers — ${SITE_NAME}`,
       description:
-        "12 years in Calgary's luxury market. Top 1% in Canada, $200M+ in career sales. Discretion, data, and direct conversation.",
+        "About Spencer Rivers, Calgary luxury realtor: 12 years in the market, top 1% in Canada and $200M+ in career sales. Discretion, data and direct conversation.",
       canonical: `${ORIGIN}/about`,
       ogType: "profile",
       jsonLd: [
@@ -429,7 +439,7 @@ function baseMetaForPath(path: string): SeoMeta | null {
     return {
       title: `Contact Spencer Rivers — ${SITE_NAME}`,
       description:
-        "Get in touch with Spencer Rivers — direct line (403) 966-9237. Every inquiry gets a personal reply within one business day.",
+        "Contact Spencer Rivers directly on (403) 966-9237 or by message. Every inquiry gets a personal reply within one business day.",
       canonical: `${ORIGIN}/contact`,
       jsonLd: [crumbs(HOME_CRUMB, ["Contact", `${ORIGIN}/contact`])],
     };
@@ -499,7 +509,7 @@ function baseMetaForPath(path: string): SeoMeta | null {
     return {
       title: `Calgary Luxury Real Estate Journal — ${SITE_NAME}`,
       description:
-        "Notes, market analyses, and neighbourhood deep-dives from Calgary's top luxury real estate agent.",
+        "The Calgary luxury real estate journal: market analyses, neighbourhood deep-dives and buying and selling advice from Spencer Rivers, REALTOR® and CLHMS.",
       canonical: `${ORIGIN}/blog`,
       jsonLd: [crumbs(HOME_CRUMB, ["Journal", `${ORIGIN}/blog`])],
     };
@@ -531,7 +541,7 @@ function baseMetaForPath(path: string): SeoMeta | null {
       title:
         "Calgary Condo Assignment Sales | Buy or Sell a Pre-Construction Assignment | Spencer Rivers",
       description:
-        "Buy or sell a pre-construction condo assignment in Calgary with Spencer Rivers. Current assignments at the Lincoln (Beltline) and Sovereign (Mission), plus developer consent, deposits, and GST handled properly.",
+        "Calgary condo assignment sales with Spencer Rivers: current assignments at the Lincoln (Beltline) and Sovereign (Mission), with developer consent, deposits and GST handled properly.",
       canonical: `${ORIGIN}/assignments`,
       ogImage: `${ORIGIN}/img/assignments/lincoln-exterior.jpg`,
       jsonLd: [crumbs(HOME_CRUMB, ["Assignment Sales", `${ORIGIN}/assignments`])],
@@ -539,9 +549,8 @@ function baseMetaForPath(path: string): SeoMeta | null {
   }
   if (p === "/work-with") {
     return {
-      title: `Who We Work With | Spencer Rivers, ${SITE_NAME} Calgary`,
-      description:
-        "Luxury buyers, first-time sellers, expired listings, empty nesters, move-up families, and urban professionals — see how Spencer Rivers works with each, across Calgary's best communities.",
+      title: WORK_WITH_INDEX_TITLE,
+      description: WORK_WITH_INDEX_DESCRIPTION,
       canonical: `${ORIGIN}/work-with`,
       jsonLd: [crumbs(HOME_CRUMB, ["Who We Work With", `${ORIGIN}/work-with`])],
     };
@@ -680,10 +689,10 @@ function baseMetaForPath(path: string): SeoMeta | null {
       if (!n) return null;
       const nUrl = `${ORIGIN}/neighbourhoods/${slug}`;
       return {
-        // Must match client/src/pages/neighbourhood-detail.tsx <SeoHead>
-        // strings (WP-inherited title format that carries the rankings).
-        title: `${n.name} Homes for Sale - Luxury Homes Calgary`,
-        description: `Browse luxury homes for sale in ${n.name}, Calgary. Active MLS listings, neighbourhood guide, schools, and lifestyle.`,
+        // Shared with client/src/pages/neighbourhood-detail.tsx <SeoHead>
+        // (shared/neighbourhood-seo.ts explains the format).
+        title: neighbourhoodSeoTitle(n.name),
+        description: neighbourhoodSeoDescription(n.name),
         canonical: nUrl,
         ogImage: absoluteUrl(n.heroImage) || DEFAULT_IMAGE,
         jsonLd: [
@@ -880,6 +889,35 @@ function baseMetaForPath(path: string): SeoMeta | null {
  * og + twitter tags. Idempotent — runs on the template output every
  * request, so the page-specific tags are always fresh.
  */
+/**
+ * What a crawler that doesn't run JS gets for /mls: the heading, a paragraph on
+ * what the search covers, and links to the pillar's guides and sections. The
+ * guides come from the SEO report's cluster map (server/cluster-links.ts).
+ */
+function mlsShellBody(): string {
+  let guides: Array<{ path: string; title: string }> = [];
+  try {
+    const report = cachedSeoReport();
+    if (report) {
+      const clusters = report.clusters.map((c) => ({ id: c.id, label: c.label, pillar: c.pillar, headKeyword: c.headKeyword, prefixes: [] }));
+      guides = clusterLinksFor("/mls", clusters, report.pages).guides;
+    }
+  } catch { /* no report yet — the static links still render */ }
+  const li = (href: string, text: string) => `<li><a href="${escapeHtml(href)}">${escapeHtml(text)}</a></li>`;
+  return [
+    `<main>`,
+    `<h1>${escapeHtml(MLS_H1)}</h1>`,
+    `<p>Every active Calgary MLS® listing from the Pillar 9 feed, searchable by neighbourhood, price, property type and size, with new listings that can appear here up to 48 hours before Realtor.ca. Spencer Rivers, REALTOR® and CLHMS, represents buyers across Calgary.</p>`,
+    `<h2>Search by area</h2><ul>`,
+    li("/neighbourhoods", "Calgary luxury neighbourhoods"),
+    li("/condos", "Calgary luxury condos"),
+    li("/mls?minPrice=1500000", "Calgary homes for sale over $1.5 million"),
+    `</ul>`,
+    guides.length ? `<h2>Guides to buying in Calgary</h2><ul>${guides.map((g) => li(g.path, g.title)).join("")}</ul>` : "",
+    `</main>`,
+  ].join("");
+}
+
 export function injectMetaIntoHtml(html: string, meta: SeoMeta): string {
   const title = escapeHtml(meta.title);
   const desc = escapeHtml(meta.description);
@@ -935,6 +973,7 @@ export function injectMetaIntoHtml(html: string, meta: SeoMeta): string {
 
   // Inject the rest just before </head>.
   out = out.replace(/<\/head>/i, `${tags.join("\n    ")}\n  </head>`);
+  if (meta.shellBody) out = out.replace(/<div id="root"><\/div>/, `<div id="root">${meta.shellBody}</div>`);
   return out;
 }
 

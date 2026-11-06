@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { neighbourhoodSeoDescription, neighbourhoodSeoTitle } from "@shared/neighbourhood-seo";
 import { Link, useRoute } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { MapContainer, Marker, Polygon, useMap } from "react-leaflet";
@@ -10,6 +11,7 @@ import { PublicLayout } from "@/components/public-layout";
 import { ListingCard } from "@/components/listing-card";
 import { FaqAccordion } from "@/components/faq-accordion";
 import { ExploreMore } from "@/components/related-links";
+import { ClusterGuides, PillarUpLink } from "@/components/cluster-links";
 import { NeighbourhoodPois } from "@/components/neighbourhood-pois";
 import { NeighbourhoodReport } from "@/components/neighbourhood-report";
 import { ClientOnly } from "@/components/client-only";
@@ -80,8 +82,9 @@ export default function NeighbourhoodDetailPage() {
   }>;
   const heroCredit = data.heroCredit ?? null;
 
-  const seoTitle = `${data.name} Homes for Sale - Luxury Homes Calgary`;
-  const seoDesc = `Browse luxury homes for sale in ${data.name}, Calgary. Active MLS listings, neighbourhood guide, schools, and lifestyle.`;
+  // Same strings the server renders (shared/neighbourhood-seo.ts).
+  const seoTitle = neighbourhoodSeoTitle(data.name);
+  const seoDesc = neighbourhoodSeoDescription(data.name);
   const canonicalUrl = `https://riversrealestate.ca/neighbourhoods/${data.slug}`;
   // Visible on-page FAQ content (rendered in <FaqAccordion> below). No longer
   // emitted as FAQPage JSON-LD — Google dropped FAQ rich results in May 2026,
@@ -196,6 +199,7 @@ export default function NeighbourhoodDetailPage() {
             <p>{data.tagline}</p>
           )}
         </div>
+        <PillarUpLink path={`/neighbourhoods/${data.slug}`} className="mt-8" />
       </section>
 
       {/* Three columns */}
@@ -379,6 +383,10 @@ export default function NeighbourhoodDetailPage() {
         items={seoFaq.map((f) => ({ q: f.question, a: f.answer }))}
         eyebrow={`FAQ · ${data.name.toUpperCase()}`}
       />
+
+      {/* Only for a neighbourhood that is itself a cluster pillar
+          (Springbank Hill): its guides from the journal. */}
+      <ClusterGuides path={`/neighbourhoods/${data.slug}`} title={`Guides to ${data.name}`} />
 
       <ExploreMore
         eyebrow="KEEP EXPLORING"

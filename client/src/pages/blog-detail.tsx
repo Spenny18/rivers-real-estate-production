@@ -13,6 +13,7 @@ import {
 import type { PublicBlogPost } from "@/lib/mls-types";
 import { YouTubeEmbed } from "@/components/youtube-embed";
 import { placeHref } from "@/components/related-links";
+import { PillarUpLink } from "@/components/cluster-links";
 import { findYouTubeReferences } from "@shared/youtube";
 
 const BLOG_FALLBACK_HERO =
@@ -270,6 +271,7 @@ export default function BlogDetailPage() {
         {/* Body */}
         <section className="max-w-[720px] mx-auto px-6 mt-14 lg:mt-20">
           <div data-testid="blog-body">{renderBody(post.body)}</div>
+          <PillarUpLink path={`/blog/${post.slug}`} className="mt-10" />
         </section>
 
         {/* Author / CTA */}

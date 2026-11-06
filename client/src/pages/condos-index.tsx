@@ -1,6 +1,7 @@
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { PublicLayout } from "@/components/public-layout";
+import { useMergedGuides } from "@/components/cluster-links";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowRight, Building2 } from "lucide-react";
 
@@ -37,6 +38,7 @@ const CONDO_GUIDES = [
 ];
 
 export default function CondosIndexPage() {
+  const guides = useMergedGuides("/condos", CONDO_GUIDES.map((g) => ({ href: g.href, label: g.text })));
   const { data: buildings = [], isLoading } = useQuery<CondoBuilding[]>({
     queryKey: ["/api/public/condos"],
   });
@@ -66,6 +68,12 @@ export default function CondosIndexPage() {
             inner-city addresses with pricing, condo fees and resale history for
             each. Spencer Rivers is a Certified Condo Specialist, and listings
             on this site can appear up to 48 hours before Realtor.ca.
+          </p>
+          {/* Outbound citations: what the numbers on these pages can be checked against. */}
+          <p className="mt-4 max-w-[680px] text-sm text-background/70 leading-relaxed">
+            Official sources: <a href="https://www.calgary.ca/property-owners/assessment-tax.html" target="_blank" rel="noopener" className="underline underline-offset-2">City of Calgary property assessments</a>{" "}
+            for unit assessed values and tax levies, and <a href="https://www.creb.com/Housing_Statistics/" target="_blank" rel="noopener" className="underline underline-offset-2">CREB® housing statistics</a>{" "}
+            for city-wide apartment benchmarks. Active listings and prices come from MLS® data and update daily.
           </p>
         </div>
       </section>
@@ -138,10 +146,10 @@ export default function CondosIndexPage() {
           Start with the district comparison, then go deeper on the buildings, the costs and the new-build pipeline.
         </p>
         <ul className="mt-6 space-y-2">
-          {CONDO_GUIDES.map((g) => (
+          {guides.map((g) => (
             <li key={g.href}>
               <Link href={g.href} className="text-foreground underline underline-offset-4 hover:text-muted-foreground transition-colors">
-                {g.text}
+                {g.label}
               </Link>
             </li>
           ))}

@@ -91,6 +91,18 @@ const WEAK_SUBJECTS = new Set([
   "agent", "realtor", "realtors", "spencer", "rivers", "january", "february", "march", "april",
   "may", "june", "july", "august", "september", "october", "november", "december", "q1", "q2",
   "q3", "q4", "vs", "via", "into", "most", "more", "every", "your", "their",
+  // Function words that read as a "topic" when three titles share them
+  // ("New cluster forming: Before" came from "...before listing").
+  "before", "after", "should", "would", "could", "when", "where", "which", "while", "really",
+  "actually", "about", "from", "with", "without", "does", "this", "that", "these", "those",
+  "inside", "guide", "best", "top",
+]);
+
+/** Words every post on this site shares. A pair made only of these ("calgary
+ *  home", "real estate") names the whole site, not a topic. */
+const SITE_WIDE = new Set([
+  "calgary", "calgarys", "alberta", "home", "homes", "house", "houses", "real", "estate",
+  "property", "properties", "buyers", "sellers", "buying", "selling", "sell", "buy",
 ]);
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
@@ -431,8 +443,11 @@ export function buildArchitecture(opts: {
       .split(" ")
       .filter((w) => w.length > 3 && !WEAK_SUBJECTS.has(w) && !/^\d+$/.test(w));
     const subjects = new Set<string>();
-    for (const w of subjectTokens(words.join(" "))) if (!WEAK_SUBJECTS.has(w)) subjects.add(w);
-    for (let i = 0; i + 1 < words.length; i++) subjects.add(`${words[i]} ${words[i + 1]}`);
+    for (const w of subjectTokens(words.join(" "))) if (!WEAK_SUBJECTS.has(w) && !SITE_WIDE.has(w)) subjects.add(w);
+    for (let i = 0; i + 1 < words.length; i++) {
+      if (SITE_WIDE.has(words[i]) && SITE_WIDE.has(words[i + 1])) continue;
+      subjects.add(`${words[i]} ${words[i + 1]}`);
+    }
     for (const s of Array.from(subjects)) {
       if (!bySubject.has(s)) bySubject.set(s, new Set());
       bySubject.get(s)!.add(p.path);

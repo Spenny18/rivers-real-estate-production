@@ -287,6 +287,32 @@ export function listFixProposals(limit = 50): FixProposalRow[] {
     .all(limit) as any[]).map(rowToProposal);
 }
 
+/**
+ * Pages whose live content a fix changed in the last `days` days, with the
+ * latest such fix. Code changes don't count: they only open an issue, and the
+ * page doesn't change until a pull request is merged and deployed.
+ */
+export function recentlyFixedPaths(days = 28): Map<string, { at: string; proposalId: number }> {
+  const since = new Date(Date.now() - days * 864e5).toISOString();
+  const rows = (sqlite
+    .prepare("SELECT * FROM seo_fix_proposals WHERE applied_at IS NOT NULL AND applied_at >= ? ORDER BY applied_at ASC")
+    .all(since) as any[]).map(rowToProposal);
+  const out = new Map<string, { at: string; proposalId: number }>();
+  for (const p of rows) {
+    for (const ch of p.changes ?? []) {
+      if (!ch.applied) continue;
+      const op: any = ch.op;
+      let path: string | null = null;
+      if (op.type === "set_meta" || op.type === "set_focus_keyword") path = op.path;
+      else if (op.type === "edit_blog") path = `/blog/${op.slug}`;
+      else if (op.type === "edit_entity_copy") path = `/${op.kind === "condo" ? "condos" : "neighbourhoods"}/${op.slug}`;
+      else if (op.type === "add_redirect") path = op.from;
+      if (path) out.set(path, { at: p.appliedAt ?? p.updatedAt, proposalId: p.id });
+    }
+  }
+  return out;
+}
+
 export function updateFixProposal(
   id: number,
   patch: Partial<Pick<FixProposalRow,

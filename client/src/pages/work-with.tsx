@@ -29,6 +29,8 @@ import {
 } from "lucide-react";
 import { PublicLayout } from "@/components/public-layout";
 import { SeoHead } from "@/components/seo-head";
+import { ClusterGuides, PillarUpLink } from "@/components/cluster-links";
+import { WORK_WITH_INDEX_DESCRIPTION, WORK_WITH_INDEX_TITLE } from "@shared/page-meta";
 import { FaqAccordion } from "@/components/faq-accordion";
 import { Button } from "@/components/ui/button";
 import NotFound from "@/pages/not-found";
@@ -166,7 +168,7 @@ export const AUDIENCE_SEGMENTS: AudienceSegment[] = [
     ],
     seoTitle: "Luxury Home Buyers | Calgary Estates, Penthouses & Villas | Spencer Rivers",
     seoDescription:
-      "Buy in Calgary's $1M+ market with Spencer Rivers, CLHMS. Private showings, off-market access, and data-driven negotiation across Springbank Hill, Aspen Woods, Mount Royal, and more.",
+      "For Calgary luxury home buyers in the $1M+ market: Spencer Rivers, CLHMS, with private showings, off-market access and negotiation built on sales data.",
   },
   {
     slug: "first-time-home-sellers",
@@ -175,7 +177,7 @@ export const AUDIENCE_SEGMENTS: AudienceSegment[] = [
     card: "Sell your first home with confidence. Pricing, timing, prep, and every form — so nothing gets missed.",
     headline: ["Your first sale,", "done right the first time."],
     intro:
-      "Selling a home you've never sold before means pricing, timing, staging, conditions, and paperwork all landing at once. Spencer Rivers walks first-time sellers through every step with the same process he runs on million-dollar estates — the math on paper, the prep scheduled, and no form left to chance.",
+      "For first-time home sellers in Calgary, selling a home you've never sold before means pricing, timing, staging, conditions, and paperwork all landing at once. Spencer Rivers walks first-time sellers through every step with the same process he runs on million-dollar estates — the math on paper, the prep scheduled, and no form left to chance.",
     image:
       "/img/work-with/first-time-home-sellers.jpg",
     imageAlt: "Established residential street of well-kept family homes",
@@ -247,7 +249,7 @@ export const AUDIENCE_SEGMENTS: AudienceSegment[] = [
     ],
     seoTitle: "First-Time Home Sellers in Calgary | Spencer Rivers, Rivers Real Estate",
     seoDescription:
-      "Selling your first home in Calgary? Spencer Rivers handles pricing, prep, marketing, and every form — with a written plan and a net-proceeds estimate before you list.",
+      "First-time home sellers in Calgary get a written plan from Spencer Rivers: pricing, prep, marketing, every form, and a net-proceeds estimate before you list.",
   },
   {
     slug: "expired-listings",
@@ -691,7 +693,7 @@ export const AUDIENCE_SEGMENTS: AudienceSegment[] = [
     ],
     seoTitle: "Move-Up Buyers in Calgary | Sell & Buy Without Two Mortgages | Spencer Rivers",
     seoDescription:
-      "Trading up to your forever home? Spencer Rivers coordinates the sell-and-buy sequence — pricing, bridge financing, and possession dates — so you move once, without carrying two mortgages.",
+      "Move-up buyers in Calgary: Spencer Rivers coordinates the sell-and-buy sequence — pricing, bridge financing and possession dates — so you move once, without two mortgages.",
   },
   {
     slug: "family-focused-properties",
@@ -853,7 +855,7 @@ export const AUDIENCE_SEGMENTS: AudienceSegment[] = [
     ],
     seoTitle: "Urban Condos, Lofts & Townhomes in Calgary | Spencer Rivers",
     seoDescription:
-      "Buy urban Calgary with a Certified Condo Specialist. Spencer Rivers vets buildings — reserve funds, boards, construction — across Beltline, Mission, Kensington, Inglewood, and East Village.",
+      "Urban condos, lofts and townhomes in Calgary, vetted by a Certified Condo Specialist: Spencer Rivers checks reserve funds, boards and construction in Beltline, Mission and East Village.",
   },
 ];
 
@@ -938,13 +940,17 @@ export default function WorkWithDetailPage() {
       <section className="max-w-[1400px] mx-auto px-6 lg:px-10 pt-12 lg:pt-16 pb-16 lg:pb-24">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-16 items-center">
           <div className="lg:col-span-7">
-            <div className="font-display text-[11px] tracking-[0.32em] text-muted-foreground">
-              WHO WE WORK WITH — {segment.title.toUpperCase()}
-            </div>
-            <h1 className="mt-5 font-serif text-[40px] lg:text-[68px] leading-[1.02] tracking-tight">
-              {segment.headline[0]}
-              <br />
-              <em className="not-italic font-normal">{segment.headline[1]}</em>
+            {/* The kicker is part of the H1 so the heading names what the page
+                is about ("Move-Up Buyers in Calgary"), not only the line. */}
+            <h1>
+              <span className="block font-display text-[11px] tracking-[0.32em] text-muted-foreground uppercase">
+                {segment.seoTitle.split("|")[0].trim()}
+              </span>
+              <span className="block mt-5 font-serif text-[40px] lg:text-[68px] leading-[1.02] tracking-tight">
+                {segment.headline[0]}
+                <br />
+                <em className="not-italic font-normal">{segment.headline[1]}</em>
+              </span>
             </h1>
             <p className="mt-8 max-w-[620px] text-[17px] lg:text-[18px] leading-[1.7] text-foreground/85">
               {segment.intro}
@@ -954,6 +960,7 @@ export default function WorkWithDetailPage() {
                 {segment.introLinks}
               </p>
             )}
+            <PillarUpLink path={`/work-with/${segment.slug}`} className="mt-5 max-w-[620px]" />
             <div className="mt-9 flex flex-wrap gap-3">
               <a href={SPENCER_PHONE_HREF}>
                 <Button
@@ -1083,6 +1090,17 @@ export default function WorkWithDetailPage() {
         </div>
       </section>
 
+      {/* Outbound citations, shared by every Work With page. */}
+      <section className="max-w-[1400px] mx-auto px-6 lg:px-10 pb-10" data-testid="section-segment-sources">
+        <p className="border-t border-border pt-4 text-sm text-muted-foreground">
+          Official sources:{" "}
+          <a href="https://www.creb.com/Housing_Statistics/" target="_blank" rel="noopener" className="underline underline-offset-2">CREB® housing statistics</a>{" "}
+          for Calgary market benchmarks, and the{" "}
+          <a href="https://www.reca.ca/" target="_blank" rel="noopener" className="underline underline-offset-2">Real Estate Council of Alberta (RECA)</a>{" "}
+          for how Alberta real estate professionals are licensed and what they owe their clients.
+        </p>
+      </section>
+
       {/* FAQ */}
       <FaqAccordion
         items={segment.faq}
@@ -1122,19 +1140,22 @@ export default function WorkWithDetailPage() {
 export function WorkWithIndexPage() {
   return (
     <PublicLayout>
+      {/* Must match server/seo-inject.ts ("/work-with"). */}
       <SeoHead
-        title="Who We Work With | Spencer Rivers, Rivers Real Estate Calgary"
-        description="Luxury buyers, first-time sellers, expired listings, empty nesters, move-up families, and urban professionals — see how Spencer Rivers works with each, across Calgary's best communities."
+        title={WORK_WITH_INDEX_TITLE}
+        description={WORK_WITH_INDEX_DESCRIPTION}
         canonical={`${SITE_ORIGIN}/work-with`}
       />
 
       <section className="max-w-[1400px] mx-auto px-6 lg:px-10 pt-12 lg:pt-16 pb-24">
         <div className="text-center max-w-3xl mx-auto mb-14 lg:mb-20">
-          <div className="font-display text-[11px] tracking-[0.22em] text-muted-foreground mb-4">
-            WHO WE WORK WITH
-          </div>
-          <h1 className="font-serif text-[36px] lg:text-[56px] leading-[1.04] tracking-tight">
-            We are your team for buying or selling.
+          <h1>
+            <span className="block font-display text-[11px] tracking-[0.22em] text-muted-foreground mb-4 uppercase">
+              Calgary luxury realtor services
+            </span>
+            <span className="block font-serif text-[36px] lg:text-[56px] leading-[1.04] tracking-tight">
+              We are your team for buying or selling.
+            </span>
           </h1>
           <p className="mt-6 text-[15px] lg:text-[16px] text-muted-foreground leading-relaxed max-w-2xl mx-auto">
             Every client walks in with a different next chapter. These are the
@@ -1163,6 +1184,47 @@ export function WorkWithIndexPage() {
           ))}
         </div>
       </section>
+
+      {/* What every engagement has in common — the page used to be a card
+          grid and a sentence (231 words), too thin to rank for anything. */}
+      <section className="max-w-[900px] mx-auto px-6 lg:px-10 pb-24" data-testid="section-workwith-approach">
+        <div className="font-display text-[11px] tracking-[0.22em] text-muted-foreground mb-4">
+          HOW THE WORK IS DONE
+        </div>
+        <h2 className="font-serif text-[28px] lg:text-[40px] leading-[1.1] tracking-tight">
+          One process, nine kinds of move.
+        </h2>
+        <div className="mt-8 space-y-5 text-[16px] lg:text-[17px] leading-[1.75] text-foreground/85">
+          <p>
+            Every engagement starts the same way: one conversation about what has to be true for the
+            move to work, then a written plan with the numbers on paper. What changes from client to
+            client is the hard part. A first-time seller needs every form and deadline explained; an
+            estate owner needs discretion and buyers who never see a public listing; a move-up family
+            needs the sale and the purchase sequenced so they carry one mortgage, not two.
+          </p>
+          <p>
+            Spencer Rivers has worked Calgary's luxury market for 12 years. He holds the CLHMS, CNE,
+            CIPS, CCS (Certified Condo Specialist) and LLS designations, is a Million Dollar Guild
+            member, ranks in the top 1% of agents in Canada and has more than $200 million in career
+            sales.
+          </p>
+          <p>
+            Buyers get the full MLS® inventory, listings that can appear on this site up to 48 hours
+            before Realtor.ca, and the off-market homes that change hands through introductions.
+            Sellers get a price built from comparable sales and days-on-market data, marketing made for
+            the buyers who actually purchase at their price point, and negotiation from evidence rather
+            than emotion.
+          </p>
+          <p>
+            Pick the guide above that matches your move, or start with the places themselves:{" "}
+            <Link href="/neighbourhoods" className="underline underline-offset-4">Calgary's luxury neighbourhoods</Link>,{" "}
+            <Link href="/condos" className="underline underline-offset-4">its luxury condo buildings</Link> and{" "}
+            <Link href="/mls" className="underline underline-offset-4">today's Calgary MLS® listings</Link>.
+          </p>
+        </div>
+      </section>
+
+      <ClusterGuides path="/work-with" title="Worth reading before you hire a realtor" />
     </PublicLayout>
   );
 }

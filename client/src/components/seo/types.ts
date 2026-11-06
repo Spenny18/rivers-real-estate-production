@@ -86,6 +86,8 @@ export interface Opportunity {
   priority: number;
   quickWin: boolean;
   basis: "search-console" | "on-page";
+  /** A fix changed the page recently; the ranking task waits on Google. */
+  awaitingGoogle?: { at: string; proposalId: number };
 }
 
 export type FixSubject =
