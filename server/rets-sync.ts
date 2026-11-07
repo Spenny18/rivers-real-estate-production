@@ -16,6 +16,7 @@ import { sqlite, storage } from "./storage";
 import type { InsertMlsListing } from "@shared/schema";
 import { propertyFields, optionalSelect, candidateFields } from "./rets-fields";
 import { DETAIL_FIELDS, upsertListingDetails } from "./listing-details";
+import { withBusyRetry } from "./db-retry";
 
 const CALGARY_NEIGHBOURHOOD_HINTS: Array<[RegExp, string]> = [
   [/springbank\s*hill/i, "Springbank Hill"],
@@ -322,18 +323,28 @@ export async function runSync(): Promise<{
         // 200, so the page saves in a fraction of the time and the event loop
         // (which serves the site) is free again while the next page downloads.
         // Per-row commits kept the server busy for seconds each hourly sync.
-        sqlite.transaction(() => {
-          for (const row of result.rows) {
-            // No city post-filter — we want the whole Pillar 9 service area
-            // (Calgary + Rocky View + Foothills + Cochrane + Airdrie + …).
-            const listing = normalizeListing(row, optional);
-            if (!listing) continue;
-            storage.upsertMlsListing(listing);
-            if (details.length) upsertListingDetails(listing.id, Object.fromEntries(details.map((o) => [o.column, rawText(row[o.field])])));
-            seenIds.add(listing.id);
-            upserted++;
-          }
-        })();
+        // Retried if Litestream holds the write lock (server/db-retry.ts). A
+        // failed transaction rolls back, so the page's ids and count are only
+        // added once it commits — a retry never double-counts.
+        const saved = await withBusyRetry(
+          () =>
+            sqlite.transaction(() => {
+              const ids: string[] = [];
+              for (const row of result.rows) {
+                // No city post-filter — we want the whole Pillar 9 service area
+                // (Calgary + Rocky View + Foothills + Cochrane + Airdrie + …).
+                const listing = normalizeListing(row, optional);
+                if (!listing) continue;
+                storage.upsertMlsListing(listing);
+                if (details.length) upsertListingDetails(listing.id, Object.fromEntries(details.map((o) => [o.column, rawText(row[o.field])])));
+                ids.push(listing.id);
+              }
+              return ids;
+            })(),
+          { label: `mls-sync ${prefix} offset ${offset}` },
+        );
+        for (const id of saved) seenIds.add(id);
+        upserted += saved.length;
         if (result.rows.length < pageSize) break;
         offset += pageSize;
         // Safety cap per prefix — generous so we can cover dense urban prefixes

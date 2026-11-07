@@ -31,6 +31,7 @@
 
 import { RetsClient, RetsAuthError } from "./rets-client";
 import { storage } from "./storage";
+import { withBusyRetry } from "./db-retry";
 import type { InsertMlsHistory } from "@shared/schema";
 
 export const OFF_MARKET_STATUSES = ["S", "X", "W", "T"] as const;
@@ -453,7 +454,8 @@ async function fetchWindow(
           if (row) rows.push(row);
         }
         fetched += r.rows.length;
-        upserted += storage.upsertMlsHistory(rows);
+        // Retried if Litestream holds the write lock (server/db-retry.ts).
+        upserted += await withBusyRetry(() => storage.upsertMlsHistory(rows), { label: `mls-history ${status} offset ${offset}` });
 
         offset += r.rows.length;
         if (r.rows.length === 0) break;
