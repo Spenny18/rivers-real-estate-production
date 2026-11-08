@@ -1,6 +1,6 @@
-// Creating and editing contacts the app owns (server/contacts.ts), used on
-// /admin/crm. Follow Up Boss contacts stay read-only here — the hourly sync
-// would undo any change.
+// Creating and editing contacts (server/contacts.ts, server/contact-edits.ts),
+// used on /admin/crm. Tags are edited with the chips on the contact
+// (components/tags.tsx), not here.
 
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -41,7 +41,7 @@ async function send(method: "POST" | "PATCH", url: string, body: unknown): Promi
   return { ok: r.ok, status: r.status, data: await r.json().catch(() => ({})) };
 }
 
-function Fields({ v, set, withNote, note, setNote }: { v: ContactFormValues; set: (p: Partial<ContactFormValues>) => void; withNote?: boolean; note?: string; setNote?: (s: string) => void }) {
+function Fields({ v, set, withNote, note, setNote, withTags = true }: { v: ContactFormValues; set: (p: Partial<ContactFormValues>) => void; withNote?: boolean; note?: string; setNote?: (s: string) => void; withTags?: boolean }) {
   return (
     <div className="space-y-3">
       <div>
@@ -78,10 +78,12 @@ function Fields({ v, set, withNote, note, setNote }: { v: ContactFormValues; set
           <Input value={v.source} onChange={(e) => set({ source: e.target.value })} placeholder="e.g. Referral — Jane Smith" className="rounded-sm" />
         </div>
       </div>
-      <div>
-        <label className="eyebrow text-muted-foreground block mb-1">Tags (comma separated)</label>
-        <Input value={v.tags} onChange={(e) => set({ tags: e.target.value })} placeholder="Buyer, Aspen Woods" className="rounded-sm" />
-      </div>
+      {withTags && (
+        <div>
+          <label className="eyebrow text-muted-foreground block mb-1">Tags (comma separated)</label>
+          <Input value={v.tags} onChange={(e) => set({ tags: e.target.value })} placeholder="Buyer, Aspen Woods" className="rounded-sm" />
+        </div>
+      )}
       {withNote && (
         <div>
           <label className="eyebrow text-muted-foreground block mb-1">Note (optional)</label>
@@ -219,7 +221,7 @@ export function EditContactForm({
         phone: v.phone || null,
         stage: v.stage,
         source: v.source || null,
-        tags: parseTags(v.tags),
+        // Tags are edited with the chips on the contact (components/tags.tsx).
       }),
     onSuccess: (r) => {
       if (!r.ok) return toast({ title: "Couldn't save", description: r.data?.message ?? "Try again.", variant: "destructive" });
@@ -229,7 +231,7 @@ export function EditContactForm({
   });
   return (
     <div className="rounded-sm border border-border p-3.5 space-y-3">
-      <Fields v={v} set={(p) => setV({ ...v, ...p })} />
+      <Fields v={v} set={(p) => setV({ ...v, ...p })} withTags={false} />
       <div className="flex gap-2">
         <Button size="sm" onClick={() => save.mutate()} disabled={!v.name.trim() || save.isPending} className="rounded-sm text-[11px]">
           {save.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "SAVE"}

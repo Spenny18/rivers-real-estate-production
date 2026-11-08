@@ -177,6 +177,24 @@ export function whereFor(f: SmartListFilters, now = new Date()): { sql: string; 
   return { sql: where.length ? where.join(" AND ") : "1", vals };
 }
 
+/** A contact's tags, FUB's and the app's, as written: a JSON array, for display. */
+const ALL_TAGS_JSON = `(SELECT json_group_array(t) FROM (
+    SELECT trim(value) AS t FROM json_each(CASE WHEN json_valid(c.tags) THEN c.tags ELSE '[]' END) WHERE trim(value) != ''
+    UNION SELECT trim(tag) FROM contact_tags WHERE contact_fub_id = c.fub_id))`;
+
+/**
+ * Everyone matching a set of filters, with no page limit: who a bulk action
+ * (tagging, a monthly report) applies to. Only what those need.
+ */
+export function listMembers(f: SmartListFilters, now = new Date()): Array<{ fubId: string; name: string | null; email: string | null }> {
+  const { sql, vals } = whereFor(f, now);
+  // The last-contact join only when a filter reads it.
+  const join = f.lastContact ? `LEFT JOIN (${lastContactSql()}) lc ON lc.cid = c.fub_id` : "";
+  return sqlite
+    .prepare(`SELECT c.fub_id AS fubId, c.name, c.email FROM crm_contacts c ${join} WHERE ${sql}`)
+    .all(...vals) as Array<{ fubId: string; name: string | null; email: string | null }>;
+}
+
 const ORDER: Record<SmartListSort, string> = {
   last_contact_asc: "lc.at IS NOT NULL, lc.at ASC, c.fub_created_at DESC",
   last_contact_desc: "lc.at IS NULL, lc.at DESC",
@@ -208,7 +226,7 @@ export function runFilters(
   const total = (sqlite.prepare(`SELECT COUNT(*) AS n ${from}`).get(...vals) as { n: number }).n;
   const contacts = sqlite
     .prepare(
-      `SELECT c.fub_id AS fubId, c.name, c.email, c.phone, c.stage, c.source, c.tags, c.fub_created_at AS fubCreatedAt,
+      `SELECT c.fub_id AS fubId, c.name, c.email, c.phone, c.stage, c.source, ${ALL_TAGS_JSON} AS tags, c.fub_created_at AS fubCreatedAt,
               c.last_activity_at AS lastActivityAt, lc.at AS lastContactAt
        ${from} ORDER BY ${ORDER[sort] ?? ORDER.last_contact_asc} LIMIT ? OFFSET ?`,
     )

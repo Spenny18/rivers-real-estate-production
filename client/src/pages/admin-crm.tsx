@@ -14,6 +14,7 @@ import { ContactNotesTasks, ExportCard, NoteActions, TaskBoard } from "@/compone
 import { SmartListContacts, SmartListsBar } from "@/components/smart-lists";
 import { CrmReports } from "@/components/crm-reports";
 import { CommunityReportSubsPanel } from "@/components/community-reports";
+import { ContactTagsEditor } from "@/components/tags";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1379,6 +1380,7 @@ export default function AdminCrmPage() {
                   <Badge variant="outline">{detail.contact.assignedTo}</Badge>
                 )}
               </div>
+              <ContactTagsEditor contactId={detail.contact.fubId} />
 
               {detail.deals.length > 0 && (
                 <div>

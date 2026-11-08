@@ -106,7 +106,11 @@ function setField(row: Record<string, any>, field: EditableField, value: string 
  * Edit any contact. Returns the fields that changed (empty when nothing did),
  * or null when there's no such contact.
  */
-export function editContact(id: string, patch: ContactEdit): { changed: EditableField[] } | null {
+export function editContact(
+  id: string,
+  patch: ContactEdit,
+  opts: { push?: boolean } = {},
+): { changed: EditableField[] } | null {
   const existing = storage.getCrmContact(id) as Record<string, any> | undefined;
   if (!existing) return null;
   if (isNativeContact(id)) {
@@ -152,8 +156,10 @@ export function editContact(id: string, patch: ContactEdit): { changed: Editable
   });
   tx();
 
-  // Keep FUB in step while it runs; never block the edit on it.
-  if (fubConfigured()) {
+  // Keep FUB in step while it runs; never block the edit on it. Bulk edits
+  // (tags.ts) pass push: false and leave the edits for retryPendingPushes,
+  // which sends a few at a time instead of hundreds at once.
+  if (opts.push !== false && fubConfigured()) {
     pushContactToFub(id).catch((e) => console.warn(`[contact-edits] push to FUB failed for ${id}:`, e?.message ?? e));
   }
   return { changed: changed.map(([f]) => f) };
