@@ -7,7 +7,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Mail, Pencil, Phone, Plus, Trash2 } from "lucide-react";
+import { FileText, Loader2, Mail, Pencil, Phone, Plus, Tag, Tags, Trash2 } from "lucide-react";
+import { BulkTagDialog, ManageTagsDialog } from "@/components/tags";
+import { ListReportSubsDialog } from "@/components/community-reports";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -104,7 +106,9 @@ export function describeFilters(f: Filters): string {
 export function SmartListsBar({ selected, onSelect }: { selected: number | null; onSelect: (id: number | null) => void }) {
   const { data } = useQuery<ListsResponse>({ queryKey: [LISTS_KEY] });
   const [editing, setEditing] = useState<SmartList | "new" | null>(null);
+  const [action, setAction] = useState<"tag" | "report" | "tags" | null>(null);
   const lists = data?.lists ?? [];
+  const current = selected !== null ? lists.find((l) => l.id === selected) ?? null : null;
   const chip = (active: boolean) =>
     `shrink-0 inline-flex items-center gap-1.5 rounded-sm border px-2.5 h-8 text-[12.5px] transition-colors ${
       active ? "border-foreground bg-foreground text-background" : "border-border hover:border-foreground/40"
@@ -124,6 +128,9 @@ export function SmartListsBar({ selected, onSelect }: { selected: number | null;
         <button type="button" className={`${chip(false)} text-muted-foreground`} onClick={() => setEditing("new")} data-testid="button-new-smart-list">
           <Plus className="h-3.5 w-3.5" /> New list
         </button>
+        <button type="button" className={`${chip(false)} text-muted-foreground`} onClick={() => setAction("tags")} data-testid="button-manage-tags">
+          <Tags className="h-3.5 w-3.5" /> Tags
+        </button>
       </div>
       {selected !== null && lists.find((l) => l.id === selected) && (
         <div className="flex items-center gap-2 text-[12px] text-muted-foreground mt-1">
@@ -136,8 +143,29 @@ export function SmartListsBar({ selected, onSelect }: { selected: number | null;
           >
             <Pencil className="h-3 w-3" /> Edit
           </button>
+          <button
+            type="button"
+            onClick={() => setAction("tag")}
+            className="inline-flex items-center gap-1 underline underline-offset-2 hover:text-foreground"
+            data-testid="button-bulk-tag-list"
+          >
+            <Tag className="h-3 w-3" /> Tag everyone
+          </button>
+          <button
+            type="button"
+            onClick={() => setAction("report")}
+            className="inline-flex items-center gap-1 underline underline-offset-2 hover:text-foreground"
+            data-testid="button-list-monthly-report"
+          >
+            <FileText className="h-3 w-3" /> Monthly community report
+          </button>
         </div>
       )}
+      {action === "tags" && <ManageTagsDialog onClose={() => setAction(null)} />}
+      {action === "tag" && current && (
+        <BulkTagDialog listId={current.id} listName={current.name} count={current.count ?? 0} onClose={() => setAction(null)} />
+      )}
+      {action === "report" && current && <ListReportSubsDialog listId={current.id} listName={current.name} onClose={() => setAction(null)} />}
       {editing && data && (
         <SmartListEditor
           list={editing === "new" ? null : editing}

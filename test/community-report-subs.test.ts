@@ -152,3 +152,88 @@ test("the unsubscribe token turns the subscription off; Spencer can turn it back
   assert.equal(on.active, true);
   assert.equal(on.unsubscribedAt, null);
 });
+
+// ---- Smart lists ----------------------------------------------------------------
+
+const sl = await import("../server/smart-lists");
+const crmNow = new Date().toISOString();
+const crm = (id: string, email: string | null, stage: string) => ({
+  fubId: id, name: `Person ${id}`, firstName: null, lastName: null, email, phone: null, stage, source: null, assignedTo: null,
+  tags: "[]", fubCreatedAt: crmNow, fubUpdatedAt: crmNow, lastActivityAt: null, raw: "{}", syncedAt: crmNow,
+});
+storage.upsertCrmContacts([
+  crm("c1", "one@example.com", "Sphere"),
+  crm("c2", "two@example.com", "Sphere"),
+  crm("c3", null, "Sphere"), // no email: never subscribed
+  crm("c4", "jo@example.com", "Sphere"), // already has a hand-added "all" row from above
+]);
+const sphere = sl.createSmartList({ name: "Sphere", filters: { stages: ["Sphere"] } });
+
+test("a smart list signs up everyone in it who has an email, once", () => {
+  const r = subs.createListSub({ smartListId: sphere.id, neighbourhoodSlug: "mission", cls: "all" });
+  assert.ok(r.ok);
+  // c1 and c2 are new; c4's email already has a row for Mission · all.
+  assert.equal(r.ok && r.added, 2);
+  assert.equal(subs.listSubsForEmail("one@example.com")[0].sourceListName, "Sphere");
+  assert.equal(subs.listSubsForEmail("jo@example.com")[0].sourceListSubId, null);
+  assert.equal(r.ok && r.listSub.subscribers, 2);
+});
+
+test("leaving the list stops it; an unsubscribe survives leaving and rejoining", () => {
+  const ls = subs.listListSubs(sphere.id)[0];
+  // c2 unsubscribes, then both c1 and c2 leave the list.
+  const { token } = sqlite.prepare("SELECT token FROM community_report_subs WHERE email = 'two@example.com'").get() as { token: string };
+  subs.unsubscribeByToken(token);
+  sqlite.prepare("UPDATE crm_contacts SET stage = 'Lead' WHERE fub_id IN ('c1','c2')").run();
+  subs.syncListSub(ls.id);
+  assert.equal(subs.listSubsForEmail("one@example.com").length, 0);
+  assert.equal(subs.listSubsForEmail("two@example.com").length, 1);
+
+  // They rejoin: c1 is signed up again, c2 stays unsubscribed.
+  sqlite.prepare("UPDATE crm_contacts SET stage = 'Sphere' WHERE fub_id IN ('c1','c2')").run();
+  subs.syncListSub(ls.id);
+  assert.equal(subs.listSubsForEmail("one@example.com")[0].active, true);
+  assert.equal(subs.listSubsForEmail("two@example.com")[0].active, false);
+});
+
+test("removing a list-given row by hand keeps it off at the next sync", () => {
+  const ls = subs.listListSubs(sphere.id)[0];
+  const row = subs.listSubsForEmail("one@example.com")[0];
+  assert.equal(subs.deleteSub(row.id), true);
+  subs.syncListSub(ls.id);
+  assert.equal(subs.listSubsForEmail("one@example.com")[0].active, false);
+  subs.setSubActive(row.id, true);
+});
+
+test("send now emails everyone in the list who hasn't had this month's", async () => {
+  // The Mission · all report, stored, so nothing renders.
+  storage.upsertMarketReport({
+    period, kind: "subdivision", name: "Mission", city: "Calgary", cls: "all", title: "Mission", subtitle: "All residential",
+    pdfPath: `reports/${period}/mission-all.pdf`, png1Path: `reports/${period}/mission-all-1.png`,
+    png2Path: `reports/${period}/mission-all-2.png`, png3Path: null, statsJson: "{}",
+  });
+  const ls = subs.listListSubs(sphere.id)[0];
+  const { sent, send } = fakeSend();
+  const r = subs.sendListSubNow(ls.id, { send, gapMs: 0 });
+  assert.ok(r.ok);
+  if (!r.ok) return;
+  // one@ (from the list) and jo@ (added by hand, also in the list); not two@, who unsubscribed.
+  assert.equal(r.queued, 2);
+  assert.deepEqual(await r.done, { sent: 2, errors: 0 });
+  assert.deepEqual(sent.map((s) => s.to).sort(), ["jo@example.com", "one@example.com"]);
+  assert.equal(subs.listListSubs(sphere.id)[0].sentThisMonth, 1, "counts the rows the list gave");
+  // Again: everyone has it.
+  const again = subs.sendListSubNow(ls.id, { send, gapMs: 0 });
+  assert.ok(again.ok && again.queued === 0);
+  if (again.ok) await again.done;
+});
+
+test("pausing or removing the list's subscription takes back what it added", () => {
+  const ls = subs.listListSubs(sphere.id)[0];
+  subs.setListSubActive(ls.id, false);
+  assert.equal(subs.listSubsForEmail("one@example.com").length, 0);
+  assert.equal(subs.listSubsForEmail("two@example.com").length, 1, "unsubscribed row kept");
+  assert.equal(subs.listSubsForEmail("jo@example.com").length, 1, "hand-added row untouched");
+  assert.equal(subs.deleteListSub(ls.id), true);
+  assert.equal(subs.listListSubs(sphere.id).length, 0);
+});

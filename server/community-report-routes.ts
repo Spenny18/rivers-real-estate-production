@@ -6,7 +6,14 @@ import { AGENT } from "./brand";
 import { publicOrigin } from "./origin";
 import { esc, page } from "./newsletter-routes";
 import {
+  createListSub,
   createSub,
+  deleteListSub,
+  getListSub,
+  isListSending,
+  listListSubs,
+  sendListSubNow,
+  setListSubActive,
   deleteSub,
   findByToken,
   getSub,
@@ -75,6 +82,40 @@ export function registerCommunityReportRoutes(app: Express, deps: { requireAuth:
     const r = await previewSub(Number(req.params.id));
     if ("error" in r) return res.status(404).json({ message: r.error });
     res.type("html").send(r.html);
+  });
+
+  // ---- Smart lists ------------------------------------------------------------
+
+  /** A smart list's report subscriptions (or all of them). */
+  app.get("/api/admin/community-report-list-subs", requireAuth, (req, res) => {
+    const listId = req.query.listId != null ? Number(req.query.listId) : undefined;
+    res.json({ listSubs: listListSubs(listId).map((l) => ({ ...l, sending: isListSending(l.id) })) });
+  });
+
+  app.post("/api/admin/community-report-list-subs", requireAuth, (req, res) => {
+    const b = req.body ?? {};
+    const r = createListSub({ smartListId: Number(b.smartListId), neighbourhoodSlug: String(b.neighbourhoodSlug ?? ""), cls: b.cls });
+    if (!r.ok) return res.status(400).json({ message: r.error });
+    res.json(r);
+  });
+
+  app.patch("/api/admin/community-report-list-subs/:id", requireAuth, (req, res) => {
+    if (typeof req.body?.active !== "boolean") return res.status(400).json({ message: "active must be true or false" });
+    const l = setListSubActive(Number(req.params.id), req.body.active);
+    if (!l) return res.status(404).json({ message: "Not found" });
+    res.json({ ok: true, listSub: l });
+  });
+
+  app.delete("/api/admin/community-report-list-subs/:id", requireAuth, (req, res) => {
+    res.json({ ok: deleteListSub(Number(req.params.id)) });
+  });
+
+  /** Email this month's report to everyone in the list who hasn't had it. Background. */
+  app.post("/api/admin/community-report-list-subs/:id/send", requireAuth, (req, res) => {
+    const r = sendListSubNow(Number(req.params.id));
+    if (!r.ok) return res.status(400).json({ message: r.error });
+    r.done.catch((e) => console.error("[community-report-subs] list send failed:", e));
+    res.json({ ok: true, queued: r.queued, listSub: getListSub(Number(req.params.id)) });
   });
 
   // ---- Public unsubscribe ----------------------------------------------------

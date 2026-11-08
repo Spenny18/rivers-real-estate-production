@@ -613,6 +613,9 @@ export async function registerRoutes(
     // hook that creates them. See server/contacts.ts.
     const { registerContactRoutes } = await import("./contact-routes");
     registerContactRoutes(app, { requireAuth });
+    // Contact tags, the app's own (server/tags.ts).
+    const { registerTagRoutes } = await import("./tag-routes");
+    registerTagRoutes(app, { requireAuth });
 
     const { registerCrmRoutes } = await import("./crm-routes");
     registerCrmRoutes(app, { requireAuth });
