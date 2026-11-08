@@ -126,6 +126,11 @@ export async function reportForClass(scope: Scope, cls: ClassFilter): Promise<St
   );
 }
 
+/** The stored report for one class and period, without rendering one. */
+export function existingReportForClass(scope: Scope, cls: ClassFilter, period = defaultReportPeriod()): StoredReport | null {
+  return findReport(scope, "cls = @cls AND period = @period", { cls, period });
+}
+
 export function isClassFilter(v: unknown): v is ClassFilter {
   return v === "all" || (PROPERTY_CLASSES as readonly unknown[]).includes(v);
 }

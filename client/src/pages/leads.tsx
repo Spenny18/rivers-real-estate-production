@@ -1,4 +1,5 @@
 import { PushNotificationsCard } from "@/components/push-notifications";
+import { CommunityReportSubsPanel } from "@/components/community-reports";
 import { LeadTextsCard } from "@/components/lead-texts";
 import { FubOnlyLeadsCard } from "@/components/fub-only-leads";
 import { useState, useMemo } from "react";
@@ -293,6 +294,14 @@ export default function LeadsPage() {
                           </div>
                           <ChevronRight className="w-4 h-4 text-muted-foreground" />
                         </div>
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {selected.email && (
+                    <Card>
+                      <CardContent className="p-4">
+                        <CommunityReportSubsPanel email={selected.email} name={selected.name} leadId={selected.id} />
                       </CardContent>
                     </Card>
                   )}
