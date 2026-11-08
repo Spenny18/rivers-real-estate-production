@@ -921,6 +921,11 @@ export function buildCommunityReportEmailHtml(d: {
   previewUrl: string;
   pageUrl: string;
   origin: string;
+  /**
+   * Set for the monthly subscription send: the intro says "this month's"
+   * rather than "you asked for", and the footer carries the unsubscribe link.
+   */
+  monthly?: { unsubscribeUrl: string };
 }): string {
   const firstName = d.recipientName.trim().split(/\s+/)[0] || "there";
   const name = escapeAttr(d.communityName);
@@ -929,7 +934,9 @@ export function buildCommunityReportEmailHtml(d: {
   return bookingShell({
     eyebrow: cls ? `COMMUNITY MARKET REPORT · ${cls.toUpperCase()}` : "COMMUNITY MARKET REPORT",
     heading: `${name} · ${escapeAttr(d.periodLabel)}`,
-    intro: `Hi ${escapeAttr(firstName)}, here's the full ${name}${cls ? ` ${cls.toLowerCase()}` : ""} market report you asked for: median sold prices, active and sold listings, days on market, and where in the price range homes are selling.`,
+    intro: d.monthly
+      ? `Hi ${escapeAttr(firstName)}, here's this month's ${name}${cls ? ` ${cls.toLowerCase()}` : ""} market report: median sold prices, active and sold listings, days on market, and where in the price range homes are selling.`
+      : `Hi ${escapeAttr(firstName)}, here's the full ${name}${cls ? ` ${cls.toLowerCase()}` : ""} market report you asked for: median sold prices, active and sold listings, days on market, and where in the price range homes are selling.`,
     accent: BRAND.forest,
     origin: d.origin,
     body: `
@@ -948,6 +955,16 @@ export function buildCommunityReportEmailHtml(d: {
         <p style="font-size:13px;margin:14px 0 0;">
           <a href="${escapeAttr(d.pageUrl)}" style="color:${BRAND.forest};">See homes for sale in ${name} →</a>
         </p>
-      </td></tr>`,
+      </td></tr>${
+        d.monthly
+          ? `
+      <tr><td style="padding:22px 36px 0;">
+        <p style="font-size:11px;color:${BRAND.mute};line-height:1.6;margin:0;">
+          You're receiving this monthly ${name} report because Spencer Rivers signed you up for it.
+          <a href="${escapeAttr(d.monthly.unsubscribeUrl)}" style="color:${BRAND.mute};">Unsubscribe</a>
+        </p>
+      </td></tr>`
+          : ""
+      }`,
   });
 }

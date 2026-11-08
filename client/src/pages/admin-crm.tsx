@@ -13,6 +13,7 @@ import { EditContactForm, NewContactDialog } from "@/components/contact-forms";
 import { ContactNotesTasks, ExportCard, NoteActions, TaskBoard } from "@/components/notes-tasks";
 import { SmartListContacts, SmartListsBar } from "@/components/smart-lists";
 import { CrmReports } from "@/components/crm-reports";
+import { CommunityReportSubsPanel } from "@/components/community-reports";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1395,6 +1396,14 @@ export default function AdminCrmPage() {
                     ))}
                   </div>
                 </div>
+              )}
+
+              {detail.contact.email && (
+                <CommunityReportSubsPanel
+                  email={detail.contact.email}
+                  name={detail.contact.name ?? detail.contact.email}
+                  crmContactId={detail.contact.fubId}
+                />
               )}
 
               {detail.contact.email && <WebActivityPanel email={detail.contact.email} />}

@@ -665,6 +665,11 @@ export async function registerRoutes(
 
     const { registerMarketRoutes } = await import("./market-routes");
     registerMarketRoutes(app, { requireAuth });
+
+    // Monthly community reports for specific contacts. See
+    // server/community-report-subs.ts.
+    const { registerCommunityReportRoutes } = await import("./community-report-routes");
+    registerCommunityReportRoutes(app, { requireAuth });
   } catch (e) {
     console.error("[crm] failed to register CRM routes:", e);
   }
